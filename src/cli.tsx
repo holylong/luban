@@ -11,6 +11,7 @@ import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
 import type { AgentEvent, ChatMessage, LubanConfig } from "./core/types.js";
 import { App } from "./ui/app.js";
+import { applyTheme, resolveThemeId, themeIds } from "./ui/theme.js";
 import { LubanWebServer } from "./web/server.js";
 import { ApprovalBroker } from "./web/approval.js";
 import { AcpServer } from "./core/acp.js";
@@ -29,6 +30,7 @@ interface CliOptions {
   webHost?: string;
   webPort?: number;
   planning?: string;
+  theme?: string;
 }
 
 interface DaemonOptions {
@@ -311,6 +313,7 @@ async function main(): Promise<number> {
     .option("--web-host <host>", "also run the native Web backend on this host", "127.0.0.1")
     .option("--web-port <port>", "also run the native Web backend (0 chooses a free port)", (value) => Number(value))
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
+    .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
     .option("-p, --prompt <text>", "run once without the TUI")
     .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace\n  luban serve [path]  native mesh/worker daemon\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
@@ -329,7 +332,17 @@ async function main(): Promise<number> {
     mesh: options.mesh,
     meshName: options.meshName,
     meshPort: options.meshPort,
+    theme: options.theme,
   });
+  // Painted before the first frame: the whole UI reads one mutable palette, so
+  // setting it here means the TUI never flashes the default scheme.
+  const appliedTheme = applyTheme(config.theme, config.themeColors);
+  config.theme = appliedTheme.id;
+  // Only a name the catalog cannot resolve is worth a warning; an alias such as
+  // `--theme light` resolves to a real id and must stay silent.
+  if (options.theme && !resolveThemeId(options.theme)) {
+    process.stderr.write(`unknown theme: ${options.theme}; using ${appliedTheme.id} (${themeIds().join(", ")})\n`);
+  }
   const piped = !process.stdin.isTTY && !options.prompt ? await readStdin() : "";
   const prompt = options.prompt || piped;
   let mesh: MeshRuntime | undefined;

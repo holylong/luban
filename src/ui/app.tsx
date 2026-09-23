@@ -8,7 +8,7 @@ import { AgentInbox } from "../core/inbox.js";
 import { planVerificationStatus, readPlan, readVerifications } from "../core/plan.js";
 import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
 import { estimateMessagesTokens } from "../core/context.js";
-import { savePermissionMode, savePreferredModel } from "../core/config.js";
+import { savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
 import type { JobStreamRecord, MeshChatMessage, MeshJob, MeshRuntime } from "../core/mesh/runtime.js";
 import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
 import { chatBlocks, jobBlocks } from "./mesh-transcript.js";
@@ -26,7 +26,7 @@ import type {
   VerificationRecord,
 } from "../core/types.js";
 import { HighlightedCodeLine } from "./markdown.js";
-import { theme } from "./theme.js";
+import { activeThemeId, applyTheme, findTheme, THEMES, theme, themeHasOverrides, themeIds } from "./theme.js";
 import { toolLabel } from "./tool-labels.js";
 import { Spinner, ThinkingLine, type LivePhase } from "./thinking-line.js";
 import { currentStreamLine } from "./transcript.js";
@@ -90,6 +90,7 @@ const COMMANDS = [
   ["/export", "export session to markdown"],
   ["/plan", "show current task plan"],
   ["/verify", "verification records"],
+  ["/theme", "terminal color scheme"],
   ["/details", "expand / collapse execution details"],
   ["/diff", "review code changes"],
   ["/mesh", "switch local conversation / mesh activity"],
@@ -102,11 +103,12 @@ const COMMANDS = [
 const RUN_IMMEDIATE_COMMANDS = new Set([
   "/status", "/ping", "/peers", "/jobs", "/inbox", "/cancel-job", "/add-contact",
   "/models", "/mode", "/settings", "/permissions",
-  "/plan", "/details", "/mesh", "/help", "/diff", "/verify",
+  "/plan", "/theme", "/details", "/mesh", "/help", "/diff", "/verify",
 ]);
 
 const COMMAND_USAGE: Record<string, string> = {
   "/mode": "/mode auto|agent|ask",
+  "/theme": "/theme [名称] — 不带参数列出全部配色，带名称即时切换并保存",
   "/permissions": "/permissions ask|edits|allow",
   "/queue": "/queue <task> — current task finishes first",
   "/export": "/export [文件名|路径] — markdown transcript (默认 luban-export-<项目>-<sessionId>.md)",
@@ -161,7 +163,7 @@ interface ApprovalRequest {
 }
 
 interface DialogState {
-  type: "models" | "sessions" | "diff" | "verify" | "info" | "export";
+  type: "models" | "sessions" | "diff" | "verify" | "info" | "export" | "theme";
   index: number;
   title?: string;
   content?: string;
@@ -284,6 +286,34 @@ function InfoDialog({ title, content }: { title: string; content: string }) {
   </Box>;
 }
 
+/** Swatch order for a theme row: the hues that carry status at a glance. */
+const SWATCH_KEYS = ["accent", "green", "yellow", "red", "purple", "text"] as const;
+
+/**
+ * Picker for the terminal color scheme. Every palette is previewed with its own
+ * swatches, so the choice is made by looking at the colors rather than by
+ * reading names - the whole point of offering several schemes. The highlighted
+ * row is painted onto the workbench as it moves, which is why `index` comes
+ * from the keyboard handler rather than from the palette module.
+ */
+function ThemeDialog({ index }: { index: number }) {
+  const active = activeThemeId();
+  return <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} flexShrink={0}>
+    <Text color={theme.accent} bold>主题 · {active} · ↑/↓ 预览 · Enter 确认 · Esc 取消</Text>
+    <Text color={theme.dim} wrap="truncate-end">/theme &lt;名称&gt; 即时切换并写入 ~/.luban/node-preferences.json</Text>
+    <Text color={theme.dim} wrap="truncate-end">config.json 里 theme 可写名称，或用 colors 只覆盖某几个颜色</Text>
+    {THEMES.map((item, row) => (
+      <Text key={item.id} wrap="truncate-end" backgroundColor={row === index ? theme.selected : undefined}>
+        <Text color={item.id === active ? theme.green : theme.dim} bold>{row === index ? "▸ " : "  "}</Text>
+        <Text color={item.id === active ? theme.green : theme.primary}>{item.id.padEnd(16)}</Text>
+        {SWATCH_KEYS.map((key) => <Text key={key} color={item.palette[key]}>■</Text>)}
+        <Text color={theme.muted}>  {item.mode === "light" ? "亮色" : "暗色"} · {item.description}</Text>
+        {item.id === active ? <Text color={theme.green}> ·当前</Text> : null}
+      </Text>
+    ))}
+  </Box>;
+}
+
 /**
  * Verification records are the runtime's evidence that a command was actually
  * run. This panel shows every record for the session, not only the latest one,
@@ -346,11 +376,11 @@ function HelpPanel() {
       <Text color={theme.accent} bold>快捷键与命令</Text>
       <Text color={theme.muted}>Shift+Tab 模式 · Ctrl+P 模型 · Ctrl+O 会话 · Esc 取消</Text>
       <Text color={theme.muted}>↑↓ 历史 · PgUp/PgDn 翻页 · Ctrl+J 换行 · @ 文件补全</Text>
-      <Text color={theme.muted}>Ctrl+Y 鼠标开关 · 关后可选中复制 · /copy 复制上次回答</Text>
+      <Text color={theme.muted}>Ctrl+Y 鼠标开关 · 关后可选中复制 · /copy 复制上次回答 · /theme 换配色</Text>
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
       <Text color={theme.muted}>直接输入任务，!command 执行 shell，/ 命令补全（含参数用法）</Text>
-      <Text color={theme.dim}>/new /sessions /models /mode /permissions /plan /details /mesh /copy /export /help /exit</Text>
+      <Text color={theme.dim}>/new /sessions /models /mode /permissions /theme /plan /details /mesh /copy /export /help /exit</Text>
     </Box>
   );
 }
@@ -534,6 +564,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [dialogQuery, setDialogQuery] = useState("");
+  /** Counts palette swaps: the colors live outside React, so a change needs a frame. */
+  const [, setThemeRevision] = useState(0);
+  /** Theme that was active when the picker opened, so Esc can put it back. */
+  const themeDialogOriginRef = useRef<string | null>(null);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   // Mouse capture defaults on: wheel scrolling of the execution history is a
   // primary interaction, and a hidden Ctrl+Y prerequisite made it look broken.
@@ -1262,7 +1296,28 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
       return;
     }
     if (command === "/settings") {
-      setNotice(`${mode.toUpperCase()} · ${config.model.id} · permissions ${config.permissionMode} · ${config.workspace}${mesh ? ` · mesh ${config.mesh.nodeName}:${config.mesh.port}` : " · mesh off"}${config.backendUrl ? ` · backend ${config.backendUrl}` : ""}`);
+      setNotice(`${mode.toUpperCase()} · ${config.model.id} · permissions ${config.permissionMode} · theme ${activeThemeId()}${themeHasOverrides() ? "(自定义色)" : ""} · ${config.workspace}${mesh ? ` · mesh ${config.mesh.nodeName}:${config.mesh.port}` : " · mesh off"}${config.backendUrl ? ` · backend ${config.backendUrl}` : ""}`);
+      return;
+    }
+    if (command === "/theme") {
+      const requested = argument.trim();
+      if (!requested || requested.toLowerCase() === "list") {
+        // Remember what was painted before the picker: Esc has to undo a
+        // preview the user only scrolled past.
+        themeDialogOriginRef.current = activeThemeId();
+        setDialogQuery("");
+        setDialog({ type: "theme", index: Math.max(0, THEMES.findIndex((item) => item.id === activeThemeId())) });
+        return;
+      }
+      const applied = findTheme(requested);
+      if (!applied) { setNotice(`未知主题 ${requested} · 可用：${themeIds().join(" / ")}`); return; }
+      applyTheme(applied.id, config.themeColors);
+      setConfig({ ...config, theme: applied.id });
+      // The palette is a module-level object read during render, so the swap
+      // needs one frame of its own rather than a props change.
+      setThemeRevision((revision) => revision + 1);
+      void saveTheme(config.home, applied.id).catch(() => undefined);
+      setNotice(`主题 ${applied.id} · ${applied.label} · ${applied.mode === "light" ? "亮色" : "暗色"} · ${applied.description} · 已保存`);
       return;
     }
     if (command === "/permissions") {
@@ -1427,6 +1482,15 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
   }, []);
 
   useEffect(() => {
+    // Normally the CLI painted the palette before the first frame; this covers
+    // the cases where <App> is mounted on its own (tests, embedders) and keeps
+    // the painted scheme in step with the loaded config.
+    if (activeThemeId() === config.theme) return;
+    applyTheme(config.theme, config.themeColors);
+    setThemeRevision((revision) => revision + 1);
+  }, [config.theme]);
+
+  useEffect(() => {
     if (!mesh) return undefined;
     void mesh.chats(50).then((chats) => setMeshChats((current) =>
       [...current, ...chats.filter((chat) => !current.some((item) => item.id === chat.id))]
@@ -1552,6 +1616,39 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
           const clean = stripMouseReports(mouseGuardRef.current.filter(character)).replaceAll(/[^\p{L}\p{N} .,_@:/~+-]/gu, "");
           if (clean) setDialogQuery((current) => `${current}${clean}`.slice(0, 240));
         }
+        return;
+      }
+      if (dialog.type === "theme") {
+        // The picker is navigated, not just printed: colours are chosen by
+        // looking at them, so every move repaints the workbench immediately.
+        // Only Enter writes the choice; Esc puts the palette back as it was.
+        const count = THEMES.length;
+        const show = (target: string): void => {
+          applyTheme(target, config.themeColors);
+          setThemeRevision((revision) => revision + 1);
+        };
+        if (key.upArrow || key.downArrow) {
+          const next = (dialog.index + (key.upArrow ? -1 : 1) + count) % count;
+          show(THEMES[next]!.id);
+          setDialog({ ...dialog, index: next });
+          return;
+        }
+        if (key.escape) {
+          const origin = themeDialogOriginRef.current ?? config.theme;
+          show(origin);
+          setNotice(`主题保持不变 · ${origin}`);
+        } else if (key.return) {
+          const chosen = THEMES[dialog.index] ?? THEMES[0]!;
+          show(chosen.id);
+          setConfig({ ...config, theme: chosen.id });
+          void saveTheme(config.home, chosen.id).catch(() => undefined);
+          setNotice(`主题 ${chosen.id} · ${chosen.label} · ${chosen.mode === "light" ? "亮色" : "暗色"} · ${chosen.description} · 已保存`);
+        } else {
+          return;
+        }
+        themeDialogOriginRef.current = null;
+        setDialog(null);
+        setDialogQuery("");
         return;
       }
       if (dialog.type === "diff" || dialog.type === "verify" || dialog.type === "info") { if (key.escape || key.return) { setDialog(null); setDialogQuery(""); } return; }
@@ -1781,6 +1878,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
         {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} /> : null}
+        {dialog?.type === "theme" ? <ThemeDialog index={dialog.index} /> : null}
         {dialog?.type === "export" ? <ExportDialog value={dialogQuery} defaultName={defaultExportFilename(config.project, sessionRef.current.id)} dest={expandExportPath(dialogQuery, config.project, sessionRef.current.id)} /> : null}
         {!dialog && !hasActivity ? showMesh
           ? <Text color={theme.dim}>No mesh activity. /mesh returns to the local conversation.</Text>
@@ -1884,7 +1982,6 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
               <Text color={theme.text}>  Enter 发送 · Ctrl+J 换行</Text>
               <Text>  {mouseEnabled ? "Ctrl+Y 释放鼠标复制" : "Ctrl+Y 恢复滚轮"}</Text>
               {pendingCount ? <Text color={theme.accent}>  {pendingCount} pending</Text> : null}
-              {notice !== defaultNotice ? <Text color={theme.muted}>  {notice}</Text> : null}
             </Text>
           </Box>
           {scrolledBack ? (
@@ -1893,6 +1990,17 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
             <Text color={theme.dim}>{running ? "esc 中断 · /queue 排队 · 只读命令即时执行" : "shift+tab 模式 · ctrl+p 模型 · /copy 复制"}</Text>
           ) : null}
         </Box>
+        {notice !== defaultNotice ? (
+          /* Command feedback gets a row of its own: appended behind the tips it
+             was pushed off the edge on any narrow terminal, which made a command
+             like `/theme nord` look as if it had done nothing. */
+          <Box paddingX={2} height={1} overflow="hidden" flexShrink={0}>
+            <Text wrap="truncate-end">
+              <Text color={theme.accent} bold>▸ </Text>
+              <Text color={theme.muted}>{notice}</Text>
+            </Text>
+          </Box>
+        ) : null}
       </Box>
     </Box>
   );

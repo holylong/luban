@@ -232,6 +232,8 @@ export interface LoadConfigOptions {
   meshPort?: number;
   /** off | auto | always — how much planning the prompt asks for. */
   planning?: string;
+  /** Terminal color scheme id or alias; overrides config and preferences. */
+  theme?: string;
 }
 
 /**
@@ -302,6 +304,19 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const syncMode = text(syncConfig.mode, "auto") as SyncMode;
   const conflictPolicy = text(syncConfig.conflict_policy, syncConfig.conflictPolicy, "auto") as ConflictPolicy;
   const projectPaths = Object.fromEntries(Object.entries(record(raw.projects)).map(([name, path]) => [name, String(path)]));
+  const themeSetting = raw.theme;
+  const themeObject = record(themeSetting);
+  const themeName = text(
+    options.theme,
+    process.env.LUBAN_THEME,
+    // The last `/theme` choice in the TUI beats the static config file, the same
+    // way the last `/models` choice beats `model.active`.
+    preferences.theme,
+    typeof themeSetting === "string" ? themeSetting : text(themeObject.id, themeObject.name),
+    "midnight",
+  );
+  const themeColors = Object.fromEntries(Object.entries(record(themeObject.colors ?? themeObject.palette))
+    .flatMap(([key, value]) => typeof value === "string" && value.trim() ? [[key, value.trim()]] : []));
   const thinkingSetting = modelConfig.thinking ?? modelConfig.enable_thinking ?? modelConfig.enableThinking;
   const maxTokens = Math.max(256, integer(modelConfig.max_tokens, 64_000));
   const defaultContextWindow = /qwen/iu.test(`${active.provider}/${active.model}`)
@@ -316,6 +331,8 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     home,
     workspace,
     project: basename(workspace) || text(nodeConfig.name, hostname()),
+    theme: themeName.toLowerCase(),
+    themeColors,
     model: active,
     models,
     maxTokens,
@@ -388,12 +405,26 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   };
 }
 
-export async function savePreferredModel(home: string, model: string): Promise<void> {
+/**
+ * `node-preferences.json` holds the choices a user made interactively - the
+ * active model and the terminal theme. Both writers patch the file instead of
+ * replacing it, so switching a theme never forgets the model and vice versa.
+ */
+async function savePreferences(home: string, patch: JsonObject): Promise<void> {
   await mkdir(home, { recursive: true });
   const path = join(home, "node-preferences.json");
   const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify({ model }, null, 2)}\n`, "utf8");
+  await writeFile(temporary, `${JSON.stringify({ ...readJson(path), ...patch }, null, 2)}\n`, "utf8");
   await rename(temporary, path);
+}
+
+export async function savePreferredModel(home: string, model: string): Promise<void> {
+  await savePreferences(home, { model });
+}
+
+/** Persists the palette chosen with `/theme`, applied on the next start. */
+export async function saveTheme(home: string, theme: string): Promise<void> {
+  await savePreferences(home, { theme });
 }
 
 export async function savePermissionMode(home: string, mode: "ask" | "edits" | "allow"): Promise<void> {

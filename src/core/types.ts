@@ -78,10 +78,20 @@ export interface MeshSettings {
   queueTimeoutSeconds: number;
 }
 
+/**
+ * A terminal palette is a bag of named colors, so a config file can override
+ * individual keys of a built-in theme without pinning the whole scheme.
+ */
+export type ThemeColors = Record<string, string>;
+
 export interface LubanConfig {
   home: string;
   workspace: string;
   project: string;
+  /** Terminal color scheme id or alias; see `src/ui/theme.ts` for the catalog. */
+  theme: string;
+  /** Per-key palette overrides merged over `theme`. */
+  themeColors: ThemeColors;
   model: ModelRef;
   models: ModelRef[];
   maxTokens: number;
