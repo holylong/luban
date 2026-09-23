@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, savePermissionMode, stripJsonComments } from "./config.js";
+import { loadConfig, savePermissionMode, savePreferredModel, saveTheme, stripJsonComments } from "./config.js";
 
 const originalHome = process.env.LUBAN_HOME;
 const originalUserHome = process.env.HOME;
@@ -91,6 +91,57 @@ describe("config", () => {
     expect(loadConfig({ workspace }).permissionMode).toBe("allow");
     delete process.env.LUBAN_ALLOW_TOOLS;
     expect(loadConfig({ workspace }).permissionMode).toBe("ask");
+  });
+
+  it("resolves the terminal theme from flags, config, and the last choice", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-theme-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    await writeFile(join(home, "config.json"), JSON.stringify({ theme: "Nord" }));
+    process.env.LUBAN_HOME = home;
+    // The config file names a scheme; the flag and the environment override it.
+    expect(loadConfig({ workspace }).theme).toBe("nord");
+    expect(loadConfig({ workspace, theme: "Tokyo-Night" }).theme).toBe("tokyo-night");
+    process.env.LUBAN_THEME = "gruvbox";
+    expect(loadConfig({ workspace }).theme).toBe("gruvbox");
+    delete process.env.LUBAN_THEME;
+    // A `/theme` choice is remembered, and outranks the static config file.
+    await saveTheme(home, "Dracula");
+    expect(loadConfig({ workspace }).theme).toBe("dracula");
+    // An unreadable value is passed through for the UI to resolve, not crashed on.
+    await writeFile(join(home, "config.json"), JSON.stringify({ theme: "neon-disco" }));
+    expect(loadConfig({ workspace }).theme).toBe("dracula");
+    expect(loadConfig({ workspace: join(home, "empty"), theme: "neon-disco" }).theme).toBe("neon-disco");
+  });
+
+  it("reads per-key palette overrides from the theme object", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-theme-colors-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      theme: { id: "nord", colors: { accent: "#ff00ff", dim: "#123456", bogus: "#000000", blank: "  " } },
+    }));
+    process.env.LUBAN_HOME = home;
+    const config = loadConfig({ workspace });
+    expect(config.theme).toBe("nord");
+    // Core keeps any string pair; the palette module is what rejects keys that
+    // are not real colors, so a typo cannot silently blank the UI.
+    expect(config.themeColors).toEqual({ accent: "#ff00ff", dim: "#123456", bogus: "#000000" });
+    // A plain string theme has no overrides of its own.
+    await writeFile(join(home, "config.json"), JSON.stringify({ theme: "nord" }));
+    expect(loadConfig({ workspace }).themeColors).toEqual({});
+  });
+
+  it("saves the theme without forgetting the preferred model", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-theme-save-"));
+    await savePreferredModel(home, "local/coder");
+    await saveTheme(home, "catppuccin");
+    expect(JSON.parse(await readFile(join(home, "node-preferences.json"), "utf8")))
+      .toEqual({ model: "local/coder", theme: "catppuccin" });
+    // Picking a model next does not drop the theme either.
+    await savePreferredModel(home, "local/chat");
+    expect(JSON.parse(await readFile(join(home, "node-preferences.json"), "utf8")))
+      .toEqual({ model: "local/chat", theme: "catppuccin" });
   });
 
   it("moves a legacy ~/.dagent directory into ~/.luban on first run", async () => {

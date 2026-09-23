@@ -1,7 +1,7 @@
 # luban
 
-Node.js/TypeScript 版 luban。它使用 Ink 渲染 Grok 风格的终端工作台，原生实现了
-Python luban 的局域网发现、节点通信、远程任务和工作区同步，不再需要 Web 后端中转。
+Node.js/TypeScript 版 luban。它使用 Ink 渲染风格的终端工作台，原生实现了
+Python luban 的局域网发现、节点通信、远程任务和工作区同步。
 
 需要 **Node.js 20 或更高版本**。模型侧支持 OpenAI 兼容的 Chat Completions、
 Anthropic Messages 与 Responses 三种 API；交互侧提供交互式 TUI、非交互 `--prompt`
@@ -222,9 +222,24 @@ node dist/cli.js ~/dev/my-project
   },
   "max_workers": 2,
   "job_timeout_seconds": 600,
-  "queue_timeout_seconds": 300
+  "queue_timeout_seconds": 300,
+  "theme": "nord"
 }
 ```
+
+`theme` 可以是配色 id（`midnight` / `nord` / `dracula` / `gruvbox` / `tokyo-night` /
+`catppuccin` / `amber` / `contrast` / `solarized-dark` / `solarized-light` /
+`github-light`），也可以是别名（`default` / `dark` / `light` / `high-contrast` /
+`solarized` / `tokyo` / `crt`）。只想改个别颜色时用对象写法，只覆盖写出的键，其余
+沿用该配色：
+
+```jsonc
+{ "theme": { "id": "tokyo-night", "colors": { "accent": "#7aa2f7", "dim": "#8b93b8" } } }
+```
+
+配色优先级：`--theme` > `LUBAN_THEME` > `/theme` 保存的选择（`~/.luban/node-preferences.json`）
+> `config.json` 的 `theme`。TUI 里用 `/theme` 打开选择器可以对着色块挑；换配色即时生效，
+不需要重启。
 
 模型相关的可靠性参数也可以放在 `model` 中：`context_window`（默认 128K）、
 `context_reserve`（默认 16K）、`semantic_compaction`（默认开启）和 `max_retries`（默认 3）。MCP 当前支持标准的 stdio
@@ -266,7 +281,8 @@ JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会
 | `/details` | 展开或收起执行详情 |
 | `/diff` | 查看工作区 Git 变更（文件列表 + unified diff） |
 | `/branch [n]` | 分叉当前会话，保留前 n 条非系统消息（工具断点自动修复） |
-| `/settings` | 显示模式、模型、工作区和后端 |
+| `/theme [名称]` | 切换配色；不带参数打开选择器：`↑`/`↓` 逐行预览（整个界面即时换色，含色块与 `当前` 标记），`Enter` 确认并写入 `~/.luban/node-preferences.json`，`Esc` 放弃预览恢复原配色。名称支持别名如 `light` / `dark` / `solarized` |
+| `/settings` | 显示模式、模型、配色、工作区和后端 |
 | `/permissions ask\|edits\|allow` | 切换当前进程的工具确认策略 |
 | `/peers` | 查看自动发现及静态配置的节点 |
 | `/ping <peer>` / `/status <peer>` | 检查节点与远端 worker/job 状态 |
