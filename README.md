@@ -54,6 +54,7 @@ Anthropic Messages 与 Responses 三种 API；交互侧提供交互式 TUI、非
 - 工具循环：文件读写、精确编辑、glob、grep、目录、shell。
 - 严格检查 SSE 完成标记、错误事件、输出截断和工具参数，断流不会误报成功。
 - 通用 Agent runtime：任务内上下文压缩（含工具定义预算）、瞬时错误退避重试、并行只读工具调用。
+- 压缩通知只在一次任务首次丢弃历史时写入记录（`Compacted N older messages`），之后每一步的再次压缩只更新工作行里的累计条数；否则长任务会把「Compacted 2 older messages」按步数刷满整条历史。
 - **并行只读工具**：同一条消息里连续的只读调用（读文件、搜索、列目录等）真正并发执行，写与 shell 保持严格串行；结果仍按调用顺序写入记录。
 - `update_plan` / `read_plan` 维护任务计划，`record_verification` / `read_verification` 记录测试命令与通过状态；计划与验证随会话保存、压缩保留，未验证成功会明确标注。`@截图.png` 以原生视觉部件发给视觉模型（OpenAI/Anthropic/Responses 三客户端全支持，8MB 上限，会话只存路径）。
 - 大工具结果自动归档（`tool_output.retention_days`/`max_bytes` 自动清理，默认 7 天/500MB），`read_tool_output` 按页回读，避免为找回日志重复执行命令。

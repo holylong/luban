@@ -421,6 +421,9 @@ export class AgentRunner {
     let truncationContinues = 0;
     let truncatedSpanStart = -1;
     let truncatedSpanCount = 0;
+    /** Messages dropped by compaction in this run, cumulatively. */
+    let compactedMessages = 0;
+    let compactionAnnounced = false;
     // ASK remains intentionally bounded because it is a read-only conversation;
     // AGENT/AUTO use the configured long-task budget (200 by default).
     const maxSteps = mode === "ask" ? Math.min(12, this.config.maxSteps) : this.config.maxSteps;
@@ -452,7 +455,19 @@ export class AgentRunner {
           }
         }
         messages.splice(0, messages.length, ...compacted.messages);
-        onEvent({ type: "status", text: `Compacted ${compacted.removed} older messages` });
+        // Once a run reaches its context ceiling it tends to stay there: every
+        // new tool result pushes the oldest exchange out again, so announcing
+        // each drop stacked one identical "Compacted 2 older messages" line per
+        // step. The first drop is the notice - it tells the reader history is
+        // being summarized. Later drops only move the working line, which is
+        // what a figure that grows every step is for.
+        compactedMessages += compacted.removed;
+        onEvent({
+          type: "status",
+          text: `Compacted ${compactedMessages} older messages`,
+          ...(compactionAnnounced ? { progress: true } : {}),
+        });
+        compactionAnnounced = true;
       }
       if (estimateMessagesTokens(messages) > inputBudget) {
         const text = "Context budget exceeded by instructions, current request, plan, or tool schemas. Use a larger context_window, reduce enabled MCP tools, or shorten the request/instructions.";
