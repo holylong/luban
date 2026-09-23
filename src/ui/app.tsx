@@ -289,6 +289,20 @@ function InfoDialog({ title, content }: { title: string; content: string }) {
 /** Swatch order for a theme row: the hues that carry status at a glance. */
 const SWATCH_KEYS = ["accent", "green", "yellow", "red", "purple", "text"] as const;
 
+/** Rows the picker shows at once; the catalog is longer than a terminal. */
+const THEME_ROWS = 12;
+
+/**
+ * Slice of the catalog to draw, chosen so the highlighted row is always inside
+ * it. Every row is previewed by repainting the whole workbench on arrow keys, so
+ * a selected row scrolled out of view would mean choosing a scheme blind.
+ */
+function themeWindow(total: number, index: number): { start: number; end: number } {
+  if (total <= THEME_ROWS) return { start: 0, end: total };
+  const start = Math.min(Math.max(0, index - Math.floor(THEME_ROWS / 2)), total - THEME_ROWS);
+  return { start, end: start + THEME_ROWS };
+}
+
 /**
  * Picker for the terminal color scheme. Every palette is previewed with its own
  * swatches, so the choice is made by looking at the colors rather than by
@@ -298,19 +312,26 @@ const SWATCH_KEYS = ["accent", "green", "yellow", "red", "purple", "text"] as co
  */
 function ThemeDialog({ index }: { index: number }) {
   const active = activeThemeId();
+  const { start, end } = themeWindow(THEMES.length, index);
+  const visible = THEMES.slice(start, end);
   return <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} flexShrink={0}>
     <Text color={theme.accent} bold>主题 · {active} · ↑/↓ 预览 · Enter 确认 · Esc 取消</Text>
     <Text color={theme.dim} wrap="truncate-end">/theme &lt;名称&gt; 即时切换并写入 ~/.luban/node-preferences.json</Text>
     <Text color={theme.dim} wrap="truncate-end">config.json 里 theme 可写名称，或用 colors 只覆盖某几个颜色</Text>
-    {THEMES.map((item, row) => (
-      <Text key={item.id} wrap="truncate-end" backgroundColor={row === index ? theme.selected : undefined}>
-        <Text color={item.id === active ? theme.green : theme.dim} bold>{row === index ? "▸ " : "  "}</Text>
-        <Text color={item.id === active ? theme.green : theme.primary}>{item.id.padEnd(16)}</Text>
-        {SWATCH_KEYS.map((key) => <Text key={key} color={item.palette[key]}>■</Text>)}
-        <Text color={theme.muted}>  {item.mode === "light" ? "亮色" : "暗色"} · {item.description}</Text>
-        {item.id === active ? <Text color={theme.green}> ·当前</Text> : null}
-      </Text>
-    ))}
+    {start > 0 ? <Text color={theme.dim}>  ↑ 还有 {start} 个配色</Text> : null}
+    {visible.map((item, offset) => {
+      const row = start + offset;
+      return (
+        <Text key={item.id} wrap="truncate-end" backgroundColor={row === index ? theme.selected : undefined}>
+          <Text color={item.id === active ? theme.green : theme.dim} bold>{row === index ? "▸ " : "  "}</Text>
+          <Text color={item.id === active ? theme.green : theme.primary}>{item.id.padEnd(16)}</Text>
+          {SWATCH_KEYS.map((key) => <Text key={key} color={item.palette[key]}>■</Text>)}
+          <Text color={theme.muted}>  {item.mode === "light" ? "亮色" : "暗色"} · {item.description}</Text>
+          {item.id === active ? <Text color={theme.green}> ·当前</Text> : null}
+        </Text>
+      );
+    })}
+    {end < THEMES.length ? <Text color={theme.dim}>  ↓ 还有 {THEMES.length - end} 个配色</Text> : null}
   </Box>;
 }
 
@@ -568,6 +589,21 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
   const [, setThemeRevision] = useState(0);
   /** Theme that was active when the picker opened, so Esc can put it back. */
   const themeDialogOriginRef = useRef<string | null>(null);
+  /**
+   * Row the picker is on, mirrored outside React state. Holding an arrow key
+   * delivers several escapes in one stdin chunk, and each of those handlers
+   * would otherwise read the same stale `dialog.index` and collapse the whole
+   * burst into a single step.
+   */
+  const themeDialogIndexRef = useRef(0);
+  /**
+   * Counts session renames. The title lives on the session record rather than in
+   * React state, so writing a model-written name needs a frame to show it.
+   */
+  const [, setSessionTitleRevision] = useState(0);
+  /** Sessions already sent to the naming call, so a failing model is not retried per turn. */
+  const namedSessionsRef = useRef(new Set<string>());
+  const titleAbortRef = useRef<AbortController | null>(null);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   // Mouse capture defaults on: wheel scrolling of the execution history is a
   // primary interaction, and a hidden Ctrl+Y prerequisite made it look broken.
@@ -725,6 +761,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
 
   useEffect(() => () => {
     for (const query of detachedQueriesRef.current) query.abort(new Error("exited"));
+    titleAbortRef.current?.abort(new Error("exited"));
     runnerRef.current.close();
     for (const retired of retiredRunnersRef.current) retired.close();
   }, []);
@@ -755,6 +792,42 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
     record.messages = nextMessages;
     record.model = runnerRef.current.config.model.id;
     await store.save(record);
+  };
+
+  /**
+   * Give the session a name once there is an exchange to name it after.
+   *
+   * The title starts as the first line of the opening user message, which is a
+   * poor label for the sessions that need one most — "继续", a pasted stack
+   * trace, or a one-word question. So after the first run the model is asked for
+   * a name, and the record is marked as model-titled so the next save does not
+   * put the raw first line back.
+   *
+   * Fire-and-forget: naming must never delay or fail a run. A model that cannot
+   * be reached, or that answers with something that is not a title, leaves the
+   * derived title in place, and the session is not asked again (a provider that
+   * is down should not be charged one call per turn for the rest of the day).
+   */
+  const nameSession = () => {
+    const record = sessionRef.current;
+    if (record.titleSource === "model") return;
+    if (namedSessionsRef.current.has(record.id)) return;
+    namedSessionsRef.current.add(record.id);
+    titleAbortRef.current?.abort(new Error("superseded"));
+    const controller = new AbortController();
+    titleAbortRef.current = controller;
+    void runnerRef.current.suggestTitle(record.messages, controller.signal).then(async (suggestion) => {
+      if (!suggestion) return;
+      setUsage((current) => ({ input: current.input + suggestion.input, output: current.output + suggestion.output }));
+      if (!suggestion.title) return;
+      // The user may have opened another session while the call was in flight;
+      // that rename belongs to the session it was written for, not to this one.
+      if (controller.signal.aborted || sessionRef.current.id !== record.id) return;
+      record.title = suggestion.title;
+      record.titleSource = "model";
+      setSessionTitleRevision((revision) => revision + 1);
+      await save(record.messages);
+    }).catch(() => undefined);
   };
 
   // Notes are stamped with the message count so the transcript can interleave
@@ -1034,6 +1107,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
         : paused ? `已暂停（${result.steps} 步），发送“继续”恢复\n${result.text}` : result.text);
       addActivity({ id: `complete-${Date.now()}`, text: result.ok ? `完成 · ${result.steps} steps` : paused ? `已暂停 · ${result.steps} steps` : "任务结束", tone: result.ok ? "green" : paused ? "accent" : "red" });
       await save(result.messages);
+      // The opening exchange now exists, so this is the first moment a name can
+      // be written from it. Not awaited: the notice above must not wait on it.
+      nameSession();
     } catch (error) {
       const message = controller.signal.aborted ? "Run cancelled" : (error instanceof Error ? error.message : String(error));
       setNotice(message);
@@ -1305,8 +1381,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
         // Remember what was painted before the picker: Esc has to undo a
         // preview the user only scrolled past.
         themeDialogOriginRef.current = activeThemeId();
+        themeDialogIndexRef.current = Math.max(0, THEMES.findIndex((item) => item.id === activeThemeId()));
         setDialogQuery("");
-        setDialog({ type: "theme", index: Math.max(0, THEMES.findIndex((item) => item.id === activeThemeId())) });
+        setDialog({ type: "theme", index: themeDialogIndexRef.current });
         return;
       }
       const applied = findTheme(requested);
@@ -1628,7 +1705,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
           setThemeRevision((revision) => revision + 1);
         };
         if (key.upArrow || key.downArrow) {
-          const next = (dialog.index + (key.upArrow ? -1 : 1) + count) % count;
+          const next = (themeDialogIndexRef.current + (key.upArrow ? -1 : 1) + count) % count;
+          themeDialogIndexRef.current = next;
           show(THEMES[next]!.id);
           setDialog({ ...dialog, index: next });
           return;
@@ -1638,7 +1716,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
           show(origin);
           setNotice(`主题保持不变 · ${origin}`);
         } else if (key.return) {
-          const chosen = THEMES[dialog.index] ?? THEMES[0]!;
+          const chosen = THEMES[themeDialogIndexRef.current] ?? THEMES[0]!;
           show(chosen.id);
           setConfig({ ...config, theme: chosen.id });
           void saveTheme(config.home, chosen.id).catch(() => undefined);

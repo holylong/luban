@@ -228,11 +228,11 @@ node dist/cli.js ~/dev/my-project
 }
 ```
 
-`theme` 可以是配色 id（`midnight` / `nord` / `dracula` / `gruvbox` / `tokyo-night` /
-`catppuccin` / `amber` / `contrast` / `solarized-dark` / `solarized-light` /
-`github-light`），也可以是别名（`default` / `dark` / `light` / `high-contrast` /
-`solarized` / `tokyo` / `crt`）。只想改个别颜色时用对象写法，只覆盖写出的键，其余
-沿用该配色：
+`theme` 可以是配色 id（`midnight` / `nord` / `dracula` / `sakura` / `bordeaux` / `plum` /
+`gruvbox` / `tokyo-night` / `catppuccin` / `amber` / `contrast` / `solarized-dark` /
+`solarized-light` / `github-light`），也可以是别名（`default` / `dark` / `light` /
+`high-contrast` / `solarized` / `tokyo` / `crt` / `樱花粉` / `酒红` / `梅子紫`）。只想改
+个别颜色时用对象写法，只覆盖写出的键，其余沿用该配色：
 
 ```jsonc
 { "theme": { "id": "tokyo-night", "colors": { "accent": "#7aa2f7", "dim": "#8b93b8" } } }
@@ -282,7 +282,7 @@ JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会
 | `/details` | 展开或收起执行详情 |
 | `/diff` | 查看工作区 Git 变更（文件列表 + unified diff） |
 | `/branch [n]` | 分叉当前会话，保留前 n 条非系统消息（工具断点自动修复） |
-| `/theme [名称]` | 切换配色；不带参数打开选择器：`↑`/`↓` 逐行预览（整个界面即时换色，含色块与 `当前` 标记），`Enter` 确认并写入 `~/.luban/node-preferences.json`，`Esc` 放弃预览恢复原配色。名称支持别名如 `light` / `dark` / `solarized` |
+| `/theme [名称]` | 切换配色；不带参数打开选择器：`↑`/`↓` 逐行预览（整个界面即时换色，含色块与 `当前` 标记），列表超过一屏时随光标滚动并提示还有多少个配色，`Enter` 确认并写入 `~/.luban/node-preferences.json`，`Esc` 放弃预览恢复原配色。名称支持别名如 `light` / `dark` / `solarized` / `樱花粉` / `酒红` / `梅子紫` |
 | `/settings` | 显示模式、模型、配色、工作区和后端 |
 | `/permissions ask\|edits\|allow` | 切换当前进程的工具确认策略 |
 | `/peers` | 查看自动发现及静态配置的节点 |
@@ -302,6 +302,12 @@ JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会
 
 权限对话中：`y` 仅允许本次，`a` 信任整个会话（之后所有工具不再重复确认），`n` 拒绝。
 也可以使用 `/permissions allow` 在当前进程放行，或启动时添加 `--yes`。
+
+会话标题由模型总结：新建会话时标题是首条用户消息的第一行，第一轮运行结束后 Agent 会用一次
+不携带工具的轻量请求把这段对话概括成一个短标题，顶栏与 `/sessions` 选择器随即显示新名字。
+以“继续”、单个词或大段日志开头的会话因此不会再被叫成“继续”。标题会写入会话记录并标记来源，
+之后的每次逐步保存都不会再用首行把它覆盖掉；模型不可用或回答不像标题时保留原有首行标题，
+同一会话也不会为此反复重试。这次调用只产生一次很小的 token 开销，照常计入底栏计数。
 
 ## 运行时的实时反馈
 
@@ -588,7 +594,7 @@ luban 的沙箱与权限是**协作防护**，不是系统级隔离容器：不�
 ## 开发验证
 
 ```bash
-npm test          # 67 文件 / 362 用例（另有 1 个按平台跳过）
+npm test          # 72 文件 / 390 用例（另有 1 个按平台跳过）
 npm run eval      # 脚本化评测集（单文件/跨文件/失败恢复/只读拒绝，无需付费 API）
 npm run typecheck
 npm run build

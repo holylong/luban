@@ -10,6 +10,7 @@ import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactMessages, estimateMessagesTokens } from "./context.js";
 import { isContextOverflowError } from "./model-errors.js";
 import { repairToolHistory } from "./history.js";
+import { cleanTitle, hasNameableContent, titlePrompt } from "./session-title.js";
 import { planTools, planVerificationStatus } from "./plan.js";
 import { attachImageTools } from "./vision.js";
 import { autoMergeWorktree, checkDiffApplies, createWorktree, disposeWorktree, isGitRepo, worktreeDiff } from "./worktree.js";
@@ -190,6 +191,16 @@ const MAX_TRUNCATION_CONTINUES = 3;
 /** Marks the nudge that asks for the rest of a truncated answer. */
 const TRUNCATION_MARKER = "output-limit";
 
+/**
+ * A session name written by the model, with the tokens it cost. `title` is
+ * absent when the reply was not usable as a name.
+ */
+export interface TitleSuggestion {
+  title?: string;
+  input: number;
+  output: number;
+}
+
 export class AgentRunner {
   readonly tools: Map<string, ToolDefinition>;
   private readonly client: ModelClient;
@@ -312,6 +323,41 @@ export class AgentRunner {
 
   allowAllForSession(): void {
     this.trustSession = true;
+  }
+
+  /**
+   * One cheap round trip that names the session, the way a thread list names a
+   * thread. Deliberately outside `run`: it is not part of the task, it carries
+   * no tools and it does not touch the step budget. The caller folds the
+   * returned usage into its own accounting, because these are tokens the user
+   * waited for just the same.
+   *
+   * Returns `undefined` when there is nothing worth naming or the model cannot
+   * be reached, and omits `title` when the reply was not a title, so callers
+   * keep the derived title rather than writing a bad one.
+   */
+  async suggestTitle(messages: ChatMessage[], signal?: AbortSignal): Promise<TitleSuggestion | undefined> {
+    if (!hasNameableContent(messages)) return undefined;
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason ?? new Error("aborted"));
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+    try {
+      const completion = await this.client.complete(titlePrompt(messages), [], controller.signal, undefined, undefined, {
+        maxTokens: 64,
+        timeoutMs: Math.min(this.config.timeoutMs, 20_000),
+        maxRetries: 1,
+      });
+      return {
+        title: cleanTitle(completion.content),
+        input: completion.usage.input,
+        output: completion.usage.output,
+      };
+    } catch {
+      return undefined;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
   }
 
   close(): void {

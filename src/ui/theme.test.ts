@@ -74,6 +74,12 @@ describe("theme catalog", () => {
     expect(resolveThemeId("light")).toBe("github-light");
     expect(resolveThemeId("solarized")).toBe("solarized-dark");
     expect(resolveThemeId("solarized-light")).toBe("solarized-light");
+    // The Chinese names are how these schemes are announced, so they are also
+    // accepted wherever an id goes: `--theme 樱花粉`, config, `/theme 酒红`.
+    expect(resolveThemeId(" Sakura ")).toBe("sakura");
+    expect(resolveThemeId("樱花粉")).toBe("sakura");
+    expect(resolveThemeId("酒红")).toBe("bordeaux");
+    expect(resolveThemeId("紫罗兰")).toBe("plum");
     expect(resolveThemeId("neon-disco")).toBeNull();
     expect(resolveThemeId("")).toBeNull();
     expect(findTheme("neon-disco")).toBeUndefined();
