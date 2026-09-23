@@ -108,6 +108,50 @@ export const THEMES: readonly ThemeDefinition[] = [
     },
   },
   {
+    // A rose-tinted dark canvas: the whole palette leans toward the accent, so
+    // the pink reads as the scheme rather than as one highlighted line in it.
+    id: "sakura",
+    label: "Sakura",
+    mode: "dark",
+    description: "樱花粉 · 柔雾玫瑰，甜而不腻",
+    palette: {
+      background: "#1b1016", panel: "#241722", element: "#33202f", selected: "#45283f",
+      primary: "#ffe9f4", accent: "#ff8fc4", purple: "#d8a6ff", green: "#8fe3ac",
+      yellow: "#ffcf9b", red: "#ff9090", text: "#f4dcea", muted: "#cb9fb6",
+      dim: "#9b7490", border: "#4d3044", code: "#ffb0d6", codeBackground: "#2a1723",
+      codeAddedBackground: "#1d3024", codeRemovedBackground: "#3d1620",
+    },
+  },
+  {
+    // Wine, not fire-engine red: low-luminance surfaces with velvet highlights.
+    id: "bordeaux",
+    label: "Bordeaux",
+    mode: "dark",
+    description: "酒红 · 勃艮第丝绒，沉稳浓郁",
+    palette: {
+      background: "#150a0c", panel: "#1f1013", element: "#2d171c", selected: "#402027",
+      primary: "#ffe6e6", accent: "#ff6b7d", purple: "#d99ac0", green: "#8fd39b",
+      yellow: "#f2c46b", red: "#ff7a6a", text: "#f0d5d5", muted: "#c69a9e",
+      dim: "#966f75", border: "#4a2830", code: "#ffa38f", codeBackground: "#261114",
+      codeAddedBackground: "#1b2f20", codeRemovedBackground: "#41151a",
+    },
+  },
+  {
+    // Aubergine: the darkest of the three, with gold-warm status colors so the
+    // purple background does not swallow the warnings.
+    id: "plum",
+    label: "Plum",
+    mode: "dark",
+    description: "梅子紫 · 紫罗兰静谧，低调贵气",
+    palette: {
+      background: "#140f1c", panel: "#1c1526", element: "#281d36", selected: "#372748",
+      primary: "#f2e8ff", accent: "#b98cff", purple: "#d5a6ff", green: "#8fdfb0",
+      yellow: "#f0c887", red: "#ff8f9d", text: "#e2d4f2", muted: "#b39fc6",
+      dim: "#8b7799", border: "#42325a", code: "#e0a8ff", codeBackground: "#1f1729",
+      codeAddedBackground: "#1c2e26", codeRemovedBackground: "#3a1a24",
+    },
+  },
+  {
     id: "gruvbox",
     label: "Gruvbox",
     mode: "dark",
@@ -224,6 +268,14 @@ const ALIASES: Record<string, string> = {
   "catppuccin-mocha": "catppuccin",
   "crt": "amber",
   "solarized": "solarized-dark",
+  // The Chinese names are how these schemes are announced, so they can be typed
+  // anywhere an id goes instead of having to remember the English label.
+  "樱花粉": "sakura",
+  "樱花": "sakura",
+  "酒红": "bordeaux",
+  "红酒": "bordeaux",
+  "梅子紫": "plum",
+  "紫罗兰": "plum",
 };
 
 /** Color keys a config file may override; anything else is ignored. */

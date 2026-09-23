@@ -8,7 +8,7 @@ import { render } from "ink";
 import { afterEach, expect, it } from "vitest";
 import { loadConfig } from "../core/config.js";
 import { App } from "./app.js";
-import { activeThemeId, applyTheme, theme } from "./theme.js";
+import { activeThemeId, applyTheme, THEMES, theme } from "./theme.js";
 
 const originalHome = process.env.LUBAN_HOME;
 
@@ -60,8 +60,23 @@ it("lists the palettes, switches on a name, and persists the choice", async () =
     expect(frame).toContain("nord");
     // Ids are what a user types, and the light schemes are marked as such.
     expect(frame).toContain("tokyo-night");
-    expect(frame).toContain("亮色");
     expect(frame).toContain("即时切换并写入");
+    // The catalog is longer than a terminal, so the list is windowed and says so
+    // rather than silently dropping the schemes past the bottom edge.
+    expect(frame).toContain("↓ 还有 2 个配色");
+    expect(frame).not.toContain("↑ 还有");
+
+    // Scrolling to the end keeps the highlighted row on screen: the palette is
+    // previewed by arrow keys, so a selection below the fold would be chosen blind.
+    for (let press = 0; press < THEMES.length - 1; press += 1) stdin.write("\u001b[B");
+    await expect.poll(() => frame).toContain("主题 · github-light");
+    expect(frame).toContain("▸ github-light");
+    expect(frame).toContain("↑ 还有");
+    expect(frame).not.toContain("↓ 还有");
+    expect(frame).toContain("亮色");
+    stdin.write("\u001b");
+    await expect.poll(() => frame).not.toContain("主题 · ");
+    expect(activeThemeId()).toBe("midnight");
 
     // 2. Esc returns to the transcript without changing anything.
     stdin.write("\u001b");

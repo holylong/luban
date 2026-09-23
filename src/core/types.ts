@@ -247,6 +247,14 @@ export interface SessionRecord {
   pendingInputs?: PendingInput[];
   id: string;
   title: string;
+  /**
+   * Where `title` came from. `"auto"` (the default, and what records written
+   * before this field existed are treated as) means it is derived from the
+   * opening user line and may be recomputed on every save. `"model"` means the
+   * model named the session, so saving must not overwrite it with the raw
+   * first line — which is exactly what used to happen.
+   */
+  titleSource?: "auto" | "model";
   project: string;
   workspace: string;
   mode: AgentMode;

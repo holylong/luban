@@ -6,6 +6,27 @@ import { SessionStore } from "./session-store.js";
 import type { ChatMessage } from "./types.js";
 
 describe("SessionStore", () => {
+  it("re-derives a title that came from the opening user line but keeps a model-written one", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-title-"));
+    const store = new SessionStore(home);
+    const record = store.create("demo", home, "auto", "local/coder", []);
+    record.messages.push({ role: "user", content: "继续" }, { role: "assistant", content: "已按上次的结论继续。" });
+    await store.save(record);
+    expect(record.titleSource).toBe("auto");
+    expect(record.title).toBe("继续");
+
+    // What the naming round trip writes. Saving again — which happens after
+    // every step of every later run — must not put the raw "继续" back.
+    record.title = "修复解析器内存泄漏";
+    record.titleSource = "model";
+    await store.save(record);
+    record.messages.push({ role: "user", content: "继续" });
+    await store.save(record);
+    const stored = await store.load(record.id, "demo");
+    expect(stored?.title).toBe("修复解析器内存泄漏");
+    expect(stored?.titleSource).toBe("model");
+  });
+
   it("does not save empty drafts and resumes a meaningful session", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-session-"));
     const store = new SessionStore(home);

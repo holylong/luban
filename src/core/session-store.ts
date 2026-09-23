@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import type { AgentMode, ChatMessage, SessionRecord } from "./types.js";
 import { repairToolHistory } from "./history.js";
+import { fallbackTitle, MAX_TITLE_LENGTH } from "./session-title.js";
 
 function safeName(value: string): string {
   const cleaned = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -12,11 +13,6 @@ function safeName(value: string): string {
 function newId(): string {
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
   return `${stamp}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function titleFrom(messages: ChatMessage[]): string {
-  const first = messages.find((message) => message.role === "user" && message.content?.trim());
-  return (first?.content ?? "New session").trim().split("\n")[0]!.slice(0, 80);
 }
 
 export class SessionStore {
@@ -31,7 +27,8 @@ export class SessionStore {
     const now = new Date().toISOString();
     return {
       id: newId(),
-      title: titleFrom(messages),
+      title: fallbackTitle(messages),
+      titleSource: "auto",
       project: project || basename(workspace) || "default",
       workspace,
       mode,
@@ -54,7 +51,10 @@ export class SessionStore {
     if (edits.size) record.edits = [...edits.values()];
     const meaningful = record.messages.some((message) => message.role !== "system");
     if (!meaningful && !record.pendingInputs?.length) return;
-    record.title = titleFrom(record.messages);
+    // Only a derived title is re-derived. A title the model wrote is the whole
+    // point of the naming round trip, and recomputing it here would replace it
+    // with the raw opening line on the very next save.
+    if (record.titleSource !== "model") record.title = fallbackTitle(record.messages);
     record.updatedAt = new Date().toISOString();
     const path = this.path(record);
     // Capture the admitted state now, then commit snapshots in call order.
@@ -85,7 +85,12 @@ export class SessionStore {
     return {
       ...structuredClone(source),
       id: newId(),
-      title: `${source.title} (branch)`.slice(0, 80),
+      // The branch marker only survives if the title stops being derived: a
+      // derived title is recomputed from the opening line on the next save.
+      // Trim the parent title rather than the suffix — "(branch)" is the part
+      // that tells two forks of the same session apart.
+      title: `${source.title.slice(0, MAX_TITLE_LENGTH - " (branch)".length)} (branch)`,
+      titleSource: "model",
       messages,
       pendingInputs: [],
       createdAt: now,
