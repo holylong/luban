@@ -35,7 +35,10 @@ export function deriveTimeline(job: Pick<MeshJob, "id" | "instruction" | "create
         break;
       case "status":
         flushAssistant();
-        items.push({ kind: "status", id: `status-${record.seq}`, text: event.text, at: record.at });
+        // Live phase labels are what the working indicator is derived from, not
+        // transcript rows. Once per step they pushed one identical bubble per
+        // step into the console, exactly as they did in the terminal.
+        if (!event.progress) items.push({ kind: "status", id: `status-${record.seq}`, text: event.text, at: record.at });
         break;
       case "delta": {
         // Consecutive deltas belong to one assistant bubble; a tool call or a

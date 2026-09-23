@@ -181,7 +181,18 @@ export interface ToolDefinition {
 }
 
 export type AgentEvent =
-  | { type: "status"; text: string }
+  /**
+   * A line for the working indicator.
+   *
+   * `progress` marks a phase label that is re-announced for as long as the run
+   * continues — the tool loop reports "Reviewing tool results" after *every*
+   * step — as opposed to a notice about something that happened (a retry, a
+   * compaction, an idle timeout, the step budget). Only notices belong in the
+   * durable record: a re-announced label left one identical line per step in
+   * every transcript, job log and browser timeline, which is what buried the
+   * notes that carry real information.
+   */
+  | { type: "status"; text: string; progress?: boolean }
   /**
    * A model round trip just started. Without it a UI cannot tell "waiting for
    * the model" apart from "thinking", and a stalled request looks like work.

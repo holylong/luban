@@ -424,7 +424,7 @@ export class AgentRunner {
     // ASK remains intentionally bounded because it is a read-only conversation;
     // AGENT/AUTO use the configured long-task budget (200 by default).
     const maxSteps = mode === "ask" ? Math.min(12, this.config.maxSteps) : this.config.maxSteps;
-    onEvent({ type: "status", text: mode === "agent" ? "Planning and executing" : "Thinking" });
+    onEvent({ type: "status", text: mode === "agent" ? "Planning and executing" : "Thinking", progress: true });
 
     modelLoop: for (let step = 0; step < maxSteps; step += 1) {
       if (signal.aborted) throw signal.reason ?? new Error("aborted");
@@ -745,7 +745,9 @@ export class AgentRunner {
         lastResult.content = `${lastResult.content ?? ""}\n[luban runtime] You repeated the identical tool call. Change strategy or give the final answer now.`;
       }
       if (await promote()) { step = -1; lastText = ""; lastToolSignature = ""; repeatCount = 0; }
-      onEvent({ type: "status", text: "Reviewing tool results" });
+      // A phase label, not an event: the run is still working, and this fires
+      // once per step, so recording it once per step is pure noise.
+      onEvent({ type: "status", text: "Reviewing tool results", progress: true });
     }
     // A productive task can legitimately need more than the interactive step
     // budget. Ask the model for a tools-free handoff so the transcript ends in

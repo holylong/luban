@@ -73,7 +73,12 @@ export type MeshEvent =
 
 /** One structured step of a running job, mirroring `AgentEvent` for transports. */
 export type JobStreamEvent =
-  | { kind: "status"; text: string }
+  /**
+   * A line for the working indicator. `progress` marks a phase label that is
+   * re-announced while the job continues, as opposed to a notice about
+   * something that happened; only notices belong in the durable record.
+   */
+  | { kind: "status"; text: string; progress?: boolean }
   /** A model round trip started; lets a remote UI show which one is in flight. */
   | { kind: "model-call"; index: number }
   | { kind: "delta"; text: string }

@@ -860,7 +860,11 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
     }
     if (event.type === "status") {
       setStatus(event.text);
-      addActivity({ id: `status-${Date.now()}`, text: event.text, tone: "accent" });
+      // Progress labels feed the working line only. Recording them made a
+      // 56-step run stack 55 identical "Reviewing tool results" notes, and the
+      // 60-entry window they filled is the one that has to hold the retry,
+      // compaction and outcome notes a reader actually needs.
+      if (!event.progress) addActivity({ id: `status-${Date.now()}`, text: event.text, tone: "accent" });
     }
     if (event.type === "model-call") {
       // A new round trip: reasoning from the previous one is stale, and the
