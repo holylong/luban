@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+.npm-cache/
+
+# build output
+dist/
+coverage/
+*.vsix
+
+# logs
+*.log
+
+# local agent runtime state (sessions, job store, sync state, logs)
+.luban/
+.smoke/
+
+# python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# local / private config (config.example.json is the shareable template)
+config.json
+config.exp.json
+
+# personal scratch output (e.g. screenshot base64 dump)
+*.b64
+
+# OS junk
+.DS_Store
+Thumbs.db

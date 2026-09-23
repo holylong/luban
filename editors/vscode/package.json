@@ -1,0 +1,23 @@
+{
+  "name": "luban",
+  "displayName": "luban",
+  "description": "luban coding agent via the Agent Client Protocol (spawns `luban acp`).",
+  "version": "0.9.0",
+  "publisher": "luban",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["AI", "Chat"],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "luban.ask", "title": "luban: Ask / run a task" },
+      { "command": "luban.sendSelection", "title": "luban: Send selection as a task" },
+      { "command": "luban.sendFile", "title": "luban: Send current file as context" },
+      { "command": "luban.cancel", "title": "luban: Cancel running task" }
+    ]
+  },
+  "scripts": {
+    "check": "node --check extension.js && node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'));console.log('vscode package ok')\""
+  }
+}
