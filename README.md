@@ -1,0 +1,516 @@
+# luban
+
+Node.js/TypeScript 版 luban。它使用 Ink 渲染 Grok 风格的终端工作台，原生实现了
+Python luban 的局域网发现、节点通信、远程任务和工作区同步，不再需要 Web 后端中转。
+
+## 已实现
+
+- `AUTO` / `AGENT` / `ASK` 三种工作模式，`Shift+Tab` 直接切换。
+- OpenAI-compatible Chat Completions + SSE 流式响应，以及原生 Anthropic Messages；支持多 provider/多模型。
+- 工具循环：文件读写、精确编辑、glob、grep、目录、shell。
+- `code_intelligence`：TS/JS 语言服务（含 project references 展开）+ 可配置 LSP（`lspServers`，诊断支持 pull/push）+ `scope_glob` 单体仓分片 + 超时/`max_results`预算 + 可选子进程隔离（`code_intelligence.worker`，卡死可杀不影响主进程）。
+- 文件工具按路径加载子目录 AGENTS.md/CLAUDE.md；首次或规则变更时先让模型阅读再编辑。
+- 严格检查 SSE 完成标记、错误事件、输出截断和工具参数，断流不会误报成功。
+- 通用 Agent runtime：任务内上下文压缩（含工具定义预算）、瞬时错误退避重试、并行只读工具调用。
+- `update_plan` / `read_plan` 维护任务计划，`record_verification` / `read_verification` 记录测试命令与通过状态；计划与验证随会话保存、压缩保留，未验证成功会明确标注。`@截图.png` 以原生视觉部件发给视觉模型（OpenAI/Anthropic/Responses 三客户端全支持，8MB 上限，会话只存路径）。
+- 大工具结果自动归档（`tool_output.retention_days`/`max_bytes` 自动清理，默认 7 天/500MB），`read_tool_output` 按页回读，避免为找回日志重复执行命令。
+- CLI/TUI 在工具调用前后保存进度；中断后恢复会补齐消息协议并标注执行状态未知。
+- **单一记录流**：对话、工具调用、文件编辑与状态提示按真实发生顺序排成一条时间线，共用一个滚动位置；不再是"对话窗口 + 执行详情窗口"两块拼接，结论也不再重复置顶，`/details` 只控制工具输出的完整程度。
+- 输入框支持多行：粘贴整段文本会原样进入（`\r\n`/`\r` 统一为换行、制表符展开为空格），`Ctrl+J` 或 `Shift+Enter` 换行，`Enter` 提交。输入框高度受屏幕约束（最多约屏幕的 1/3），并随光标滚动，长文本粘贴后再也不会把光标和尾部顶出屏幕；多行时光标可用 ↑↓ 移动，单行时 ↑↓ 仍是历史召回。工作中可继续输入补充指令，`/queue` 排队下一任务，待处理消息随会话保存。
+- `/plan` 显示任务计划面板，`/verify` 打开验证记录面板（逐条列出测试命令、通过/失败、输出摘要，并显示计划验证门禁状态），`/pending` 查看待处理指令；退出/切换会话会清理受管理的后台进程。
+- 鼠标滚轮、**拖动右侧滚动条**或 `PageUp`/`PageDown` 翻阅整条历史。滚动条常驻在主面板右缘（`│` 轨道、`█` 滑块）：按住拖动即按比例滚动，点击轨道上下翻页，滑块位置与百分比读数始终反映当前视口。需要拖选复制时按 `Ctrl+Y` 释放鼠标，再按一次恢复。滚动位置经过钳制，不会出现“滚过头后要往回滚很多格才动”的空转。
+- 显式 ASK 在运行时限制为只读，即使 `--yes` 也不放行写入、shell、网络和委派。
+- **非零退出码按数据返回**：`bash` 结果以 `[exit code: N]` 标记，不再把 `grep` 未命中、`git diff --quiet`、`test -f` 这类正常非零退出报成 TOOL ERROR；只有命令真的跑不起来（超时、被杀、沙箱拦截、spawn 失败）才算工具失败。
+- **并行只读工具**：同一条消息里连续的只读调用（读文件、搜索、列目录等）真正并发执行，写与 shell 保持严格串行；结果仍按调用顺序写入记录。
+- 交互审批带超时（默认 600 秒，可配置），无人应答会明确拒绝而不是无限挂起；默认权限模式为 `edits`（工作区内改文件不再逐次询问，shell 与网络仍会询问），审批界面里按 `a` 可在本次会话内不再询问。
+- 安全统一 diff、免授权 Git 上下文、后台命令查询/终止和独立上下文子 Agent。
+- 不创建 commit 的 Git 工作树 checkpoint/revert（含未跟踪文件，50 MiB 安全上限）。
+- 工作区/用户级 `SKILL.md` 技能，以及标准输入输出型 MCP Server 桥接。
+- stdio 与 Streamable HTTP MCP，支持持久 session、SSE 响应和自定义认证 headers；`mcpMaxTools`/`mcp.lazy` 控制 schema 预算，`mcp_search_tools` 按需检索，`read_image` 报告视觉能力。
+- `bash pty:true` 经 `script(1)` 分配真 PTY（`[ -t 1 ]` 为真，curses/进度条可用；前台限定，与 OS 沙箱后端互斥）。`delegate_task` 支持 `use_worktree` 把写任务隔离到临时 git worktree，`auto_merge` 自动合入（冲突文件存 `.luban/conflicts/` 双副本），`delegate_tasks` 可并行运行 2～4 个只读研究/审查子 Agent；子任务步数计入父任务总预算，父取消会回收。
+- 原生 `web_fetch`（HTML 文本化、超时和 2 MiB 响应上限）。
+- `allow` / `deny` 持久权限规则；deny 规则始终优先于会话信任。
+- 写入、shell 和网络工具只需一次会话信任确认；`--yes` 可直接关闭询问。`bash` 带软沙箱：拦截毁灭性命令、工作区外写入/重定向和自定义 deny，可选禁用网络与 `bwrap` 后端（非 OS 容器，见安全说明）。
+- JSON 会话持久化、最近会话选择器与 `--resume` 恢复。
+- `/` 命令发现、Tab 补全、`Ctrl+P` 模型选择、`Ctrl+O` 会话选择。
+- `!command` 直接 shell，不经过模型。
+- 原生 LAN Mesh：UDP 广播/组播发现、静态联系人、HMAC 鉴权和重放防护；收到的和交接出去的远程任务都在主流程里展开完整执行过程（计划、模型调用、工具、内联改动记录）。
+- Python 兼容的 TCP 帧协议、持久化远程 job、租约续期、超时和取消。
+- `git`/分块两种工作区同步、SHA-256 校验、三方合并和冲突副本。
+- Agent 可直接调用 `mesh_get_peers`、`mesh_handoff`、`mesh_ask_all`、`mesh_sync_*`。
+- 原生 HTTP 后台和浏览器工作台：节点、peers、jobs、workspace、sync、chat、contacts API。
+- React + Vite 浏览器工作台：事件流（SSE）实时转录、工具调用卡片、内联编辑记录（文件路径 / 增删计数 / 行号 / 修改前后行内容）、Markdown 与代码高亮、文件查看器、Git 变更视图、会话浏览、工作区文件树。
+- Web 端交互审批：写文件、shell、网络工具会在此页面等待允许/拒绝，审批内容含工具名、风险与参数；`--web-port` 同时把审批带到浏览器。
+- `web`/`serve` 守护模式，或让 TUI 通过 `--web-port` 同进程提供 Web 服务。
+- 可选保留 `--backend`，用于兼容旧的 Python Web API 自动化。
+- 非交互 `--prompt` 模式，适合脚本和 CI。
+
+## 安装
+
+需要 Node.js 20 或更高版本。
+
+```bash
+cd luban
+npm install
+npm run build      # 服务端 tsc + 前端类型检查 + vite 打包，可用 scripts/build.mjs 单独运行
+npm link
+```
+
+`npm run build` 由 `scripts/build.mjs` 驱动，跨平台且分两步：服务端编译（必需）与浏览器
+工作台打包。若 `vite`/`react-dom` 未安装，构建会给出明确提示并跳过前端，服务端照常产出，
+浏览器端回退到内置单文件控制台。可用 `npm run build:server` / `npm run build:web` 单独执行。
+
+前端工作台源码在 `src/web/client/`，构建产物输出到 `dist/web-ui/`（与 TypeScript 的
+`dist/web/` 分开，避免互相覆盖）。只改前端时可以用：
+
+```bash
+npm run build:web        # 只重新打包前端
+npm run dev:web          # Vite 开发服务器，/api 代理到 127.0.0.1:8642
+npm run typecheck        # 服务端 + 前端类型检查
+```
+
+前端不依赖 `@vitejs/plugin-react`：Vite 内置的 esbuild 已能按 automatic JSX runtime
+编译 TSX，少一个插件就少一条会在 `npm install` 阶段引发 peer 冲突的依赖边。代价是
+`npm run dev:web` 下修改组件会整页刷新，而不是 Fast Refresh 保留组件状态。
+
+安装后：
+
+```bash
+# 在项目目录里直接启动，进入交互 TUI（类似 opencode）
+luban
+# 也可以显式指定其他工作区
+luban ~/dev/my-project --resume
+luban . --model deepseek/deepseek-chat
+luban . --mesh-name build-linux --mesh-port 7890
+```
+
+不想全局 link 时，可以直接：
+
+```bash
+npm run dev -- ~/dev/my-project
+node dist/cli.js ~/dev/my-project
+```
+
+## 运行时的实时反馈
+
+推理模型思考时可能长时间没有可见输出，只有一个转圈很容易被当成卡死。现在这一行会说明**当前处于哪一步、是第几次模型调用、已经等了多久**，并把模型的思考内容以**单行**实时刷新出来（不进入转录、不写入会话）：
+
+```
+⠓ 等待模型响应 #3 模型返回 HTTP 429，0.4s 后重试（第 2/4 次）        本步 0s · 总 128s
+⠙ 推理中 Looking at the repository. I should check README.md first    本步 12s · 总 140s · 1.4k 字
+⠹ 生成回复 现在修改 config.ts 的默认值                                本步 3s · 总 143s
+⠸ 执行工具 #4 Shell · npm run build                                  已运行 22s · 总 165s
+```
+
+四种阶段分别是 `等待模型响应` / `推理中` / `生成回复` / `执行工具`。**模型调用一旦超过 25s 没有任何输出，这一行会转成黄色并显示"已 Xs 无输出"**——等待不是思考，必须看得出来。
+
+配套的还有两条：每一次重试和每一次流挂起，客户端都会把原因写成一条状态记录（"模型返回 HTTP 429，0.4s 后重试（第 2/4 次）"、"模型已 600s 没有任何输出，已中断本次请求（服务端可能卡住或网络中断）"）。这些记录会**按发生顺序插入转录流**并可滚动回看，而不是只闪一下——否则运行结束时你只看得到"任务失败"，看不到为什么。
+
+回答流同样按 80ms 合并刷新，不再每个 token 重绘整屏。浏览器工作台底部同样显示 `等待模型响应 · 第 N 次模型调用` 与"已 Xs 无输出"。
+
+### 输出被截断不再等于任务失败
+
+提供商在输出上限处截断回复（`finish_reason: length`）时，以前整轮直接失败，已经生成的内容
+全部丢弃。现在会**保留已生成的部分**，写入会话后让模型接着写，并把两段拼成一个完整答案：
+
+```
+· 模型输出被输出上限截断（推理 8120 字 / 正文 1240 字），已保留并继续
+✓ 任务已完成 · 3 步 · 4 次模型调用 · 41.2s
+```
+
+- 被截断的回复里若含工具调用，一律**不执行**（参数可能写了一半），而是重新请求。
+- 连续 3 次仍被截断，或**推理占满了整个输出预算、正文为空**时，会暂停并给出可执行建议：
+
+  ```
+  ⏸ 已暂停（2 步），发送"继续"恢复
+  模型的推理占满了输出上限（推理 9032 字 / 正文 0 字），没有留下正文，继续重试只会重复截断。
+  请降低 reasoning_effort/thinking，或提高 max_tokens。
+  ```
+
+  遇到这种报错，通常是**推理 token 也计入 max_tokens**：关掉兼容接口的 `thinking`，或把 `max_tokens` 提到网关真实上限（很多网关会静默截断到自己的上限）。当前 OpenAI 兼容客户端不发送 `reasoning_effort`，只改这个配置项不会生效。
+
+最后，流式回复无输出的等待上限是 `thinking_timeout`（默认 600s，单位秒），可在模型配置里调整：
+
+```json
+{ "model": { "timeout": 120, "thinking_timeout": 90, "max_retries": 3 } }
+```
+
+## 速度与规划
+
+默认不再强制 Agent 先调用 `update_plan`：那是一次完整的模型往返，长任务值得、单步任务纯粹是开销。三种模式：
+
+```json
+{ "planning": "auto" }
+```
+
+| 模式 | 行为 |
+|---|---|
+| `auto`（默认） | 只有确实跨多步时才规划，明确允许单步任务跳过 |
+| `always` | 每个非平凡任务都先 `update_plan`（旧行为，多一次往返） |
+| `off` | 完全不规划 |
+
+命令行 `--planning off|auto|always`，环境变量 `LUBAN_PLANNING`。
+
+`model.thinking` 可设为 `true`（所有请求开启）或 `false`（所有请求关闭）。未设置或设为 `"auto"` 时，luban 在本地按最新用户请求选择，不额外调用模型；明确简单的请求关闭思考，不确定或涉及修复、分析、测试等工作的请求开启思考。如果简单任务的工具失败，下一次模型调用会开启思考。自动选择为非思考时，单次输出上限最多 16384 token、无输出等待最多 45 秒。用户强制指定 `true` 或 `false` 时，仍使用自己配置的 token、超时和重试设置。目前此开关通过 OpenAI 兼容接口的 `chat_template_kwargs.enable_thinking` 传给模型；Anthropic 与 Responses 客户端尚未接入对应控制。
+
+明确要求把当前 Git 仓库提交并推送到已配置的上游时，Agent 可以直接使用 `git_publish`：一次工具调用完成暂存、必要时提交和推送，只需一次执行审批。它要求工作区就是仓库根目录，且当前分支已有上游；不执行强制推送。
+
+每轮结束会报告往返次数与耗时，把"感觉慢"变成数字：
+
+```
+[4 steps · 4 model calls · 0.5s · 0.1s/call]      # --prompt 模式 stderr
+✓ 任务已完成 · 4 步 · 4 次模型调用 · 12.3s          # TUI 结论行
+```
+
+同一个任务在两个工具里各跑一次，比较 `model calls` 和 `s/call` 就能分清是**往返太多**还是**单次太慢**。
+
+## 局域网协作排障
+
+先在两台机器上各跑一次：
+
+```bash
+luban mesh            # 打印本节点昭告的地址、广播目标，并逐个探测联系人
+```
+
+它会区分两类失败——这两类原因完全不同，以前都只显示"超时"：
+
+- `could not be reached`：连接根本没建立 —— 路由不通、被防火墙拦、或对端没在跑。
+- `connected but no reply`：连接建立了但对端不回应 —— 说明那个地址/端口上**有别的程序在应答**（代理/VPN 拦截、端口被占用、或对端跑在别的端口）。
+
+常见坑：
+
+- **代理 / VPN 接管了局域网地址**。用 `ip route get <对端IP>` 确认走的是哪个网卡；如果显示 `dev tun0`/`dev FlClash` 之类而不是局域网网卡，把该地址或私有网段（`10.0.0.0/8`、`192.168.0.0/16`、`172.16.0.0/12`）加入代理的直连/绕过规则。
+- **UDP 广播只在同一子网内有效**。跨子网必须配 `contacts` 静态联系人（`/add-contact` 或 `~/.luban/config.json`）。luban 会向每个网卡各自的子网广播地址（如 `192.168.1.255`）发送，而不只是跟着默认路由的 `255.255.255.255`。
+- **两端 token 必须一致**（`mesh.token`）；不一致时对方的广播会被静默丢弃，表现为"找不到节点"。
+
+## 原生 Web 后台
+
+完全替代 Python `luban web`：
+
+```bash
+# Node Mesh + Agent worker + Web API + 浏览器控制台
+luban web ./demo --host 127.0.0.1 --port 8642
+
+# 只运行 Node Mesh/worker 守护进程
+luban serve ./demo
+  luban acp ./demo    # Agent Client Protocol over stdio（编辑器接入，见 editors/vscode/）
+
+# TUI 和 Web 后台共享同一个 Node 进程
+luban ./demo --web-port 8642
+```
+
+打开 `http://127.0.0.1:8642/`。浏览器里的任务直接进入 Node Job Store 和 Agent worker，
+不会请求 Python 服务。默认仅监听本机；只有明确需要局域网浏览器访问时才使用
+`--host 0.0.0.0`。
+
+兼容及扩展 API：
+
+| 方法 | API | 功能 |
+|---|---|---|
+| GET | `/api/node`、`/api/peers` | 节点和局域网伙伴 |
+| GET | `/api/jobs`、`/api/jobs/:id` | Job 列表、日志和结果 |
+| POST | `/api/jobs`、`/api/jobs/:id/cancel` | 本地执行或取消任务 |
+| GET | `/api/workspace?project=...` | 安全浏览项目文件树 |
+| POST | `/api/sync`、`/api/chat`、`/api/contacts` | 同步、消息和联系人 |
+| POST | `/api/ping`、`/api/status`、`/api/handoff` | 节点诊断和任务交接 |
+| GET | `/api/events` | SSE 事件流：job、job-log、job-event、peer、chat |
+| GET | `/api/jobs/:id/stream?since=N` | 结构化事件重放（每个事件带单调 `seq`） |
+| GET/POST | `/api/approvals` | 查询/答复浏览器交互审批 |
+| GET | `/api/file`、`/api/file-versions` | 读取工作区文件与 Git HEAD 版本 |
+| GET | `/api/diff`、`/api/sessions`、`/api/sessions/:id` | Git 变更、会话列表与会话详情 |
+
+## 配置
+
+默认读取 `~/.luban/config.json` 和工作区下的 `.luban/config.json`。下面的格式
+与 Python luban 兼容：
+
+```jsonc
+{
+  "node": {
+    "name": "build-linux",
+    "host": "0.0.0.0",
+    "port": 7890,
+    "udp_port": 7891,
+    "capabilities": ["shell", "files", "agent", "linux"]
+  },
+  "model": { "active": "local/qwen3-coder", "max_tokens": 64000 },
+  "providers": {
+    "local": {
+      "options": {
+        "baseURL": "http://127.0.0.1:8000/v1",
+        "apiKey": "sk-local"
+      },
+      "models": {
+        "qwen3-coder": { "name": "Qwen3 Coder" }
+      }
+    },
+    "deepseek": {
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "base_url": "https://api.deepseek.com/v1",
+      "models": ["deepseek-chat"]
+    },
+    "responses": {
+      "api": "responses",
+      "base_url": "https://api.openai.com/v1",
+      "models": ["gpt-5"]
+    },
+    "anthropic": {
+      "api": "anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "base_url": "https://api.anthropic.com/v1",
+      "models": ["claude-sonnet-4-20250514"]
+    }
+  },
+  "contacts": [
+    { "name": "win-testbox", "host": "192.168.1.30", "port": 7890, "udp_port": 7891 }
+  ],
+  "mesh": { "token_env": "LUBAN_MESH_TOKEN" },
+  "permission": {
+    "allow": ["bash:git *", "bash:npm test*"],
+    "deny": ["bash:rm -rf *", "write_file:.env"]
+  },
+  "sandbox": { "mode": "soft", "allowNetwork": true, "allowOutsideWorkspace": false, "backend": "auto", "docker_image": "", "deny": ["kubectl.*prod"] },
+  "lspServers": { "python": { "command": "pyright-langserver", "args": ["--stdio"], "languages": ["python"] } },
+  "code_intelligence": { "worker": false },
+  "tool_output": { "retention_days": 7, "max_bytes": 524288000 },
+  "mcp": { "max_tools": 64, "lazy": false },
+  "mcpServers": {
+    "filesystem-extra": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/opt/shared"],
+      "env": {},
+      "trusted": true
+    },
+    "remote-tools": {
+      "url": "https://tools.example.com/mcp",
+      "headers": { "Authorization": "Bearer replace-me" },
+      "trusted": true
+    }
+  },
+  "sync": {
+    "mode": "auto",
+    "chunk_size": 65536,
+    "conflict_policy": "auto"
+  },
+  "projects": {
+    "myapp": "/srv/work/myapp"
+  },
+  "max_workers": 2,
+  "job_timeout_seconds": 600,
+  "queue_timeout_seconds": 300
+}
+```
+
+模型相关的可靠性参数也可以放在 `model` 中：`context_window`（默认 128K）、
+`context_reserve`（默认 16K）、`semantic_compaction`（默认开启）和 `max_retries`（默认 3）。MCP 当前支持标准的 stdio
+JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会以 `mcp_<server>_<tool>`
+直接注册给模型；未信任服务只能在用户批准后通过 `mcp_list_tools` / `mcp_call` 使用。
+
+技能从项目的 `.luban/skills/*/SKILL.md`、`.agents/skills/*/SKILL.md` 和
+`~/.luban/skills/*/SKILL.md` 发现。长时间运行的 shell 命令会使用 `bash` 的
+`background` 参数，并由 `get_background_task` / `stop_background_task` 管理。
+
+仓库内也提供了一个可复制安装的[股票持仓监控场景插件](plugins/stock-monitor/README.md)：
+它用 Skill 约束深套/加减仓分析流程，并用 stdio MCP 接入延迟行情、仓位诊断与自选持仓扫描。
+luban 当前的“插件”组合方式即 Skill + MCP；扫描为主动调用，不是脱离进程的行情推送服务。
+
+配置优先级：CLI `--model` > `LUBAN_MODEL` > Node 偏好 > `model.active`。
+`~/.luban/config.json` 可以由 Python 和 Node 两个版本直接共用。设置了 Mesh token 时，
+所有节点必须使用相同的 `LUBAN_MESH_TOKEN`。
+
+## 日常交互
+
+| 操作 | 作用 |
+|---|---|
+| `Shift+Tab` | 循环切换 AUTO / AGENT / ASK |
+| `Ctrl+P` | 打开模型选择器 |
+| `Ctrl+O` | 打开会话选择器 |
+| `Ctrl+Y` | 开关鼠标捕获 · 默认关闭可直接选中复制 · 开时滚轮翻执行详情 |
+| `Ctrl+J` | 在输入框插入换行，多行任务/贴代码用 |
+| `@path` | 文件补全（Tab）+ 提交时自动附带内容，最多 5 个 |
+| 底栏 `ctx` | 当前会话 token 占上下文窗口比例，≥85% 变红 |
+| `↑` / `↓` | 召回本次输入历史 · `resume`/切换会话后仍可从用户消息恢复 |
+| `PgUp` / `PgDn`（或 `Ctrl+K` / `Ctrl+J`） | 翻阅历史消息或执行详情 |
+| `Esc` | 取消当前 Agent 运行 |
+| `/new` | 新会话 |
+| `/mode agent` | 切换显式 Agent 模式 |
+| `/models` / `/sessions` | 打开对应选择器 |
+| `/queue <任务>` | 当前任务结束后再执行；空闲时立即开始 |
+| `/pending` | 查看保存在当前会话中的待处理消息（运行中补充指令也会显示在正文区） |
+| `/copy` | 复制上次回答 + 最近工具结果（OSC52 直达剪贴板，另存 `~/.luban/last-copy.md`） |
+| `/export [文件名|路径]` | 导出当前会话为 Markdown，含元信息、逐文件改动摘要表、每处改动的行号与前后内容、任务计划与验证门禁、验证记录（失败输出也会保留）以及完整对话（默认当前目录 `luban-export-<项目>-<sessionId>.md`；可指定文件名或路径，省略 `.md` 会自动补全，运行中也可用） |
+| `/plan` | 显示或隐藏任务计划面板（含验证状态） |
+| `/branch [n]` | 分叉当前会话，保留前 n 条非系统消息（工具断点自动修复） |
+| `/settings` | 显示模式、模型、工作区和后端 |
+| `/permissions ask\|allow` | 切换当前进程的工具确认策略 |
+| `/peers` | 查看自动发现及静态配置的节点 |
+| `/ping <peer>` / `/status <peer>` | 检查节点与远端 worker/job 状态 |
+| `/message <peer> <内容>` | 向节点发送消息并取得送达回执；收发两端的 TUI 都会显示消息正文 |
+| `/inbox` | 查看最近收到的 Mesh 消息（TUI 中也会常驻显示） |
+| `/sync push <peer> [auto\|git\|chunk]` | 将当前项目同步到对端 |
+| `/sync pull <peer> [auto\|git\|chunk]` | 从对端同步当前项目 |
+| `/handoff <peer> <任务>` | 让对端 Agent 执行任务并等待结果 |
+| `/ask-all <任务>` | 并发询问全部已知节点 |
+| `/jobs` / `/jobs <id>` / `/cancel-job <id>` | 列出最近 Mesh 任务、展开某个任务的完整执行过程，或取消本机接收的任务 |
+| `/add-contact <name> <host> <tcp> [udp]` | 保存跨网段联系人 |
+| `!git status --short` | 直接执行 shell |
+
+权限对话中：`y` 仅允许本次，`a` 信任整个会话（之后所有工具不再重复确认），`n` 拒绝。
+也可以使用 `/permissions allow` 在当前进程放行，或启动时添加 `--yes`。
+
+## 局域网协作
+
+Mesh 默认随 TUI 或 `--prompt` 模式启动。处于同一局域网且 UDP 端口一致的节点会自动
+发现；广播不可达时使用 `/add-contact` 或配置 `contacts`。
+
+```bash
+# A 节点
+luban ~/dev/myapp --mesh-name linux-a
+
+# 同步上下文后交接任务
+/sync push windows-b auto
+/handoff windows-b 在 Windows 上运行测试并报告失败
+```
+
+### 远程任务和本地任务一样可见
+
+TUI 默认显示本机会话，输入的指令、流式回复和最终回复都留在本地视区。Mesh 的消息数量和活动任务显示在一行状态栏中，远端消息不会自动切走本地对话。使用 `/mesh` 在本机会话与 Mesh 视图之间切换；输入新的本地问题会自动返回本机会话。Mesh 消息的收发记录在重开 TUI 后也会恢复。`luban serve` 同样打印执行步骤和输出；用 `/details` 可手动切换工具详情。
+
+别人交给你的任务、以及你交接出去的任务，都可**在 Mesh 视图里展开完整的执行过程**，和本地
+任务用同一套渲染：模型调用次数、推理与回复的实时单行、工具调用（`Shell` / `Edit` 等，
+含参数与输出摘要）、**内联改动记录**（文件路径、增删行数、行号、修改前后内容）、以及
+任务计划。
+
+```
+📥 来自 windows-b · 在 Windows 上运行测试并报告失败
+› {"plan":[{"step":"检查仓库","status":"in_progress"},{"step":"运行测试","status":"pending"}]}
+  ✓ Shell · 完成 · 12.4s
+    $ npm test
+    ↳ 3 passing
+⠸ 📥 windows-b 执行工具 #4 Shell · npm test              已运行 12s · 总 45s
+  Task plan · 📥 windows-b
+  → 检查仓库
+  ○ 运行测试
+✓ 任务完成 · 4 次模型调用
+```
+
+细节：
+
+- Mesh 视图底部会显示远程任务的阶段行（`等待模型响应` / `推理中` / `生成回复` / `执行工具`），带同伴名字，超时无输出同样会变黄并提示。
+- 右侧 Task plan 面板在远程任务制定计划后显示 `Task plan · 📥 <同伴>` 及其步骤。
+- `/jobs` 列出最近任务，`/jobs <job-id>` 打开 Mesh 视图并展开指定任务。远端任务更新不会切走本机会话；`/mesh` 返回本地。
+- 推理内容与本地一致：只在实时行显示，不写入转录、不落盘。
+- 交接出去的任务现在也有本地记录（`source=你 → target=同伴`），因此同样会出现在 `/jobs`、Web 工作台和 Mesh 视图里；对方的结构化事件会随轮询回传，而不是只回传日志文本。
+
+Node 与 Python 节点可双向发现、ping、消息、同步和交接任务。迁移期间可以混合运行，
+但同一台机器不要同时启动两个同名节点，否则其他机器无法区分它们；请先停止旧 Python
+节点，或给 Node 临时指定不同名字：
+
+```bash
+luban . --mesh-name my-laptop-node --mesh-port 0
+```
+
+`--no-mesh` 可只启动本地 Agent。旧 Web 桥接仍可通过
+`--backend http://127.0.0.1:8080` 使用，但原生协作不需要它。
+
+## 脚本模式
+
+```bash
+# 默认拒绝写入/shell，适合只读分析
+luban . --prompt "解释这个项目的入口"
+
+# 明确允许工具修改
+luban . --yes --prompt "运行测试并修复失败"
+```
+
+## 运行中补充指令
+
+TUI 工作时直接输入消息，会在下一工具/模型边界送给 Agent；尚未执行的旧工具调用会被跳过，
+让模型根据新指令重新判断。正在执行的工具不会被自动撤回，需要立即停止时使用 Esc。
+`/queue <任务>` 会保留当前任务，等它正常给出最终回答后再逐个执行队列任务。
+新任务沿用当前运行的模式与权限，每次接收新输入重新分配模型调用步数。
+
+补充指令和排队任务会即时显示在正文区的“补充指令”面板（含类型、时间和内容），不再只是一条 notice；
+`handleEvent(input)` 送达后也会同步更新该面板。待处理输入保存在会话的 `pendingInputs` 中。取消、错误或达到步数上限后仍保留未处理输入；
+恢复会话后发送“继续”即可继续处理，`/pending` 可查看队列。会话选择器仅列出当前工作区的记录。
+等待权限确认时仍需先允许、拒绝或取消该确认，再输入新指令。
+
+输入框支持 `↑` / `↓` 召回历史（含 `/` 命令和运行中补充指令），`resume`/切换会话后从用户消息自动恢复。
+输出复制有两条路：`Ctrl+Y` 关鼠标后直接选中复制，或 `/copy` 经 OSC52 发送到系统剪贴板并另存 `~/.luban/last-copy.md`；
+鼠标开时滚轮翻执行详情（并自动展开 `/details`），`Shift+选中` 在多数终端也可绕过鼠标上报直接复制。
+
+`/plan` 切换计划面板；底栏显示待处理输入数量。后台任务可跨普通对话轮次继续运行，`send_background_input` 可向运行中任务写 stdin（交互式 CLI/REPL）；
+取消所属运行、退出、切换模型/权限或新建会话时会终止受管理的进程。
+Unix 使用进程组终止，Windows 使用 `taskkill /T /F`；Windows 分支尚未在本次 Linux 环境实测。
+主动脱离进程组的守护进程不受这套清理机制保证，它也不构成系统级沙箱。
+
+## 代码导航与项目规则
+
+Agent 可调用 `code_intelligence`，例如：
+
+```json
+{"operation":"definitions","path":"src/main.ts","line":10,"column":8}
+```
+
+`references` 查询引用；`symbols` 列出文件符号；`diagnostics` 检查指定文件的语法和类型错误。
+行号和 UTF-16 列号从 1 开始。当前支持 TS/JS，每次查询读取最新文件，不执行项目脚本。
+最近的工作区内 tsconfig/jsconfig 决定项目范围；单文件上限 2 MB，项目最多 2,000 个根源文件。
+其他语言及大型 monorepo 的完整项目引用分析仍需扩展。
+
+文件读写、精确编辑和 diff 会检查适用的子目录规则。若规则尚未送给模型或已经变化，
+这次编辑会返回“未执行”，加载规则后由模型调整或重试；不需要额外用户审批。
+shell/MCP 内部操作不经过这个逐路径入口。
+
+## 长任务与恢复
+
+多步骤任务可让 Agent 使用 `update_plan` 记录实施和验证步骤，使用 `read_plan` 查看未完成工作。
+计划属于当前会话，正常保存、取消及 `--resume` 恢复后继续可见，压缩不会丢弃计划。
+计划中的“完成”是任务记录，实际测试输出才是验证依据。
+
+工具返回值超过 24,000 字符时保存到 `~/.luban/tool-output-node/`，预览包含归档 UUID。
+Agent 可用 `read_tool_output` 回读（`offset` / `next_offset` 为 UTF-8 字节位置），无需重新运行原命令。
+工具自身已有的输出采集上限仍生效；归档目前保留在本地，不自动过期。
+
+CLI/TUI 逐步保存到原有会话目录。如果进程在工具执行后、结果保存前退出，恢复记录会明确
+提示“执行状态未知”，Agent 应检查现状后决定下一步。Mesh job 仍使用原有 job/log 保存机制。
+
+ASK 只允许标记为只读的内置工具；AUTO 不会因为任务描述未命中关键词而变成只读。
+可信 MCP 仍按配置初始化。文件路径检查和工具权限规则不构成系统级 shell 沙箱。
+
+详细对比与后续验收标准见 [Agent 差距分析](docs/agent-gap-analysis.md)。
+
+### 长任务与多实例运行
+
+- 达到步骤上限后会保存总结并显示 `paused`；TUI 中发送“继续”可恢复。总结请求失败时也会保存明确的暂停提示，不把中间分析当作最终结果。
+- Node Mesh 任务、远程轮询和 Web 工作台使用相同的 `paused` 状态。新任务逐步保存执行历史，暂停后可在 Web 点击“继续任务”，或调用 `mesh_resume_job`（远程任务提供 `peer`）恢复同一任务 ID；用 `mesh_poll_job` 查看状态和结果。服务重启后仍可从保存的历史续跑，重复续跑请求只接受一次。缺少历史的旧任务不能续跑，旧版 Python 节点不支持新增续跑协议。
+- 普通 CLI/TUI 使用默认 Mesh 端口时，端口被占用会自动分配空闲 TCP 端口、独立节点名和 `jobs/instances/<实例 UUID>` 任务目录。已有实例及任务保持运行，UDP 发现仍使用配置的发现端口。显式传入 `--mesh-port` 或使用 daemon 时仍要求绑定指定端口。
+- Unix 上的 `bash` 工具统一使用 `/bin/bash` 并启用 `pipefail`，前台和后台命令行为一致，不受登录 Shell 为 sh/fish 的影响；系统需安装 Bash。Windows 仍使用 cmd。
+- Web 控制台提供 `/diff?project=<项目名>` 代码变更页，按当前 Git HEAD 显示修改文件列表和带颜色的 unified diff；任务完成后可直接打开该地址审阅修改。
+
+从 v0.4.3 开始，TUI 每次执行 `write_file`、`edit_file`、`apply_patch` 后会直接展开 `Edited 文件 (+新增 -删除)` 和带行号的红绿差异。内容来自执行前后的文件，适用于未提交文件和非 Git 目录。执行详情默认展开，可用 PageUp/PageDown 或鼠标滚轮翻阅，`/details` 用于收起或重新展开完整输出；新记录随会话保存，压缩上下文后仍可恢复。任务结束后会固定显示“已完成 / 已失败 / 已暂停 / 已取消”状态，成功时展示最终回答，失败或暂停时直接展示原因。大改动的预览最多保留每文件 160 行，每行最多 300 字符，并注明省略。升级前未保存原文的历史编辑无法还原当时的完整差异。Shell/MCP 内部的文件修改尚不生成这种逐次编辑记录。
+
+复杂任务默认最多执行 200 个 Agent/AUTO 工具轮次；可在 `~/.luban/config.json` 设置 `max_steps`，范围为 1–2000。Agent 会在预算用尽时生成总结并暂停，只有明确完成或发生错误才会正常结束，不能安全地无限运行。
+
+Qwen/OpenAI 兼容服务可在 `model` 中设置 `"thinking": true`、`false` 或 `"auto"`（默认），请求会发送 `chat_template_kwargs.enable_thinking`。长会话默认在 80 条消息前主动压缩，可通过 `max_history_messages` 调整；Qwen 的默认 `context_window` 为 262144，也可按服务端实际容量显式覆盖。`max_tokens` 是单次输出上限，应小于总上下文窗口并为输入历史保留空间。
+
+## 开发验证
+
+```bash
+npm test          # 59 文件 / 308 用例
+npm run eval      # 脚本化评测集（单文件/跨文件/失败恢复/只读拒绝，无需付费 API）
+npm run typecheck
+npm run build
+```
+
+界面行为用真实 PTY 跑（Ink 需要 TTY），都在 `scripts/` 下，失败即非零退出：
+
+```bash
+python3 scripts/tui-smoke.py         # 启动横幅与各面板
+python3 scripts/tui-wheel-smoke.py   # 滚轮 / 拖动滚动条 / PageUp 翻页
+python3 scripts/tui-input-smoke.py   # 多行输入与光标
+python3 scripts/tui-export-smoke.py  # /export 内容完整性
+python3 scripts/tui-stall-smoke.py   # 四个阶段、重试提示、流挂起提示、输出截断后继续（见"运行时的实时反馈"）
+python3 scripts/tui-mesh-smoke.py    # 两个真实节点：远端任务的计划/工具/阶段/结果是否照常展示
+```
+
+会话保存在 `~/.luban/sessions-node/`，不会与 Python 版的 JSONL 会话相互覆盖。

@@ -1,0 +1,21 @@
+export const theme = {
+  // Deep blue-gray surfaces keep long code and tool logs comfortable to scan.
+  background: "#0b0f14",
+  panel: "#101720",
+  element: "#182230",
+  selected: "#25364b",
+  primary: "#f4f7fb",
+  accent: "#72d6ff",
+  purple: "#c4a7ff",
+  green: "#7ee787",
+  yellow: "#f2cc60",
+  red: "#ff7b8a",
+  text: "#d7e2f0",
+  muted: "#91a0b5",
+  dim: "#66778d",
+  border: "#33475f",
+  code: "#b8f36b",
+  codeBackground: "#0f1a22",
+  codeAddedBackground: "#11251e",
+  codeRemovedBackground: "#2a171d",
+} as const;

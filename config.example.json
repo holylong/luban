@@ -1,0 +1,111 @@
+{
+  "node": {
+    "name": "my-laptop",
+    "host": "0.0.0.0",
+    "port": 17890,
+    "udp_port": 7891,
+    "capabilities": [
+      "linux",
+      "shell",
+      "files",
+      "agent",
+      "audio"
+    ]
+  },
+  "model": {
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "api_key": "",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "model": "qwen3.8-27b",
+    "max_tokens": 128000,
+    "temperature": 0.2,
+    "top_p": 1,
+    "top_k": 0,
+    "timeout": 120,
+    "context_window": 262144,
+    "max_history_messages": 120,
+    "active": "dashscope/deepseek-v4.1-flash",
+    "reasoning_effort": "xhigh"
+  },
+  "providers": {
+    "qwen-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8000/v1",
+        "apiKey": ""
+      },
+      "models": {
+        "qwen3.8-flash-next": {
+          "name": "qwen3.8-flash-next"
+        }
+      }
+    },
+    "deepseek": {
+      "api_key": "",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "base_url": "https://api.deepseek.com/chat/completions",
+      "models": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ]
+    },
+    "dashscope": {
+      "api_key": "",
+      "api_key_env": "DASHSCOPE_API_KEY",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "models": [
+        "deepseek-v4-flash-0731",
+        "deepseek-v4.1-flash",
+        "qwen3.8-flash",
+        "qwen3.8-max",
+        "glm5.3-flash"
+      ]
+    }
+  },
+  "contacts": [
+    {
+      "name": "peer-1",
+      "host": "192.168.1.50",
+      "port": 17890,
+      "note": "Example LAN peer",
+      "udp_port": 7891
+    }
+  ],
+  "sync": {
+    "mode": "auto",
+    "chunk_size": 65536,
+    "ignore": [
+      ".git",
+      ".luban",
+      "__pycache__",
+      ".pytest_cache",
+      ".ruff_cache",
+      ".mypy_cache",
+      ".venv",
+      "venv",
+      "node_modules",
+      "target",
+      "*.pyc",
+      "*.pyo",
+      ".DS_Store",
+      "*.log"
+    ],
+    "conflict_policy": "auto"
+  },
+  "projects": {
+    "myapp": "/path/to/myapp"
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "mcp": {
+    "token": "",
+    "workspace": ""
+  },
+  "max_workers": 2,
+  "max_steps": 120,
+  "permission": {
+    "mode": "edits"
+  }
+}
