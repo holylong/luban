@@ -97,7 +97,10 @@ export function jobBlocks(job: RemoteJobView, records: JobStreamRecord[], option
         break;
       case "status":
         flushAnswer();
-        blocks.push(note(`remote-${job.id}-status-${seq}`, event.text));
+        // A phase label is what the working line is derived from, not a row:
+        // one per step rendered the same "Reviewing tool results" line for
+        // every step of a remote job too.
+        if (!event.progress) blocks.push(note(`remote-${job.id}-status-${seq}`, event.text));
         break;
       case "error":
         flushAnswer();

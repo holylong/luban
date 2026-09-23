@@ -25,6 +25,18 @@ describe("deriveTimeline", () => {
     expect(assistants[1]).toMatchObject({ text: "Now fixing it." });
   });
 
+  it("keeps a re-announced phase label out of the transcript", () => {
+    // The server reports progress once per step; as a bubble the console showed
+    // one identical row per step of a long job.
+    const items = deriveTimeline(job, [
+      record(1, { kind: "delta", text: "Checking the tests." }),
+      record(2, { kind: "status", text: "Reviewing tool results", progress: true }),
+      record(3, { kind: "tool-start", callId: "c7", name: "bash", args: { command: "npm test" }, summary: "npm test" }),
+    ]);
+    expect(items.map(item => item.kind)).toEqual(["user", "assistant", "tool"]);
+    expect(items.some(item => item.kind === "status")).toBe(false);
+  });
+
   it("keeps a tool row in place and upgrades it when the matching tool-end arrives", () => {
     const started = deriveTimeline(job, [
       record(1, { kind: "tool-start", callId: "c9", name: "edit_file", args: { path: "x.ts" }, summary: "x.ts" }),

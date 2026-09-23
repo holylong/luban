@@ -1,7 +1,7 @@
 export type JobStatus = "queued" | "pending" | "working" | "paused" | "done" | "failed" | "cancelled";
 
 export type JobStreamEvent =
-  | { kind: "status"; text: string }
+  | { kind: "status"; text: string; progress?: boolean }
   /** A model round trip started; lets the console show which one is in flight. */
   | { kind: "model-call"; index: number }
   | { kind: "delta"; text: string }

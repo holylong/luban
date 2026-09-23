@@ -8,7 +8,7 @@ import type { JobStreamEvent, MeshRuntime } from "./runtime.js";
 /** Translate a raw agent event into the transport shape used by every remote UI. */
 export function toJobStreamEvent(event: AgentEvent): JobStreamEvent | null {
   switch (event.type) {
-    case "status": return { kind: "status", text: event.text };
+    case "status": return { kind: "status", text: event.text, ...(event.progress ? { progress: true } : {}) };
     case "model-call": return { kind: "model-call", index: event.index };
     case "delta": return { kind: "delta", text: event.text };
     case "thinking-delta": return { kind: "thinking", text: event.text };
@@ -80,7 +80,10 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
     try {
       await store.save(session);
       const result = await runner.run(session.messages, "agent", signal, event => {
-        if (event.type === "status") onLog("info", event.text);
+        // Progress labels belong to the live indicator, not the bounded job log
+        // or the event stream's history: once per step they displaced the
+        // tool/error lines the log exists to keep.
+        if (event.type === "status" && !event.progress) onLog("info", event.text);
         if (event.type === "tool-start") onLog("tool", `${event.name}: ${JSON.stringify(event.args).slice(0, 600)}`);
         if (event.type === "tool-end") onLog(event.ok ? "tool" : "error", `${event.name} ${event.ok ? "done" : "failed"}`);
         if (event.type === "error") onLog("error", event.text);

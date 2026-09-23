@@ -34,13 +34,25 @@ describe("remote job blocks", () => {
       { kind: "model-call", index: 1 },
       { kind: "delta", text: "I will " },
       { kind: "delta", text: "check the tests." },
-      { kind: "status", text: "Reviewing tool results" },
+      { kind: "status", text: "模型返回 HTTP 429，0.4s 后重试（第 2/3 次）" },
     ]), options);
     expect(blocks.map((block) => block.kind)).toEqual(["note", "assistant", "note"]);
     expect(blocks[0]!.text).toContain("📥 来自 beta");
     expect(blocks[0]!.text).toContain("run the checks");
     expect(blocks[1]!.text).toBe("I will check the tests.");
-    expect(blocks[2]!.text).toBe("Reviewing tool results");
+    expect(blocks[2]!.text).toBe("模型返回 HTTP 429，0.4s 后重试（第 2/3 次）");
+  });
+
+  it("keeps a re-announced phase label out of the transcript", () => {
+    // The runtime reports this once per step; as a row it stacked one identical
+    // line per step of a remote job, exactly as it did for a local run.
+    const blocks = jobBlocks(job(), records([
+      { kind: "delta", text: "Checking the tests." },
+      { kind: "status", text: "Reviewing tool results", progress: true },
+      { kind: "tool-start", callId: "c9", name: "bash", args: { command: "npm test" }, summary: "npm test" },
+    ]), options);
+    expect(blocks.map((block) => block.kind)).toEqual(["note", "assistant", "tool"]);
+    expect(blocks.some((block) => block.text === "Reviewing tool results")).toBe(false);
   });
 
   it("keeps a running tool row in place and upgrades it with its edit record", () => {

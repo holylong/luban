@@ -92,6 +92,45 @@ describe("AgentRunner", () => {
     runner.close();
   });
 
+  it("marks a step label that repeats as progress but leaves a real notice as record", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-status-progress-"));
+    let calls = 0;
+    const client = {
+      async complete(_messages: ChatMessage[], _tools: unknown[], _signal: AbortSignal, _onDelta?: unknown, onNotice?: (text: string) => void) {
+        calls += 1;
+        if (calls === 1) onNotice?.("模型返回 HTTP 429，0.4s 后重试（第 2/3 次）");
+        if (calls <= 2) {
+          return {
+            content: "",
+            toolCalls: [{ id: `c${calls}`, type: "function" as const, function: { name: "count", arguments: `{"n":${calls}}` } }],
+            usage: { input: 1, output: 1 },
+          };
+        }
+        return { content: "done", toolCalls: [], usage: { input: 1, output: 1 } };
+      },
+    };
+    const runner = new AgentRunner(config(workspace), client);
+    runner.tools.set("count", { name: "count", description: "count", risk: "read", parameters: {}, async execute() { return "ok"; } });
+    const statuses: Array<{ text: string; progress?: boolean }> = [];
+    await runner.run(
+      [...initialMessages(workspace), { role: "user", content: "work" }],
+      "agent", new AbortController().signal,
+      (event) => { if (event.type === "status") statuses.push({ text: event.text, ...(event.progress ? { progress: true } : {}) }); },
+      async () => "once",
+    );
+    runner.close();
+
+    // Announced once per step, which is exactly why it cannot be history: every
+    // transcript and log that recorded it showed one identical line per step.
+    const reviewing = statuses.filter((status) => status.text === "Reviewing tool results");
+    expect(reviewing).toHaveLength(2);
+    expect(reviewing.every((status) => status.progress === true)).toBe(true);
+    // A retry notice is an explanation of a wait, so it stays in the record.
+    const notice = statuses.find((status) => status.text.includes("HTTP 429"));
+    expect(notice).toBeDefined();
+    expect(notice?.progress).toBeUndefined();
+  });
+
   it("keeps a truncated answer, asks for the rest, and reports one whole answer", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-truncated-"));
     let calls = 0;
