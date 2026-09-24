@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+cert_dir=/var/lib/luban/acme/39.105.10.158_ecc
+target_dir=/home/skyer/apps/luban/tls
+cert="$cert_dir/fullchain.cer"
+
+# IP certificates last about six days. Renew when under three days remain.
+if openssl x509 -checkend 259200 -noout -in "$cert" >/dev/null 2>&1; then
+  exit 0
+fi
+
+systemctl stop luban-relay.service
+trap 'systemctl start luban-relay.service' EXIT
+/home/skyer/apps/acme/acme.sh/acme.sh --renew -d 39.105.10.158 --ecc --force --server letsencrypt --home /var/lib/luban/acme
+install -m 600 -o skyer -g skyer "$cert_dir/39.105.10.158.key" "$target_dir/key.pem"
+install -m 644 -o skyer -g skyer "$cert" "$target_dir/fullchain.pem"

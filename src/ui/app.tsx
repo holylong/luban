@@ -3,6 +3,7 @@ import { Box, Text, useApp, useInput, useStdout, measureElement, type DOMElement
 import fg from "fast-glob";
 import { VERSION } from "../version.js";
 import { basename, dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { AgentInbox } from "../core/inbox.js";
 import { planVerificationStatus, readPlan, readVerifications } from "../core/plan.js";
@@ -72,6 +73,7 @@ const COMMANDS = [
   ["/mode", "auto / agent / ask"],
   ["/clear", "clear conversation"],
   ["/settings", "current context"],
+  ["/token", "show phone login token and link"],
   ["/permissions", "ask / edits / allow"],
   ["/peers", "LAN collaborators"],
   ["/ping", "ping <peer>"],
@@ -103,6 +105,7 @@ const COMMANDS = [
 const RUN_IMMEDIATE_COMMANDS = new Set([
   "/status", "/ping", "/peers", "/jobs", "/inbox", "/cancel-job", "/add-contact",
   "/models", "/mode", "/settings", "/permissions",
+  "/token",
   "/plan", "/theme", "/details", "/mesh", "/help", "/diff", "/verify",
 ]);
 
@@ -1373,6 +1376,36 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
     }
     if (command === "/settings") {
       setNotice(`${mode.toUpperCase()} · ${config.model.id} · permissions ${config.permissionMode} · theme ${activeThemeId()}${themeHasOverrides() ? "(自定义色)" : ""} · ${config.workspace}${mesh ? ` · mesh ${config.mesh.nodeName}:${config.mesh.port}` : " · mesh off"}${config.backendUrl ? ` · backend ${config.backendUrl}` : ""}`);
+      return;
+    }
+    if (command === "/token") {
+      try {
+        const envPath = join(homedir(), ".config/luban/relay.env");
+        const envText = await readFile(envPath, "utf8");
+        const values = Object.fromEntries(envText.split(/\r?\n/u).flatMap((line) => {
+          const match = line.match(/^\s*(LUBAN_RELAY_ACCESS_TOKEN|LUBAN_RELAY_PUBLIC_URL)=(.*)\s*$/u);
+          return match ? [[match[1]!, match[2]!.replace(/^['"]|['"]$/gu, "")]] : [];
+        }));
+        const token = process.env.LUBAN_RELAY_ACCESS_TOKEN?.trim() || values.LUBAN_RELAY_ACCESS_TOKEN?.trim();
+        const relayUrl = process.env.LUBAN_RELAY_PUBLIC_URL?.trim() || values.LUBAN_RELAY_PUBLIC_URL?.trim();
+        if (!token || !relayUrl) {
+          setNotice("未找到公网令牌；请检查 ~/.config/luban/relay.env");
+          return;
+        }
+        const parsed = new URL(relayUrl);
+        if (parsed.protocol !== "https:") {
+          setNotice("手机令牌地址必须使用 HTTPS");
+          return;
+        }
+        setDialog({
+          type: "info",
+          index: 0,
+          title: "手机登录",
+          content: `令牌：${token}\n地址：${parsed.origin}/login?token=${encodeURIComponent(token)}`,
+        });
+      } catch (error) {
+        setNotice(`读取手机令牌失败：${error instanceof Error ? error.message : String(error)}`);
+      }
       return;
     }
     if (command === "/theme") {
