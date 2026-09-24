@@ -26,6 +26,7 @@ Anthropic Messages 与 Responses 三种 API；交互侧提供交互式 TUI、非
   - [远程任务和本地任务一样可见](#远程任务和本地任务一样可见)
   - [排障](#排障)
 - [原生 Web 后台](#原生-web-后台)
+- [手机远控：服务器、节点与 Android 客户端](#手机远控服务器节点与-android-客户端)
 - [脚本模式](#脚本模式)
 - [运行中补充指令](#运行中补充指令)
 - [代码导航与项目规则](#代码导航与项目规则)
@@ -90,6 +91,7 @@ Anthropic Messages 与 Responses 三种 API；交互侧提供交互式 TUI、非
 - React + Vite 浏览器工作台：事件流（SSE）实时转录、工具调用卡片、内联编辑记录（文件路径 / 增删计数 / 行号 / 修改前后行内容）、Markdown 与代码高亮、文件查看器、Git 变更视图、会话浏览、工作区文件树。
 - Web 端交互审批：写文件、shell、网络工具会在此页面等待允许/拒绝，审批内容含工具名、风险与参数；`--web-port` 同时把审批带到浏览器。
 - `web`/`serve` 守护模式，或让 TUI 通过 `--web-port` 同进程提供 Web 服务。
+- 手机远控：同一局域网可直连电脑，异地可通过公网中继与节点拨出隧道；Android APK 或浏览器 `/m/` 控制台都能下发指令、看实时状态、审批与取消。
 
 ### 集成（MCP / 编辑器 / 兼容）
 
@@ -491,6 +493,190 @@ luban ./demo --web-port 8642
 | GET/POST | `/api/approvals` | 查询/答复浏览器交互审批 |
 | GET | `/api/file`、`/api/file-versions` | 读取工作区文件与 Git HEAD 版本 |
 | GET | `/api/diff`、`/api/sessions`、`/api/sessions/:id` | Git 变更、会话列表与会话详情 |
+
+## 手机远控：服务器、节点与 Android 客户端
+
+手机端使用 `/m/` 控制台；Android APK 是这个控制台的安装版。**模型、任务、会话和工作区始终在运行 `luban web` 的电脑上**，APK 和公网中继都不执行任务。
+
+| 场景 | 连接路径 | 需要运行的进程 |
+|---|---|---|
+| 手机与电脑在同一局域网 | APK/浏览器 → 电脑 `luban web` | 电脑上的 Web 服务 |
+| 手机使用移动网络或异地 Wi-Fi | APK/浏览器 → HTTPS 中继 `luban relay` ← 电脑主动拨出隧道 | 公网服务器上的中继、电脑上的 Web 服务 |
+
+两种方式都先在运行 Node.js 的机器上准备 luban（Node.js ≥20）。公网方式需要在**服务器和电脑各安装一次**；[模型配置](#配置)只需放在电脑上。构建需要开发依赖，即使机器设置了 `NODE_ENV=production` 也要包含它们。
+
+```bash
+cd /path/to/luban
+npm ci --include=dev
+npm run build
+```
+
+### 方案 A：同一局域网，手机直连电脑
+
+电脑上创建一个重启后不变的访问令牌，并启动 Web 服务。示例端口 `18765` 可以换成未占用的端口；`--no-mesh` 适用于已有另一个 luban Mesh 节点占用端口的情况。
+
+```bash
+cd /path/to/luban
+mkdir -p ~/.config/luban
+umask 077
+printf 'LUBAN_WEB_TOKEN=%s\n' "$(openssl rand -hex 24)" > ~/.config/luban/remote.env
+chmod 600 ~/.config/luban/remote.env
+set -a; . ~/.config/luban/remote.env; set +a
+node dist/cli.js web /path/to/project --no-mesh --host 0.0.0.0 --port 18765
+```
+
+手机和电脑接入同一个局域网，在 APK 的“地址”页输入 `http://<电脑局域网IP>:18765/m/?token=<LUBAN_WEB_TOKEN>`。`0.0.0.0` 是监听地址，`127.0.0.1` 只指手机自身，都不能填进手机地址。令牌可从 `~/.config/luban/remote.env` 读取；把令牌链接只交给受信任的设备。令牌文件只需生成一次，普通服务重启不要重新生成。局域网 HTTP 会明文传输令牌和请求，离开受信任局域网应使用下面的 HTTPS 中继。
+
+要让服务在登录后自动启动，可创建 `~/.config/systemd/user/luban-web.service`，将下面的绝对路径替换为本机路径：
+
+```ini
+[Unit]
+Description=luban Web for phone
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=/absolute/path/to/luban
+EnvironmentFile=%h/.config/luban/remote.env
+ExecStart=/absolute/path/to/node /absolute/path/to/luban/dist/cli.js web /absolute/path/to/project --no-mesh --host 0.0.0.0 --port 18765
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now luban-web.service
+systemctl --user status luban-web.service
+```
+
+若需在用户尚未登录时也自动启动，管理员还需为该用户开启 systemd linger（`loginctl enable-linger <用户名>`）。
+
+### 方案 B：公网 HTTPS 中继，手机随处访问
+
+公网服务器需要域名、对该域名有效的 TLS 证书，以及允许手机访问中继端口的入站规则。下面直接让中继在 `8788` 端口提供 HTTPS；证书文件必须可由运行中继的用户读取，证书更新后需要重启中继以重新读取。电脑只需能主动连接该地址，不需要开放入站端口。
+
+**公网服务器：**固定两把不同的令牌，分别给手机和电脑使用；不要把令牌写进公开仓库或 systemd 单元文件。
+
+```bash
+cd /path/to/luban
+mkdir -p ~/.config/luban
+umask 077
+printf 'LUBAN_RELAY_ACCESS_TOKEN=%s\nLUBAN_RELAY_NODE_TOKEN=%s\n' \
+  "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > ~/.config/luban/relay.env
+chmod 600 ~/.config/luban/relay.env
+set -a; . ~/.config/luban/relay.env; set +a
+node dist/cli.js relay --host 0.0.0.0 --port 8788 \
+  --public-url https://relay.example.com:8788 \
+  --https --tls-key /path/to/key.pem --tls-cert /path/to/cert.pem
+```
+
+`LUBAN_RELAY_ACCESS_TOKEN` 是手机访问令牌；`LUBAN_RELAY_NODE_TOKEN` 是电脑接入令牌。启动输出会给出“手机访问”链接和“节点连接”命令。
+
+**运行模型和工作区的电脑：**从服务器安全地复制节点令牌到本机 `~/.config/luban/node.env`（文件权限 `600`），然后启动节点。下面的 `--port 0` 为本机 Web 后台选空闲端口；隧道会使用实际端口。TLS 证书由系统信任时无需 `--relay-ca`。
+
+```bash
+cd /path/to/luban
+mkdir -p ~/.config/luban
+umask 077
+printf 'LUBAN_RELAY_NODE_TOKEN=%s\n' '<从服务器复制的节点令牌>' > ~/.config/luban/node.env
+chmod 600 ~/.config/luban/node.env
+set -a; . ~/.config/luban/node.env; set +a
+node dist/cli.js web /path/to/project --no-mesh --host 127.0.0.1 --port 0 \
+  --relay https://relay.example.com:8788
+```
+
+要让两端长期运行，可分别在公网服务器和电脑上创建下面的 systemd 用户单元。替换示例中的 Node、luban、项目、证书路径及域名；令牌仍只放在权限为 `600` 的环境文件中。
+
+公网服务器的 `~/.config/systemd/user/luban-relay.service`：
+
+```ini
+[Unit]
+Description=luban HTTPS relay
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=/absolute/path/to/luban
+EnvironmentFile=%h/.config/luban/relay.env
+ExecStart=/absolute/path/to/node /absolute/path/to/luban/dist/cli.js relay --host 0.0.0.0 --port 8788 --public-url https://relay.example.com:8788 --https --tls-key /path/to/key.pem --tls-cert /path/to/cert.pem
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
+
+电脑的 `~/.config/systemd/user/luban-node.service`：
+
+```ini
+[Unit]
+Description=luban node connected to relay
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=/absolute/path/to/luban
+EnvironmentFile=%h/.config/luban/node.env
+ExecStart=/absolute/path/to/node /absolute/path/to/luban/dist/cli.js web /absolute/path/to/project --no-mesh --host 127.0.0.1 --port 0 --relay https://relay.example.com:8788
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
+
+在各自机器上执行 `systemctl --user daemon-reload` 和 `systemctl --user enable --now <对应服务名>`；用 `systemctl --user status <对应服务名>` 检查状态。如需无人登录时自动启动，开启该用户的 systemd linger。手机只访问中继，**不要**把电脑的 `127.0.0.1` 地址填进 APK。
+
+**手机：**在 APK 中输入中继打印的 `https://relay.example.com:8788/login?token=<手机访问令牌>`。首次访问会把令牌换成 HttpOnly Cookie 并进入 `/m/`；之后 App 保存不含令牌的地址，重启可以直接连接。若清除 App 数据、退出登录或更换服务器，需要重新输入完整令牌链接。
+
+#### 当前部署：relay.example.com
+
+本仓库的公网中继部署在 `https://relay.example.com`（443 端口）。服务器上运行 `luban-relay.service`，本机的 `luban-web-lan.service` 同时提供局域网访问并主动连接中继。手机在 App 的“地址”页粘贴登录链接即可切换到公网。**在本机 TUI 输入 `/token`**，或在终端运行 `node dist/cli.js token`（也可用 `luban token`），可显示手机令牌和完整登录链接；只显示手机访问令牌，不显示节点注册令牌。不要把输出贴到公开聊天或仓库。
+
+两端私密配置都在 `~/.config/luban/relay.env`（权限 `600`），包含 `LUBAN_RELAY_ACCESS_TOKEN`、`LUBAN_RELAY_NODE_TOKEN` 和 `LUBAN_RELAY_PUBLIC_URL`。服务器服务定义与续期脚本源文件位于本仓库 `.deploy/`；正式安装位置为 `/etc/systemd/system/luban-relay.service`、`/etc/systemd/system/luban-renew-cert.{service,timer}` 和 `/usr/local/sbin/luban-renew-cert`。公网 IP 的 Let’s Encrypt 证书有效期约六天，定时器每天检查并在剩余不足三天时自动续期。检查服务可执行 `systemctl status luban-relay.service luban-renew-cert.timer`，电脑端执行 `systemctl --user status luban-web-lan.service`。IP 或服务器变化时，需要重新申请证书并更新服务中的公网地址。
+
+### Android APK 的构建、安装与使用
+
+APK 源码位于 `android-app/`，通过 Android WebView 使用服务端的 `/m/` 控制台。Android SDK 与 JDK 17 用于构建；下面产出可直接安装的调试版 APK。多台设备连接 ADB 时，先运行 `adb devices` 找到目标序列号。
+
+```bash
+cd /path/to/luban/android-app
+ANDROID_HOME="$HOME/Android/Sdk" ./gradlew assembleDebug
+adb devices
+adb -s <设备序列号> install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+首次打开 App，在“地址”中输入方案 A 的电脑链接或方案 B 的中继“手机访问”链接，点“连接”。页面上的项目选择器决定任务的工作区；输入指令后可看实时输出、工具调用、任务列表和审批，也可取消或继续任务。点 App 顶部“地址”可更换服务器；再次需要登录时，重新输入带 `?token=` 的完整链接。Android WebView 只信任系统证书和用户明确安装的 CA，证书错误不会被忽略。
+
+调试 APK 适合自用和测试；正式分发需自行配置 Android release 签名。任务和界面由 luban 服务提供，APK 不包含模型；只更新 Web 界面时重新构建并重启服务即可，APK 无需重装。
+
+### 浏览器安装 PWA 与自签证书
+
+不用 APK 时，手机浏览器也能打开同一链接。浏览器要把 `/m/` 作为 PWA 安装到主屏幕，需要受信任的 HTTPS 安全上下文；局域网 HTTP 可在 APK 中使用，但不能作为可靠的 PWA 安装方式。推荐使用对访问域名有效、手机系统已信任的证书。
+
+局域网测试可运行 `luban relay --host 0.0.0.0 --port 5399 --https --tls-dir /path/to/tls-dir` 生成覆盖本机局域网 IP 的证书。把其中的 `ca.pem` 安装为手机受信 CA 后，浏览器和 APK 才能验证它；电脑节点连接该中继时再加 `--relay-ca /path/to/tls-dir/ca.pem`。`--tls-dir` 保留证书供重启复用。仅在浏览器里点“继续访问”不会使证书变成受信任证书。
+
+鉴权细节：
+
+- 令牌可从 `Authorization: Bearer`、`x-luban-token` 头、`?token=` 查询参数或 Cookie 任一入口提供；带令牌的链接访问一次后即换成 HttpOnly Cookie 并重定向，之后地址栏不再暴露令牌。
+- 令牌比较使用常量时间算法；同一来源地址连续失败会触发限流（429），成功后计数清零。
+- 中继到节点的本机请求会剥掉手机侧 Cookie/Authorization 与中继凭据头，节点的本机令牌不会出现在手机可见的任何响应里。
+- 本机 `luban web` 绑定非 loopback 时若未显式给 `--token` 会自动生成并打印；纯本机使用（127.0.0.1）默认不设令牌。
+- 重启后保持登录应固定令牌：本机 Web 用 `LUBAN_WEB_TOKEN`，中继用 `LUBAN_RELAY_ACCESS_TOKEN` 和 `LUBAN_RELAY_NODE_TOKEN`，电脑连接中继也可用 `LUBAN_RELAY_NODE_TOKEN`。显式 `--token`、`--node-token`、`--relay-token` 参数优先于对应环境变量。令牌文件权限设为 `600`。
+
+排障：
+
+| 现象 | 检查 |
+|---|---|
+| APK 打不开/连接失败 | 确认 `luban web` 或中继仍在运行；手机可访问其 IP/域名和端口；局域网电脑 IP 改变时更新 App 地址；手机链接不要使用 `127.0.0.1` 或 `0.0.0.0`。systemd 部署时查看 `systemctl --user status <服务名>` 和 `journalctl --user -u <服务名> -n 50` |
+| 手机显示 401 | 重新输入带手机访问令牌的完整链接；本机直连用 `LUBAN_WEB_TOKEN`，公网中继用 `LUBAN_RELAY_ACCESS_TOKEN`，不要使用节点令牌 |
+| 公网中继显示节点离线 | 检查电脑到中继的出站连接、`--relay` URL 和节点令牌；中继重启后节点会自动重连 |
+| 指令提交后无响应 | 查看电脑端 `luban web` 日志中的任务状态和 `relay:` 错误；确认模型服务在电脑上可用 |
+| HTTPS 证书不受信任 | 使用有效的域名证书；自签场景需在手机安装 `ca.pem`，电脑节点加 `--relay-ca <ca.pem>` |
+| 浏览器没有 PWA 安装入口 | 确认通过受信任的 HTTPS 打开；如果只需 Android 安装版，直接安装 APK |
 
 ## 脚本模式
 

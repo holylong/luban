@@ -19,6 +19,7 @@ export function deriveTimeline(job: Pick<MeshJob, "id" | "instruction" | "create
   }];
   const tools = new Map<string, ToolRun>();
   let assistant: { id: string; text: string; at: number } | undefined;
+  let thinking: Extract<TimelineItem, { kind: "thinking" }> | undefined;
 
   const flushAssistant = (): void => {
     if (!assistant || !assistant.text) { assistant = undefined; return; }
@@ -28,10 +29,15 @@ export function deriveTimeline(job: Pick<MeshJob, "id" | "instruction" | "create
 
   for (const record of events) {
     const event = record.event;
+    if (event.kind !== "thinking") thinking = undefined;
     switch (event.kind) {
       case "thinking":
         flushAssistant();
-        items.push({ kind: "thinking", id: `think-${record.seq}`, text: event.text, at: record.at });
+        if (!thinking) {
+          thinking = { kind: "thinking", id: `think-${record.seq}`, text: "", at: record.at };
+          items.push(thinking);
+        }
+        thinking.text += event.text;
         break;
       case "status":
         flushAssistant();
@@ -137,13 +143,13 @@ export function liveProgress(events: JobStreamRecord[], now = Date.now() / 1000)
       if (record.event.kind === "tool-start") toolDetail = record.event.summary;
       break;
     }
-    if ((kind === "thinking" || kind === "delta") && fragments.length < 200) fragments.push(record.event.text);
+    if (kind === "delta" && fragments.length < 200) fragments.push(record.event.text);
   }
   const seconds = Math.max(0, Math.round(now - phaseAt));
   const silentSeconds = Math.max(0, Math.round(now - last.at));
-  const detail = toolDetail
+  const detail = newest === "thinking" ? "正在推理…" : toolDetail
     || tailLine([...fragments].reverse().join(""))
-    || (newest === "thinking" ? "正在推理…" : newest === "delta" ? "正在生成回复…" : "");
+    || (newest === "delta" ? "正在生成回复…" : "等待下一步…");
   return {
     label, detail, seconds, silentSeconds,
     stalled: newest !== "tool-start" && silentSeconds >= STALL_SECONDS,
@@ -163,7 +169,16 @@ export function withOutcome(items: TimelineItem[], job: MeshJob): TimelineItem[]
   // A paused job keeps its partial summary: it is what the user resumes from.
   const text = job.result || (job.status === "paused" ? "已达到步数上限，可继续执行。" : "");
   if (!text) return items;
-  return [...items, { kind: "result", id: `${job.id}-result`, text, at: job.done_at ?? job.updated_at, status: job.status }];
+  const result: TimelineItem = { kind: "result", id: `${job.id}-result`, text, at: job.done_at ?? job.updated_at, status: job.status };
+  // The stream has already shown the answer as assistant deltas. Once the
+  // durable job result arrives, replace that identical bubble with the final
+  // result card instead of rendering the same answer twice.
+  const lastAssistant = items.findLastIndex(item => item.kind === "assistant");
+  if (lastAssistant >= 0 && items[lastAssistant]!.kind === "assistant"
+    && items[lastAssistant]!.text.trim() === text.trim()) {
+    return [...items.slice(0, lastAssistant), ...items.slice(lastAssistant + 1), result];
+  }
+  return [...items, result];
 }
 
 const EDIT_TOOLS = /^(edit_file|write_file|apply_patch)$/u;

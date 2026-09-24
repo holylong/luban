@@ -10,6 +10,7 @@ import type { LubanConfig, SyncMode } from "../core/types.js";
 import { VERSION } from "../version.js";
 import { DASHBOARD_HTML, DOCS_HTML, webAssetPath, WEB_CONTENT_TYPES } from "./assets.js";
 import { ApprovalBroker, type ApprovalDecision } from "./approval.js";
+import { AuthGate, clearCookie, rejectAuth, tokenCookie } from "./auth.js";
 
 const MAX_BODY = 1024 * 1024;
 const MAX_JOBS = 100;
@@ -150,6 +151,12 @@ export interface LubanWebServerOptions {
   port?: number;
   /** Installed by the CLI so browser clients can answer tool approval prompts. */
   approvals?: ApprovalBroker;
+  /**
+   * Access token for browser clients. Required as soon as the server listens
+   * beyond loopback, because every route can start an agent that runs shell
+   * commands in the workspace.
+   */
+  token?: string;
 }
 
 export class LubanWebServer {
@@ -162,11 +169,18 @@ export class LubanWebServer {
   host: string;
   port: number;
   readonly approvals?: ApprovalBroker;
+  readonly auth?: AuthGate;
 
   constructor(readonly config: LubanConfig, readonly mesh: MeshRuntime, options: LubanWebServerOptions = {}) {
     this.host = options.host || "127.0.0.1";
     this.port = options.port ?? 0;
     if (options.approvals) this.approvals = options.approvals;
+    if (options.token) this.auth = new AuthGate(options.token);
+  }
+
+  /** True when a token was configured, i.e. requests must carry one. */
+  get requiresToken(): boolean {
+    return Boolean(this.auth?.enabled);
   }
 
   /** True when the client asked for interactive approval on this job. */
@@ -240,6 +254,21 @@ export class LubanWebServer {
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url || "/", "http://luban.local");
+      const decision = this.auth ? this.auth.check(req, url) : { ok: true as const };
+      if (!decision.ok) return rejectAuth(res, decision, url.pathname.startsWith("/api/"));
+      // One link carrying ?token= is exchanged for a cookie, so the SSE stream
+      // (EventSource cannot send headers) authenticates on every reconnect.
+      if (decision.source === "query" && decision.token) res.setHeader("set-cookie", tokenCookie(decision.token));
+      if (url.pathname === "/login" || url.pathname === "/login/") {
+        res.writeHead(302, { location: "/m/" });
+        res.end();
+        return;
+      }
+      if (url.pathname === "/logout") {
+        res.writeHead(302, { location: "/m/", "set-cookie": clearCookie("luban_token") });
+        res.end();
+        return;
+      }
       if (req.method === "GET") return await this.get(url, res);
       if (req.method === "POST") return await this.post(url, req, res);
       if (req.method === "OPTIONS") {
@@ -267,6 +296,19 @@ export class LubanWebServer {
       return send(res, 200, "text/html; charset=utf-8", dashboard);
     }
     if (url.pathname.startsWith("/assets/")) return this.webAsset(url.pathname, res);
+    // Phone console. Served under /m/ so its relative asset URLs resolve, and so
+    // the desktop page and the mobile page can be bookmarked independently.
+    if (url.pathname === "/m") {
+      res.writeHead(302, { location: "/m/" });
+      res.end();
+      return;
+    }
+    if (url.pathname === "/m/" || url.pathname === "/m/index.html") {
+      const mobile = await readFile(webAssetPath("mobile.html"), "utf8").catch(() => undefined);
+      if (!mobile) throw new HttpError(404, "mobile console bundle missing; run npm run build:web");
+      return send(res, 200, "text/html; charset=utf-8", mobile);
+    }
+    if (url.pathname.startsWith("/m/")) return this.webAsset(url.pathname.slice(2), res);
     if (url.pathname === "/diff") {
       const project = url.searchParams.get("project") || this.config.project;
       return send(res, 200, "text/html; charset=utf-8", diffPage({ project, ...(await workspaceDiff(await this.mesh.workspaceFor(project))) }));
@@ -278,6 +320,8 @@ export class LubanWebServer {
     if (url.pathname === "/api/node") {
       return json(res, {
         name: this.config.mesh.nodeName,
+        workspace: this.config.workspace,
+        project: this.config.project,
         host: this.config.mesh.host,
         port: this.config.mesh.port,
         udp_port: this.config.mesh.udpPort,
@@ -290,6 +334,7 @@ export class LubanWebServer {
         version: VERSION,
         runtime: "nodejs",
         interactive: Boolean(this.approvals),
+        auth_required: this.requiresToken,
         web: { host: this.host, port: this.port },
       });
     }

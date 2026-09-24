@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import React from "react";
 import { access } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 import { Command } from "commander";
 import { render } from "ink";
@@ -15,6 +16,12 @@ import { applyTheme, resolveThemeId, themeIds } from "./ui/theme.js";
 import { LubanWebServer } from "./web/server.js";
 import { ApprovalBroker } from "./web/approval.js";
 import { AcpServer } from "./core/acp.js";
+import { LubanRelayServer } from "./web/relay.js";
+import { TunnelClient, normalizeRelayUrl } from "./web/tunnel.js";
+import { generateToken } from "./web/auth.js";
+import { generateTlsMaterial, readTlsMaterial } from "./web/tls.js";
+import { homedir, networkInterfaces, tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { VERSION } from "./version.js";
 
@@ -31,6 +38,7 @@ interface CliOptions {
   webPort?: number;
   planning?: string;
   theme?: string;
+  token?: string;
 }
 
 interface DaemonOptions {
@@ -41,6 +49,28 @@ interface DaemonOptions {
   mesh?: boolean;
   meshName?: string;
   meshPort?: number;
+  token?: string;
+  relay?: string;
+  relayToken?: string;
+  relayCa?: string;
+}
+
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * Addresses a phone on the same network will dial, for the LAN certificate's
+ * SANs: the loopback plus every non-internal IPv4 the machine advertises. When
+ * the relay binds a specific host, that host is included too.
+ */
+function lanAddresses(bindHost: string): string[] {
+  const hosts = new Set<string>(["127.0.0.1", "localhost"]);
+  if (!LOOPBACK.has(bindHost) && !["0.0.0.0", "::"].includes(bindHost)) hosts.add(bindHost);
+  for (const info of Object.values(networkInterfaces())) {
+    for (const entry of info || []) {
+      if (entry.family === "IPv4" && !entry.internal) hosts.add(entry.address);
+    }
+  }
+  return [...hosts];
 }
 
 async function readStdin(): Promise<string> {
@@ -134,6 +164,10 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     .option("--mesh-name <name>", "override this mesh node name")
     .option("--mesh-port <port>", "override the mesh TCP port", (value) => Number(value))
     .option("-y, --yes", "accepted for parity; daemon jobs are explicitly trusted")
+    .option("--token <token>", "browser access token (or LUBAN_WEB_TOKEN; generated for non-loopback binds)")
+    .option("--relay <url>", "dial out to a luban relay so a phone on the internet can reach this workspace")
+    .option("--relay-token <token>", "relay node token (or LUBAN_RELAY_NODE_TOKEN)")
+    .option("--relay-ca <path>", "PEM CA to trust when the relay URL is https with a self-signed certificate")
     .showHelpAfterError();
   program.parse(argv, { from: "user" });
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -154,6 +188,7 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     modeFor: jobId => web?.jobMode(jobId) ?? "edits",
   });
   let web: LubanWebServer | undefined;
+  let tunnel: TunnelClient | undefined;
   try {
     await mesh.start();
     const announcedJobs = new Set<string>();
@@ -214,12 +249,56 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
       }
     });
     if (webMode) {
-      web = new LubanWebServer(config, mesh, { host: options.host, port: options.port, approvals });
+      // Reaching the Web API from another machine means reaching an agent that
+      // runs shell commands, so a non-loopback bind without a token would make
+      // the workspace world-writable. One is generated instead of refused, and
+      // printed with the link that carries it.
+      const exposed = !LOOPBACK.has(options.host);
+      const token = options.token?.trim() || process.env.LUBAN_WEB_TOKEN?.trim() || (exposed ? generateToken() : undefined);
+      web = new LubanWebServer(config, mesh, { host: options.host, port: options.port, approvals, token });
       const url = await web.start();
       process.stdout.write(`luban web ${url}\n`);
       process.stdout.write(`workspace ${config.workspace}\nmesh ${config.mesh.enabled ? `${config.mesh.nodeName}:${config.mesh.port}` : "disabled"}\n`);
-      if (!["127.0.0.1", "localhost", "::1"].includes(options.host)) {
-        process.stderr.write("warning: Web API is exposed beyond localhost and can execute agent tools\n");
+      if (web.requiresToken) {
+        process.stdout.write(`手机/浏览器控制台 ${url}m/?token=${encodeURIComponent(token!)}\n`);
+      }
+      if (options.relay) {
+        const relayUrl = normalizeRelayUrl(options.relay);
+        const relayToken = options.relayToken?.trim() || process.env.LUBAN_RELAY_NODE_TOKEN?.trim();
+        if (!relayToken) {
+          process.stderr.write("--relay requires --relay-token or LUBAN_RELAY_NODE_TOKEN: the relay prints its node token when it starts\n");
+          return 2;
+        }
+        // Node's TLS `ca` option wants the PEM body, not a path: read the file
+        // the operator pointed at, and fail loudly if it is not there rather
+        // than fall back to the system store and reject the self-signed relay.
+        let relayCa: string | undefined;
+        if (options.relayCa) {
+          if (!existsSync(options.relayCa)) {
+            process.stderr.write(`--relay-ca file does not exist: ${options.relayCa}\n`);
+            return 2;
+          }
+          relayCa = readFileSync(options.relayCa, "utf8");
+        }
+        // The tunnel proxies to the loopback port the server actually bound,
+        // which may differ from --port when 0 was requested.
+        tunnel = new TunnelClient({
+          relayUrl,
+          nodeToken: relayToken,
+          localPort: web.port,
+          localHost: "127.0.0.1",
+          localToken: token,
+          name: config.mesh.nodeName,
+          version: VERSION,
+          workspace: config.workspace,
+          projects: mesh.projectMap(),
+          relayCa,
+          log: (message) => process.stderr.write(`relay: ${message}\n`),
+        });
+        await tunnel.start();
+      }
+      if (exposed) {
+        process.stderr.write("warning: Web API is exposed beyond localhost; every request needs the access token\n");
       }
     } else {
       process.stdout.write(`luban ${config.mesh.nodeName} serving mesh TCP ${config.mesh.host}:${config.mesh.port} UDP ${config.mesh.udpPort}\n`);
@@ -230,9 +309,120 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     process.stderr.write(`${webMode ? "web" : "serve"} startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
     return 2;
   } finally {
+    tunnel?.stop();
     await web?.stop();
     await mesh.stop();
   }
+}
+
+/**
+ * `luban relay` — the public half of the phone link.
+ *
+ * Runs on a host with a public address. Nodes dial out to it, so the laptop
+ * behind NAT needs no inbound port and no firewall change; the phone talks to
+ * the relay, which forwards into the tunnel. The relay holds no job state: if it
+ * is restarted the laptops keep working and reconnect.
+ */
+async function runRelay(argv: string[]): Promise<number> {
+  const program = new Command();
+  program
+    .name("luban relay")
+    .description("Run the public relay that lets phones drive luban nodes over a dial-out tunnel")
+    .version(VERSION)
+    .option("--host <host>", "bind address", "0.0.0.0")
+    .option("--port <port>", "bind port", (value) => Number(value), 8788)
+    .option("--token <token>", "phone access token (or LUBAN_RELAY_ACCESS_TOKEN; generated when omitted)")
+    .option("--node-token <token>", "node registration token (or LUBAN_RELAY_NODE_TOKEN; generated when omitted)")
+    .option("--public-url <url>", "public base URL, when it differs from host:port")
+    .option("--https", "serve HTTPS for secure phone access and browser PWA installation")
+    .option("--tls-key <path>", "PEM private key for --https (a LAN certificate is generated when omitted)")
+    .option("--tls-cert <path>", "PEM certificate for --https, paired with --tls-key")
+    .option("--tls-dir <path>", "directory to persist a generated LAN certificate so the phone trusts it once")
+    .showHelpAfterError();
+  program.parse(argv, { from: "user" });
+  const options = program.opts<{ host: string; port: number; token?: string; nodeToken?: string; publicUrl?: string; https?: boolean; tlsKey?: string; tlsCert?: string; tlsDir?: string }>();
+  process.stderr.write(`luban v${VERSION}\n`);
+  let tls: { key: string; cert: string; ca: string } | undefined;
+  let caPath: string | undefined;
+  if (options.https || options.tlsKey || options.tlsCert) {
+    if (options.tlsKey && options.tlsCert) {
+      tls = readTlsMaterial(options.tlsKey, options.tlsCert);
+      caPath = options.tlsCert;
+    } else {
+      const material = generateTlsMaterial({ hosts: lanAddresses(options.host), dir: options.tlsDir });
+      tls = material;
+      caPath = `${options.tlsDir || join(tmpdir(), "luban-relay-tls")}/ca.pem`;
+    }
+  }
+  const relay = new LubanRelayServer({
+    host: options.host,
+    port: options.port,
+    token: options.token?.trim() || process.env.LUBAN_RELAY_ACCESS_TOKEN?.trim(),
+    nodeToken: options.nodeToken?.trim() || process.env.LUBAN_RELAY_NODE_TOKEN?.trim(),
+    publicUrl: options.publicUrl,
+    tls,
+    log: (message) => process.stderr.write(`relay: ${message}\n`),
+  });
+  try {
+    const url = await relay.start();
+    if (LOOPBACK.has(options.host)) {
+      process.stderr.write("warning: the relay is bound to loopback; a phone on another network cannot reach it\n");
+    }
+    process.stdout.write(`luban relay ${url}\n`);
+    process.stdout.write(`手机访问 ${relay.mobileLink()}\n`);
+    if (tls && caPath) {
+      process.stdout.write(options.tlsKey && options.tlsCert
+        ? "HTTPS：确保证书对手机访问的域名有效且受设备信任。\n"
+        : `HTTPS：自签证书需受手机信任。把 ${caPath} 安装为手机 CA；电脑节点连接时使用 --relay-ca ${caPath}。\n`);
+    }
+    process.stdout.write(`节点连接 luban web <项目路径> --relay ${relay.publicBaseUrl()} --relay-token ${relay.nodeToken}${tls ? " --relay-ca " + caPath : ""}\n`);
+    await waitForShutdown();
+    return 0;
+  } catch (error) {
+    process.stderr.write(`relay startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
+  } finally {
+    await relay.stop();
+  }
+}
+
+/** Print the saved phone credential without exposing the separate node secret. */
+async function runToken(argv: string[]): Promise<number> {
+  const program = new Command();
+  program.name("luban token")
+    .description("Show the phone access token and one-tap login link")
+    .version(VERSION)
+    .option("--env-file <path>", "relay environment file", join(homedir(), ".config/luban/relay.env"))
+    .option("--url <url>", "public relay URL (overrides LUBAN_RELAY_PUBLIC_URL)")
+    .showHelpAfterError();
+  program.parse(argv, { from: "user" });
+  const options = program.opts<{ envFile: string; url?: string }>();
+  let saved: Record<string, string> = {};
+  try {
+    for (const line of readFileSync(options.envFile, "utf8").split(/\r?\n/u)) {
+      const match = line.match(/^\s*(LUBAN_RELAY_ACCESS_TOKEN|LUBAN_RELAY_PUBLIC_URL)=(.*)\s*$/u);
+      if (match) saved[match[1]] = match[2].replace(/^['"]|['"]$/gu, "");
+    }
+  } catch (error) {
+    if (!process.env.LUBAN_RELAY_ACCESS_TOKEN) {
+      process.stderr.write(`cannot read ${options.envFile}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 2;
+    }
+  }
+  const token = process.env.LUBAN_RELAY_ACCESS_TOKEN?.trim() || saved.LUBAN_RELAY_ACCESS_TOKEN?.trim();
+  const url = options.url?.trim() || process.env.LUBAN_RELAY_PUBLIC_URL?.trim() || saved.LUBAN_RELAY_PUBLIC_URL?.trim();
+  if (!token || !url) {
+    process.stderr.write("relay access token or public URL is missing; set LUBAN_RELAY_ACCESS_TOKEN and LUBAN_RELAY_PUBLIC_URL in the relay env file\n");
+    return 2;
+  }
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { process.stderr.write("invalid relay URL\n"); return 2; }
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && LOOPBACK.has(parsed.hostname))) {
+    process.stderr.write("phone login URL must use HTTPS (HTTP is allowed only on loopback)\n");
+    return 2;
+  }
+  process.stdout.write(`手机令牌 ${token}\n手机登录 ${parsed.origin}/login?token=${encodeURIComponent(token)}\n`);
+  return 0;
 }
 
 
@@ -312,10 +502,11 @@ async function main(): Promise<number> {
     .option("--mesh-port <port>", "override the mesh TCP port (0 chooses a free port)", (value) => Number(value))
     .option("--web-host <host>", "also run the native Web backend on this host", "127.0.0.1")
     .option("--web-port <port>", "also run the native Web backend (0 chooses a free port)", (value) => Number(value))
+    .option("--token <token>", "access token required by the Web backend when it is exposed beyond localhost")
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
     .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
     .option("-p, --prompt <text>", "run once without the TUI")
-    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace\n  luban serve [path]  native mesh/worker daemon\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
+    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban serve [path]  native mesh/worker daemon\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
   program.parse();
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -460,7 +651,11 @@ const entry = command === "web"
       ? runAcp(process.argv.slice(3))
       : command === "mesh"
         ? runMeshCheck(process.argv.slice(3))
-        : main();
+        : command === "relay"
+          ? runRelay(process.argv.slice(3))
+          : command === "token"
+            ? runToken(process.argv.slice(3))
+          : main();
 
 entry.then((code) => { process.exitCode = code; }).catch((error) => {
   process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`);

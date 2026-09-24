@@ -21,6 +21,9 @@ export const WEB_CONTENT_TYPES: Record<string, string> = {
   ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  // Chrome only treats a manifest as installable when it is served as JSON;
+  // the octet-stream fallback would silently disable "Add to Home screen".
+  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".jpg": "image/jpeg",

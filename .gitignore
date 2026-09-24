@@ -13,6 +13,7 @@ coverage/
 # local agent runtime state (sessions, job store, sync state, logs)
 .luban/
 .smoke/
+.run/
 
 # python bytecode
 __pycache__/
