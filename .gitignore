@@ -14,6 +14,8 @@ coverage/
 .luban/
 .smoke/
 .run/
+.deploy/askpass.sh
+.deploy/ssh.sh
 
 # python bytecode
 __pycache__/
