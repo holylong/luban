@@ -127,11 +127,23 @@ export interface LubanConfig {
   planning?: "off" | "auto" | "always";
   permissions: PermissionSettings;
   mesh: MeshSettings;
+  /** Optional per-TUI phone bridge, configured in config.json. */
+  remote: RemoteControlSettings;
   sandbox: SandboxSettings;
   toolOutputRetentionDays: number;
   toolOutputMaxBytes: number;
   mcpMaxTools: number;
   mcpLazy: boolean;
+}
+
+export interface RemoteControlSettings {
+  enabled: boolean;
+  host: string;
+  port: number;
+  relayUrl: string;
+  nodeTokenEnv: string;
+  nodeTokenFile: string;
+  relayCa: string;
 }
 
 export interface PermissionSettings {

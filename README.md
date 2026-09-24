@@ -634,9 +634,24 @@ WantedBy=default.target
 
 #### 当前部署：39.105.10.158
 
-本仓库的公网中继部署在 `https://39.105.10.158`（443 端口）。服务器上运行 `luban-relay.service`，本机的 `luban-web-lan.service` 同时提供局域网访问并主动连接中继。手机在 App 的“地址”页粘贴登录链接即可切换到公网。**在本机 TUI 输入 `/token`**，或在终端运行 `node dist/cli.js token`（也可用 `luban token`），可显示手机令牌和完整登录链接；只显示手机访问令牌，不显示节点注册令牌。不要把输出贴到公开聊天或仓库。
+本仓库的公网中继部署在 `https://39.105.10.158`（443 端口）。服务器运行中继；每个电脑端 TUI 自己开启一个 loopback Web 服务并主动连接中继，退出该 TUI 时它的服务和隧道一起结束。把设置写入 `~/.luban/config.json`，凭据单独放在权限为 `600` 的 `~/.config/luban/relay.env`：
 
-两端私密配置都在 `~/.config/luban/relay.env`（权限 `600`），包含 `LUBAN_RELAY_ACCESS_TOKEN`、`LUBAN_RELAY_NODE_TOKEN` 和 `LUBAN_RELAY_PUBLIC_URL`。服务器服务定义与续期脚本源文件位于本仓库 `.deploy/`；正式安装位置为 `/etc/systemd/system/luban-relay.service`、`/etc/systemd/system/luban-renew-cert.{service,timer}` 和 `/usr/local/sbin/luban-renew-cert`。公网 IP 的 Let’s Encrypt 证书有效期约六天，定时器每天检查并在剩余不足三天时自动续期。检查服务可执行 `systemctl status luban-relay.service luban-renew-cert.timer`，电脑端执行 `systemctl --user status luban-web-lan.service`。IP 或服务器变化时，需要重新申请证书并更新服务中的公网地址。
+```json
+{
+  "remote": {
+    "enabled": true,
+    "relay_url": "https://39.105.10.158",
+    "node_token_env": "LUBAN_RELAY_NODE_TOKEN",
+    "node_token_file": "/home/skyer/.config/luban/relay.env",
+    "host": "127.0.0.1",
+    "port": 0
+  }
+}
+```
+
+配置好后直接运行 `luban /path/to/project`。TUI 中输入 `/token` 显示**当前实例**的登录链接；在两个目录或两个终端分别运行时会注册成两个独立节点，令牌和远程任务各自固定到对应实例。手机端可以使用这一个实例的工作目录、项目、模型和任务存储。无需单独运行 `luban web` 或安装电脑端 systemd 常驻单元。
+
+节点令牌由中继部署时写入 `~/.config/luban/relay.env`；公网中继 IP 证书由服务器上的 `luban-renew-cert.timer` 自动续期。检查中继可运行 `systemctl status luban-relay.service luban-renew-cert.timer`。IP 或服务器变化时，需要更新这里的 `remote.relay_url` 并重新申请证书。
 
 ### Android APK 的构建、安装与使用
 
