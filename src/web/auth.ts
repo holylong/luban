@@ -134,7 +134,6 @@ export class AuthGate {
    */
   check(req: IncomingMessage, url: URL, additionalTokens: readonly string[] = []): AuthDecision {
     if (!this.enabled) return { ok: true };
-    if (this.isLockedOut(req)) return { ok: false, status: 429, reason: "too many failed attempts; try again later" };
     const header = req.headers[TOKEN_HEADER];
     const bearer = /^Bearer\s+(.+)$/iu.exec(String(req.headers.authorization || ""));
     const candidates: Array<[AuthDecision["source"], string | undefined]> = [
@@ -149,6 +148,7 @@ export class AuthGate {
         return { ok: true, source, token: candidate };
       }
     }
+    if (this.isLockedOut(req)) return { ok: false, status: 429, reason: "too many failed attempts; try again later" };
     this.recordFailure(req);
     return { ok: false, status: 401, reason: "missing or invalid access token" };
   }

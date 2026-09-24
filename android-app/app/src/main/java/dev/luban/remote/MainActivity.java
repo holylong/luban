@@ -34,6 +34,7 @@ public final class MainActivity extends Activity {
     private WebView web;
     private TextView status;
     private Uri origin;
+    private String mainFrameHttpError;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -133,6 +134,13 @@ public final class MainActivity extends Activity {
     private void open(String address) {
         Uri requested = Uri.parse(address);
         origin = requested;
+        mainFrameHttpError = null;
+        boolean freshLogin = "/login".equals(requested.getPath()) && requested.getQueryParameter("token") != null;
+        if (freshLogin) {
+            // A prior same-origin cookie can make a failed token link look like
+            // a successful connection to the old node. Start a new login cleanly.
+            getPreferences(MODE_PRIVATE).edit().remove(PREF_URL).apply();
+        }
         root.removeAllViews();
         root.setPadding(0, 0, 0, 0);
         LinearLayout header = new LinearLayout(this);
@@ -174,7 +182,13 @@ public final class MainActivity extends Activity {
                     CookieManager.getInstance().flush();
                     view.clearHistory();
                 }
-                if (status != null) status.setText(loggedIn ? "已连接 · " + origin.getHost() : "未登录 · 点击地址输入令牌");
+                if (status != null && mainFrameHttpError == null) status.setText(loggedIn ? "已连接 · " + origin.getHost() : "未登录 · 点击地址输入令牌");
+            }
+            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse response) {
+                if (request.isForMainFrame()) {
+                    mainFrameHttpError = "HTTP " + response.getStatusCode();
+                    if (status != null) status.setText("连接失败 · " + mainFrameHttpError + " · 检查令牌或稍后重试");
+                }
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame() && status != null) status.setText("连接失败 · 点击刷新重试");
@@ -186,8 +200,17 @@ public final class MainActivity extends Activity {
         });
         root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         String path = requested.getPath();
-        web.loadUrl(path == null || path.isEmpty() || "/".equals(path)
-                ? requested.buildUpon().path("/m/").build().toString() : address);
+        String destination = path == null || path.isEmpty() || "/".equals(path)
+                ? requested.buildUpon().path("/m/").build().toString() : address;
+        if (freshLogin) {
+            WebView target = web;
+            CookieManager.getInstance().removeAllCookies(removed -> {
+                CookieManager.getInstance().flush();
+                target.post(() -> { if (web == target) target.loadUrl(destination); });
+            });
+        } else {
+            web.loadUrl(destination);
+        }
     }
 
     @Override public void onBackPressed() {
