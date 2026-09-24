@@ -26,6 +26,8 @@ export interface TunnelClientOptions {
   relayUrl: string;
   /** Shared secret the relay requires from nodes. */
   nodeToken: string;
+  /** Per-process phone credential; when supplied the relay pins its link to this node. */
+  accessToken?: string;
   /** Address of the local web server this connector proxies to. */
   localHost?: string;
   localPort: number;
@@ -159,6 +161,7 @@ export class TunnelClient {
       version: this.options.version,
       workspace: this.options.workspace,
       projects: this.options.projects ?? {},
+      access_token: this.options.accessToken,
     });
     const parsed = reply as Partial<Registration>;
     if (!parsed?.node_id) throw new Error("relay did not return a node id");

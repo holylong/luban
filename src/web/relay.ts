@@ -1,11 +1,11 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import { createServer as createSecureServer, type Server as HttpsServer } from "node:https";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { networkInterfaces } from "node:os";
 import { webAssetPath, WEB_CONTENT_TYPES } from "./assets.js";
-import { AuthGate, clearCookie, generateToken, parseCookie, rejectAuth, tokenCookie } from "./auth.js";
+import { AuthGate, clearCookie, generateToken, parseCookie, rejectAuth, tokenCookie, tokenMatches } from "./auth.js";
 import {
   createFrameDecoder, filterForwardedHeaders, FRAME_CHUNK, FRAME_END, FRAME_FAIL, FRAME_HEAD,
   parseJson, type EndPayload, type FailPayload, type ResponseHead, type TunnelMessage,
@@ -55,6 +55,7 @@ interface RelayNode {
   version: string;
   workspace: string;
   projects: Record<string, string>;
+  accessToken: string;
   connectedAt: number;
   lastSeenAt: number;
   queue: TunnelMessage[];
@@ -81,7 +82,7 @@ class HttpError extends Error {
   }
 }
 
-function json(res: ServerResponse, value: unknown, status = 200, extraHeaders: Record<string, string> = {}): void {
+function json(res: ServerResponse, value: unknown, status = 200, extraHeaders: OutgoingHttpHeaders = {}): void {
   const body = Buffer.from(JSON.stringify(value), "utf8");
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -92,7 +93,7 @@ function json(res: ServerResponse, value: unknown, status = 200, extraHeaders: R
   res.end(body);
 }
 
-function html(res: ServerResponse, body: string, status = 200, extraHeaders: Record<string, string> = {}): void {
+function html(res: ServerResponse, body: string, status = 200, extraHeaders: OutgoingHttpHeaders = {}): void {
   const buffer = Buffer.from(body, "utf8");
   res.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
@@ -195,8 +196,8 @@ export class LubanRelayServer {
   }
 
   /** One-tap link: the token is exchanged for a cookie by `/login`. */
-  mobileLink(): string {
-    return `${this.publicBaseUrl()}/login?token=${encodeURIComponent(this.accessToken)}`;
+  mobileLink(token = this.accessToken): string {
+    return `${this.publicBaseUrl()}/login?token=${encodeURIComponent(token)}`;
   }
 
   async stop(): Promise<void> {
@@ -239,6 +240,11 @@ export class LubanRelayServer {
     };
   }
 
+  private nodeForAccessToken(token: string | undefined): RelayNode | undefined {
+    if (!token) return undefined;
+    return [...this.nodes.values()].find(node => tokenMatches(node.accessToken, token));
+  }
+
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url || "/", "http://relay.local");
@@ -250,23 +256,30 @@ export class LubanRelayServer {
         return json(res, { ok: true, service: "luban-relay", version: VERSION });
       }
 
-      const decision = this.gate.check(req, url);
+      const decision = this.gate.check(req, url, [...this.nodes.values()].map(node => node.accessToken));
       if (!decision.ok) return rejectAuth(res, decision, url.pathname.startsWith("/api/"));
+      const tokenNode = this.nodeForAccessToken(decision.token);
 
       // A link that carries the token is exchanged for a cookie once, so the
       // SSE stream (which cannot send headers) authenticates on every reconnect.
       const wantsCookie = decision.source === "query" && Boolean(decision.token);
-      const tokenHeader: Record<string, string> = wantsCookie ? { "set-cookie": tokenCookie(decision.token!, undefined, Boolean(this.options.tls)) } : {};
-      const redirect = (location: string, headers: Record<string, string> = {}): void => {
+      const tokenHeader: OutgoingHttpHeaders = wantsCookie ? {
+        "set-cookie": [
+          tokenCookie(decision.token!, undefined, Boolean(this.options.tls)),
+          ...(tokenNode ? [`${NODE_COOKIE}=${encodeURIComponent(tokenNode.id)}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax${this.options.tls ? "; Secure" : ""}`] : []),
+        ],
+      } : {};
+      const redirect = (location: string, headers: OutgoingHttpHeaders = {}): void => {
         res.writeHead(302, { location, ...headers });
         res.end();
       };
-      if (url.pathname === "/login" || url.pathname === "/login/") return redirect("/m/", tokenHeader);
-      if (url.pathname === "/logout") return redirect("/m/", { "set-cookie": clearCookie("luban_token") });
-      if (url.pathname === "/") return redirect("/m/", tokenHeader);
+      const mobileLocation = tokenNode ? `/m/?node=${encodeURIComponent(tokenNode.id)}` : "/m/";
+      if (url.pathname === "/login" || url.pathname === "/login/") return redirect(mobileLocation, tokenHeader);
+      if (url.pathname === "/logout") return redirect("/m/", { "set-cookie": [clearCookie("luban_token", Boolean(this.options.tls)), clearCookie(NODE_COOKIE, Boolean(this.options.tls))] });
+      if (url.pathname === "/") return redirect(mobileLocation, tokenHeader);
 
       if (url.pathname === "/api/offline" || url.pathname === "/relay/nodes") {
-        return json(res, this.nodeList(), 200, tokenHeader);
+        return json(res, this.nodeList(tokenNode?.id), 200, tokenHeader);
       }
 
       if (url.pathname === "/m") return redirect("/m/", tokenHeader);
@@ -281,7 +294,7 @@ export class LubanRelayServer {
         res.end();
         return;
       }
-      if (url.pathname.startsWith("/api/")) return await this.proxy(req, res, url);
+      if (url.pathname.startsWith("/api/")) return await this.proxy(req, res, url, tokenNode?.id);
 
       throw new HttpError(404, "not found: the relay serves the mobile console at /m/");
     } catch (error) {
@@ -321,6 +334,7 @@ export class LubanRelayServer {
       version: String(body.version || ""),
       workspace: String(body.workspace || ""),
       projects: record(body.projects) as Record<string, string>,
+      accessToken: String(body.access_token || this.accessToken),
       connectedAt: Date.now(),
       lastSeenAt: Date.now(),
       queue: [],
@@ -335,7 +349,7 @@ export class LubanRelayServer {
       public_url: `${this.publicBaseUrl()}/m/`,
       // Handed to the node so its terminal can print a ready-to-open link. Both
       // sides belong to the same owner, and the node already runs the agent.
-      access_url: this.mobileLink(),
+      access_url: this.mobileLink(node.accessToken),
     });
   }
 
@@ -407,10 +421,11 @@ export class LubanRelayServer {
     return `节点 ${node.name} 已离线（${Math.round((Date.now() - node.lastSeenAt) / 1000)}s 无心跳）`;
   }
 
-  private nodeList(): Record<string, unknown> {
+  private nodeList(onlyNodeId?: string): Record<string, unknown> {
     return {
       ok: true,
       nodes: [...this.nodes.values()]
+        .filter(node => !onlyNodeId || node.id === onlyNodeId)
         .map(node => this.nodeView(node))
         .sort((left, right) => Number(right.online) - Number(left.online) || String(left.name).localeCompare(String(right.name))),
     };
@@ -418,7 +433,7 @@ export class LubanRelayServer {
 
   // --------------------------------------------------------------- phone side
 
-  private async mobileShell(res: ServerResponse, url: URL, extraHeaders: Record<string, string>): Promise<void> {
+  private async mobileShell(res: ServerResponse, url: URL, extraHeaders: OutgoingHttpHeaders): Promise<void> {
     const bundle = await readFile(webAssetPath("mobile.html"), "utf8").catch(() => undefined);
     if (bundle) return html(res, bundle, 200, extraHeaders);
     // Without a built bundle the relay still has to answer something usable, and
@@ -448,7 +463,8 @@ export class LubanRelayServer {
    * most recently seen one. An offline node is still returned so `proxy` can
    * report which node went away instead of a generic "no node".
    */
-  private resolveNode(req: IncomingMessage, url: URL): RelayNode | undefined {
+  private resolveNode(req: IncomingMessage, url: URL, pinnedNodeId?: string): RelayNode | undefined {
+    if (pinnedNodeId) return this.nodes.get(pinnedNodeId);
     const explicit = url.searchParams.get("node") || parseCookie(req.headers.cookie, NODE_COOKIE);
     if (explicit) {
       const node = this.nodes.get(explicit);
@@ -457,8 +473,8 @@ export class LubanRelayServer {
     return [...this.nodes.values()].sort((left, right) => right.lastSeenAt - left.lastSeenAt)[0];
   }
 
-  private async proxy(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    const node = this.resolveNode(req, url);
+  private async proxy(req: IncomingMessage, res: ServerResponse, url: URL, pinnedNodeId?: string): Promise<void> {
+    const node = this.resolveNode(req, url, pinnedNodeId);
     if (!node) {
       throw new HttpError(503, "没有已连接的本机 luban 节点：请在本机运行 luban web --relay <中继地址>");
     }
