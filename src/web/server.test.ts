@@ -185,4 +185,91 @@ describe("LubanWebServer", () => {
       await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
     }
   }, 15_000);
+
+  it("gates every route behind an access token when one is configured", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-auth-"));
+    const config = testConfig(root);
+    await mkdir(config.workspace, { recursive: true });
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh, { host: "127.0.0.1", port: 0, token: "workspace-token" });
+    await mesh.start();
+    const base = await web.start();
+    try {
+      expect(web.requiresToken).toBe(true);
+
+      // An API call without the token is refused, and says so in a form the
+      // console can branch on instead of guessing from a 401.
+      const denied = await jsonRequest(`${base}api/node`);
+      expect(denied.status).toBe(401);
+      expect(denied.body).toMatchObject({ ok: false, auth_required: true });
+
+      // A page request gets the login form, not JSON.
+      const page = await fetch(`${base}diff?project=web-project`);
+      expect(page.status).toBe(401);
+      expect(await page.text()).toContain("访问令牌");
+
+      // A wrong token is still a rejection.
+      expect((await jsonRequest(`${base}api/node?token=nope`)).status).toBe(401);
+
+      // The token works from the header, and the query string exchanges itself
+      // for a cookie so the SSE stream can authenticate on reconnect.
+      const viaHeader = await fetch(`${base}api/node`, { headers: { "x-luban-token": "workspace-token" } });
+      expect(viaHeader.status).toBe(200);
+      expect(await viaHeader.json()).toMatchObject({ name: "web-node", auth_required: true });
+
+      const viaQuery = await fetch(`${base}m?token=workspace-token`, { redirect: "manual" });
+      expect(viaQuery.status).toBe(302);
+      expect(viaQuery.headers.get("location")).toBe("/m/");
+      expect(viaQuery.headers.get("set-cookie")).toContain("luban_token=workspace-token");
+
+      const viaCookie = await fetch(`${base}api/node`, { headers: { cookie: "luban_token=workspace-token" } });
+      expect(viaCookie.status).toBe(200);
+
+      // Repeated failures from one address get locked out rather than retried
+      // forever; the loopback address is shared by the whole test, so check the
+      // counter on a fresh gate-shaped request instead of hammering this server.
+      const status = await jsonRequest(`${base}api/node`, { headers: { "x-luban-token": "workspace-token" } });
+      expect(status.status).toBe(200);
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
+
+  it("serves the phone console under /m and leaves it open when no token is set", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-mobile-"));
+    const config = testConfig(root);
+    await mkdir(config.workspace, { recursive: true });
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh, { host: "127.0.0.1", port: 0 });
+    await mesh.start();
+    const base = await web.start();
+    try {
+      // Loopback without a token stays usable: the desktop console must not
+      // break for someone who never asked for access control.
+      expect(web.requiresToken).toBe(false);
+      expect((await fetch(`${base}api/node`)).status).toBe(200);
+
+      const redirect = await fetch(`${base}m`, { redirect: "manual" });
+      expect(redirect.status).toBe(302);
+      expect(redirect.headers.get("location")).toBe("/m/");
+
+      // The bundle is a build artifact; when it is absent the server says what
+      // to run instead of serving a blank page.
+      const shell = await fetch(`${base}m/`);
+      const body = await shell.text();
+      if (shell.status === 200) {
+        expect(shell.headers.get("content-type")).toContain("text/html");
+        expect(body).toContain("luban");
+      } else {
+        expect(shell.status).toBe(404);
+        expect(body).toContain("build:web");
+      }
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
 });

@@ -9,8 +9,26 @@ export class ApiError extends Error {
   }
 }
 
+let nodeScope: string | undefined;
+
+/**
+ * Relay mode: pin every API call to one connected node.
+ *
+ * The relay can hold several laptops at once, so the phone's console has to say
+ * which one it means. The token is carried by a cookie, which every request
+ * (including the SSE stream) already sends.
+ */
+export function setNodeScope(node?: string): void {
+  nodeScope = node?.trim() || undefined;
+}
+
+function scoped(path: string): string {
+  if (!nodeScope) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}node=${encodeURIComponent(nodeScope)}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const response = await fetch(scoped(path), init);
   const text = await response.text();
   let body: unknown;
   try { body = text ? JSON.parse(text) : {}; }

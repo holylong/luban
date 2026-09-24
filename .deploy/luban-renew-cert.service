@@ -1,0 +1,6 @@
+[Unit]
+Description=Renew Luban relay IP certificate
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/luban-renew-cert

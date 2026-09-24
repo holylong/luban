@@ -1,0 +1,22 @@
+[Unit]
+Description=Luban public phone relay
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/home/deploy/apps/luban
+EnvironmentFile=/home/deploy/.config/luban/relay.env
+ExecStart=/usr/local/bin/node /home/deploy/apps/luban/dist/cli.js relay --host 0.0.0.0 --port 443 --public-url https://203.0.113.7 --https --tls-key /home/deploy/apps/luban/tls/key.pem --tls-cert /home/deploy/apps/luban/tls/fullchain.pem
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+StandardOutput=null
+
+[Install]
+WantedBy=multi-user.target

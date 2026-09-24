@@ -90,6 +90,9 @@ export interface FileEntry {
 
 export interface NodeInfo {
   name: string;
+  /** Workspace this node runs in; shown when a phone picks between nodes. */
+  workspace?: string;
+  project?: string;
   host: string;
   port: number;
   udp_port: number;
@@ -102,6 +105,8 @@ export interface NodeInfo {
   version: string;
   runtime: string;
   interactive: boolean;
+  /** True when the endpoint requires an access token. */
+  auth_required?: boolean;
   web: { host: string; port: number };
 }
 

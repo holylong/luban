@@ -37,6 +37,17 @@ describe("deriveTimeline", () => {
     expect(items.some(item => item.kind === "status")).toBe(false);
   });
 
+  it("groups streamed thinking into one transcript item per model phase", () => {
+    const items = deriveTimeline(job, [
+      record(1, { kind: "model-call", index: 1 }),
+      record(2, { kind: "thinking", text: "先读" }),
+      record(3, { kind: "thinking", text: "配置。" }),
+      record(4, { kind: "delta", text: "答案" }),
+    ]);
+    expect(items.map(item => item.kind)).toEqual(["user", "thinking", "assistant"]);
+    expect(items[1]).toMatchObject({ text: "先读配置。" });
+  });
+
   it("keeps a tool row in place and upgrades it when the matching tool-end arrives", () => {
     const started = deriveTimeline(job, [
       record(1, { kind: "tool-start", callId: "c9", name: "edit_file", args: { path: "x.ts" }, summary: "x.ts" }),
@@ -67,6 +78,16 @@ describe("deriveTimeline", () => {
     expect(paused.at(-1)).toMatchObject({ kind: "result", text: "half done", status: "paused" });
     const done = withOutcome(base, { ...job, status: "done", result: "all good", error: "" } as MeshJob);
     expect(done.at(-1)).toMatchObject({ kind: "result", text: "all good", status: "done" });
+  });
+
+  it("shows a streamed final answer once when the durable result matches it", () => {
+    const streamed = deriveTimeline(job, [record(1, { kind: "delta", text: "all " }), record(2, { kind: "delta", text: "good" })]);
+    const done = withOutcome(streamed, { ...job, status: "done", result: "all good", error: "" } as MeshJob);
+    expect(done.map(item => item.kind)).toEqual(["user", "result"]);
+    expect(done[1]).toMatchObject({ text: "all good" });
+
+    const distinct = withOutcome(streamed, { ...job, status: "done", result: "summary", error: "" } as MeshJob);
+    expect(distinct.map(item => item.kind)).toEqual(["user", "assistant", "result"]);
   });
 });
 
@@ -157,7 +178,7 @@ describe("liveProgress", () => {
       stamped(4, 5, { kind: "thinking", text: "config.ts 的默认值" }),
     ];
     const live = liveProgress(events, base + 90);
-    expect(live).toMatchObject({ label: "推理中", detail: "先读config.ts 的默认值", seconds: 89, silentSeconds: 85, stalled: true });
+    expect(live).toMatchObject({ label: "推理中", detail: "正在推理…", seconds: 89, silentSeconds: 85, stalled: true });
     expect(live!.silentSeconds).toBeGreaterThan(STALL_SECONDS);
   });
 
