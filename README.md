@@ -655,10 +655,10 @@ WantedBy=default.target
 
 ### Android APK 的构建、安装与使用
 
-APK 源码位于 `android-app/`，通过 Android WebView 使用服务端的 `/m/` 控制台。Android SDK 与 JDK 17 用于构建；下面产出可直接安装的调试版 APK。多台设备连接 ADB 时，先运行 `adb devices` 找到目标序列号。
+桌面和移动端客户端统一放在 `apps/`，Android APK 源码位于 `apps/android-app/`。它通过 Android WebView 使用服务端的 `/m/` 控制台。Android SDK 与 JDK 17 用于构建；下面产出可直接安装的调试版 APK。多台设备连接 ADB 时，先运行 `adb devices` 找到目标序列号。
 
 ```bash
-cd /path/to/luban/android-app
+cd /path/to/luban/apps/android-app
 ANDROID_HOME="$HOME/Android/Sdk" ./gradlew assembleDebug
 adb devices
 adb -s <设备序列号> install -r app/build/outputs/apk/debug/app-debug.apk
