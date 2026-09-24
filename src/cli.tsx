@@ -10,7 +10,7 @@ import { loadConfig } from "./core/config.js";
 import { announceHost, directedBroadcasts, MeshRuntime } from "./core/mesh/runtime.js";
 import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
-import type { AgentEvent, ChatMessage, LubanConfig } from "./core/types.js";
+import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
 import { App } from "./ui/app.js";
 import { applyTheme, resolveThemeId, themeIds } from "./ui/theme.js";
 import { LubanWebServer } from "./web/server.js";
@@ -88,6 +88,17 @@ function headlessEvent(event: AgentEvent): void {
 function oneLine(value: string, limit = 200): string {
   const flat = value.trim().replaceAll(/\s+/gu, " ");
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
+}
+
+function readEnvFileValue(path: string, key: string): string {
+  if (!existsSync(path)) return "";
+  const prefix = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=(.*)$`, "u");
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/u)) {
+    const match = line.match(prefix);
+    if (!match) continue;
+    return match[1]!.trim().replace(/^(['"])(.*)\1$/u, "$2");
+  }
+  return "";
 }
 
 async function runHeadless(config: LubanConfig, prompt: string, mesh?: MeshRuntime): Promise<number> {
@@ -538,17 +549,24 @@ async function main(): Promise<number> {
   const prompt = options.prompt || piped;
   let mesh: MeshRuntime | undefined;
   let web: LubanWebServer | undefined;
+  let remoteWeb: LubanWebServer | undefined;
+  let remoteTunnel: TunnelClient | undefined;
+  let mobileLink: string | undefined;
   // The TUI keeps its own broker: approvals requested by a browser tab are
   // answered there, while in-terminal jobs keep prompting in the TUI itself.
   const approvals = new ApprovalBroker();
   try {
-    if (config.mesh.enabled || options.webPort !== undefined) {
-      const candidate = new MeshRuntime(config);
-      configureRemoteJobs(candidate, config, undefined, {
-        approve: (tool, args, jobId) => approvals.request(jobId, tool, args),
-        isInteractive: jobId => Boolean(web?.isInteractiveJob(jobId)),
-        modeFor: jobId => web?.jobMode(jobId) ?? "edits",
-      });
+    if (config.mesh.enabled || options.webPort !== undefined || (config.remote.enabled && !prompt)) {
+      const runtimeConfig = config.remote.enabled && !prompt
+        ? { ...config, mesh: { ...config.mesh, nodeName: `${config.mesh.nodeName}-${process.pid}`, jobsDir: join(config.mesh.jobsDir, "instances", `tui-${process.pid}`) } }
+        : config;
+      const candidate = new MeshRuntime(runtimeConfig);
+      const remoteJobOptions = {
+        approve: (tool: ToolDefinition, args: Record<string, unknown>, jobId: string) => approvals.request(jobId, tool, args),
+        isInteractive: (jobId: string) => Boolean(web?.isInteractiveJob(jobId) || remoteWeb?.isInteractiveJob(jobId)),
+        modeFor: (jobId: string) => web?.jobMode(jobId) ?? remoteWeb?.jobMode(jobId) ?? "edits" as const,
+      };
+      configureRemoteJobs(candidate, config, undefined, remoteJobOptions);
       try {
         const requestedName = config.mesh.nodeName;
         await candidate.start({ allowPortFallback: options.meshPort === undefined });
@@ -559,6 +577,13 @@ async function main(): Promise<number> {
       } catch (error) {
         process.stderr.write(`warning: mesh unavailable (${error instanceof Error ? error.message : String(error)}); continuing without LAN collaboration\n`);
         process.stderr.write("Free the mesh ports in ~/.luban/config.json, or start with --no-mesh to skip the warning.\n");
+        if ((config.remote.enabled && !prompt) || options.webPort !== undefined) {
+          const offlineConfig = { ...runtimeConfig, mesh: { ...runtimeConfig.mesh, enabled: false } };
+          const offlineRuntime = new MeshRuntime(offlineConfig);
+          configureRemoteJobs(offlineRuntime, config, undefined, remoteJobOptions);
+          await offlineRuntime.start();
+          mesh = offlineRuntime;
+        }
       }
     }
     if (options.webPort !== undefined) {
@@ -570,13 +595,60 @@ async function main(): Promise<number> {
         process.stderr.write("warning: skipping web workspace because mesh is unavailable\n");
       }
     }
+    if (config.remote.enabled && !prompt) {
+      const relayUrl = config.remote.relayUrl.trim();
+      const nodeToken = process.env[config.remote.nodeTokenEnv]?.trim()
+        || readEnvFileValue(config.remote.nodeTokenFile, config.remote.nodeTokenEnv);
+      if (!relayUrl) {
+        process.stderr.write("手机远控未启动：在 ~/.luban/config.json 的 remote.relay_url 中设置中继地址。\n");
+      } else if (!nodeToken) {
+        process.stderr.write(`手机远控未启动：令牌文件 ${config.remote.nodeTokenFile} 中缺少 ${config.remote.nodeTokenEnv}。\n`);
+      } else if (!mesh) {
+        process.stderr.write("手机远控未启动：没有可用的本机 Web runtime。\n");
+      } else {
+        const normalizedRelayUrl = normalizeRelayUrl(relayUrl);
+        const parsedRelayUrl = new URL(normalizedRelayUrl);
+        if (parsedRelayUrl.protocol !== "https:" && !(parsedRelayUrl.protocol === "http:" && LOOPBACK.has(parsedRelayUrl.hostname))) {
+          throw new Error("公网手机远控必须使用 HTTPS 中继地址");
+        }
+        const localToken = generateToken();
+        const phoneToken = generateToken();
+        remoteWeb = new LubanWebServer(config, mesh, {
+          host: config.remote.host,
+          port: config.remote.port,
+          approvals,
+          token: localToken,
+        });
+        await remoteWeb.start();
+        const relayCa = config.remote.relayCa
+          ? readFileSync(config.remote.relayCa, "utf8")
+          : undefined;
+        remoteTunnel = new TunnelClient({
+          relayUrl: normalizedRelayUrl,
+          nodeToken,
+          accessToken: phoneToken,
+          localHost: "127.0.0.1",
+          localPort: remoteWeb.port,
+          localToken,
+          name: mesh.config.mesh.nodeName,
+          version: VERSION,
+          workspace: config.workspace,
+          projects: mesh.projectMap(),
+          relayCa,
+          log: (message) => process.stderr.write(`手机远控：${message}\n`),
+        });
+        mobileLink = `${normalizedRelayUrl}/login?token=${encodeURIComponent(phoneToken)}`;
+        await remoteTunnel.start();
+        process.stderr.write("手机远控已随当前 TUI 启动，输入 /token 查看此实例的登录链接。\n");
+      }
+    }
     if (prompt) return await runHeadless(config, prompt, mesh);
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       process.stderr.write("interactive mode requires a TTY; use --prompt for one-shot mode\n");
       return 2;
     }
     const resume = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
-    const instance = render(<App config={config} mesh={mesh} resume={resume} />);
+    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />);
     await instance.waitUntilExit();
     return 0;
   } catch (error) {
@@ -584,6 +656,8 @@ async function main(): Promise<number> {
     process.stderr.write("Use --no-mesh to run without LAN collaboration, or choose different ports.\n");
     return 2;
   } finally {
+    remoteTunnel?.stop();
+    await remoteWeb?.stop();
     await web?.stop();
     await mesh?.stop();
   }

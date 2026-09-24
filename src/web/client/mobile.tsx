@@ -37,6 +37,12 @@ const MODE_LABELS: Record<TaskMode, string> = { edits: "可改文件", agent: "�
 const JOB_KEY = "luban.mobile.job";
 const NODE_KEY = "luban.mobile.node";
 
+function initialNodeScope(): string | undefined {
+  const linkedNode = new URLSearchParams(window.location.search).get("node") || undefined;
+  if (linkedNode) localStorage.setItem(NODE_KEY, linkedNode);
+  return linkedNode || localStorage.getItem(NODE_KEY) || undefined;
+}
+
 function mergeEvents(existing: JobStreamRecord[], incoming: JobStreamRecord[]): JobStreamRecord[] {
   if (!incoming.length) return existing;
   const bySeq = new Map(existing.map(record => [record.seq, record]));
@@ -108,7 +114,7 @@ export function MobileApp(): React.ReactElement {
   const [tab, setTab] = useState<Tab>("live");
   const [relayMode, setRelayMode] = useState(false);
   const [relayNodes, setRelayNodes] = useState<RelayNode[]>([]);
-  const [scope, setScope] = useState<string | undefined>(() => localStorage.getItem(NODE_KEY) || undefined);
+  const [scope, setScope] = useState<string | undefined>(initialNodeScope);
   const [node, setNode] = useState<NodeInfo | undefined>();
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>();

@@ -177,6 +177,7 @@ export interface AppProps {
   mesh?: MeshRuntime;
   resume?: string;
   initialPrompt?: string;
+  mobileLink?: string;
 }
 
 
@@ -493,7 +494,7 @@ function SelectDialog({
   );
 }
 
-export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppProps) {
+export function App({ config: initialConfig, mesh, resume, initialPrompt, mobileLink }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [config, setConfig] = useState(initialConfig);
@@ -1379,6 +1380,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt }: AppP
       return;
     }
     if (command === "/token") {
+      if (mobileLink) {
+        setDialog({ type: "info", index: 0, title: "本实例手机登录", content: mobileLink });
+        return;
+      }
       try {
         const envPath = join(homedir(), ".config/luban/relay.env");
         const envText = await readFile(envPath, "utf8");

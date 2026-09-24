@@ -277,6 +277,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   raw.model = { ...record(globalConfig.model), ...record(projectConfig.model) };
   raw.node = { ...record(globalConfig.node), ...record(projectConfig.node) };
   raw.mesh = { ...record(globalConfig.mesh), ...record(projectConfig.mesh) };
+  raw.remote = { ...record(globalConfig.remote), ...record(projectConfig.remote) };
   raw.sync = { ...record(globalConfig.sync), ...record(projectConfig.sync) };
   raw.projects = { ...record(globalConfig.projects), ...record(projectConfig.projects) };
   raw.permission = { ...record(globalConfig.permission), ...record(projectConfig.permission) };
@@ -327,6 +328,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const toolOutputRaw = record(raw.tool_output ?? raw.toolOutput);
   const mcpRaw = record(raw.mcp);
   const codeIntelRaw = record(raw.code_intelligence ?? raw.codeIntel);
+  const remoteRaw = record(raw.remote);
   return {
     home,
     workspace,
@@ -401,6 +403,15 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
       maxWorkers: Math.max(1, integer(raw.max_workers, 2)),
       jobTimeoutSeconds: Math.max(30, integer(raw.job_timeout_seconds, 600)),
       queueTimeoutSeconds: Math.max(30, integer(raw.queue_timeout_seconds, 300)),
+    },
+    remote: {
+      enabled: remoteRaw.enabled === true || remoteRaw.enabled === "true",
+      host: text(remoteRaw.host, "127.0.0.1"),
+      port: Math.max(0, Math.min(65_535, integer(remoteRaw.port, 0))),
+      relayUrl: text(remoteRaw.relay_url, remoteRaw.relayUrl, process.env.LUBAN_RELAY_PUBLIC_URL),
+      nodeTokenEnv: text(remoteRaw.node_token_env, remoteRaw.nodeTokenEnv, "LUBAN_RELAY_NODE_TOKEN"),
+      nodeTokenFile: resolve(text(remoteRaw.node_token_file, remoteRaw.nodeTokenFile, join(homedir(), ".config/luban/relay.env"))),
+      relayCa: text(remoteRaw.relay_ca, remoteRaw.relayCa),
     },
   };
 }

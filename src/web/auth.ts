@@ -52,8 +52,8 @@ export function tokenCookie(token: string, maxAgeSeconds = 60 * 60 * 24 * 30, se
   return `${TOKEN_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
 }
 
-export function clearCookie(name: string): string {
-  return `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`;
+export function clearCookie(name: string, secure = false): string {
+  return `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
 }
 
 export interface AuthDecision {
@@ -132,7 +132,7 @@ export class AuthGate {
    * Verify one request. `url` is passed separately because the query string is
    * one of the three accepted carrier forms.
    */
-  check(req: IncomingMessage, url: URL): AuthDecision {
+  check(req: IncomingMessage, url: URL, additionalTokens: readonly string[] = []): AuthDecision {
     if (!this.enabled) return { ok: true };
     if (this.isLockedOut(req)) return { ok: false, status: 429, reason: "too many failed attempts; try again later" };
     const header = req.headers[TOKEN_HEADER];
@@ -144,9 +144,9 @@ export class AuthGate {
       ["cookie", parseCookie(req.headers.cookie, TOKEN_COOKIE)],
     ];
     for (const [source, candidate] of candidates) {
-      if (tokenMatches(this.token, candidate)) {
+      if (candidate && [this.token, ...additionalTokens].some(expected => tokenMatches(expected, candidate))) {
         this.recordSuccess(req);
-        return { ok: true, source, token: candidate ?? undefined };
+        return { ok: true, source, token: candidate };
       }
     }
     this.recordFailure(req);
