@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRunner, initialMessages } from "./agent.js";
@@ -14,6 +14,68 @@ function config(workspace: string): LubanConfig {
 }
 
 describe("AgentRunner", () => {
+  it("runs provider-style Bash and Glob aliases through the registered tools", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-tool-alias-"));
+    await writeFile(join(workspace, "sample.txt"), "hello\n");
+    const settings = config(workspace);
+    settings.permissionMode = "allow";
+    let calls = 0;
+    const runner = new AgentRunner(settings, {
+      async complete(messages: ChatMessage[]) {
+        if (++calls === 1) return {
+          content: "", usage: { input: 1, output: 1 },
+          toolCalls: [
+            { id: "shell", type: "function" as const, function: { name: "Bash", arguments: '{"command":"printf alias-ok","description":"check"}' } },
+            { id: "files", type: "function" as const, function: { name: "Glob", arguments: '{"pattern":"*.txt"}' } },
+          ],
+        };
+        expect(messages.filter((message) => message.role === "tool").map((message) => message.name)).toEqual(["bash", "glob_files"]);
+        expect(messages.find((message) => message.tool_call_id === "shell")?.content).toContain("alias-ok");
+        expect(messages.find((message) => message.tool_call_id === "files")?.content).toContain("sample.txt");
+        return { content: "done", toolCalls: [], usage: { input: 1, output: 1 } };
+      },
+    });
+    try {
+      const result = await runner.run(
+        [...initialMessages(workspace), { role: "user", content: "check files" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once",
+      );
+      expect(result.ok).toBe(true);
+      expect(result.messages.some((message) => String(message.content).includes("unknown tool"))).toBe(false);
+    } finally { runner.close(); }
+  });
+
+  it("adapts provider-style file tool argument names before permission and execution", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-file-alias-"));
+    await writeFile(join(workspace, "source.txt"), "before\n");
+    const settings = config(workspace);
+    settings.permissionMode = "allow";
+    let calls = 0;
+    const runner = new AgentRunner(settings, {
+      async complete(messages: ChatMessage[]) {
+        if (++calls === 1) return {
+          content: "", usage: { input: 1, output: 1 },
+          toolCalls: [
+            { id: "read", type: "function" as const, function: { name: "Read", arguments: '{"file_path":"source.txt"}' } },
+            { id: "write", type: "function" as const, function: { name: "Write", arguments: '{"file_path":"target.txt","content":"old"}' } },
+            { id: "edit", type: "function" as const, function: { name: "Edit", arguments: '{"file_path":"target.txt","old_string":"old","new_string":"new"}' } },
+          ],
+        };
+        expect(messages.filter((message) => message.role === "tool").map((message) => message.name)).toEqual(["read_file", "write_file", "edit_file"]);
+        expect(messages.find((message) => message.tool_call_id === "read")?.content).toContain("before");
+        return { content: "done", toolCalls: [], usage: { input: 1, output: 1 } };
+      },
+    });
+    try {
+      const result = await runner.run(
+        [...initialMessages(workspace), { role: "user", content: "edit the file" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once",
+      );
+      expect(result.ok).toBe(true);
+      expect(await readFile(join(workspace, "target.txt"), "utf8")).toBe("new");
+    } finally { runner.close(); }
+  });
+
   it("persists a safe paused reply when summarization fails and resumes without replaying tools", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-pause-fallback-"));
     const settings = config(workspace);

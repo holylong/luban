@@ -57,7 +57,7 @@ import { verificationHeadline, verificationLine, verificationSummary, visibleVer
 import { workspaceDiff } from "../core/workspace-diff.js";
 import { historyFromMessages, pushInputHistory, recallDown, recallUp } from "./input-history.js";
 import { toAttachedImage } from "../core/vision.js";
-import { buildCopyText, osc52CopySequence } from "./clipboard.js";
+import { buildCopyText, osc52CopySequence, writeSystemClipboard } from "./clipboard.js";
 import { buildSessionMarkdown, collectExportedEdits, defaultExportFilename, expandExportPath, summarizeEdits } from "./session-export.js";
 
 const MODES: AgentMode[] = ["auto", "agent", "ask"];
@@ -403,6 +403,7 @@ function HelpPanel() {
       <Text color={theme.muted}>Shift+Tab 模式 · Ctrl+P 模型 · Ctrl+O 会话 · Esc 取消</Text>
       <Text color={theme.muted}>↑↓ 历史 · PgUp/PgDn 翻页 · Ctrl+J 换行 · @ 文件补全</Text>
       <Text color={theme.muted}>Ctrl+Y 鼠标开关 · 关后可选中复制 · /copy 复制上次回答 · /theme 换配色</Text>
+      <Text color={theme.muted}>Ctrl+C 运行中中断任务 / 空闲复制回答 · Ctrl+D 保存并退出 · /exit 退出</Text>
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
       <Text color={theme.muted}>直接输入任务，!command 执行 shell，/ 命令补全（含参数用法）</Text>
@@ -539,6 +540,17 @@ export function SelectDialog({
 export function App({ config: initialConfig, mesh, resume, initialPrompt, mobileLink }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const [terminalSize, setTerminalSize] = useState(() => ({ columns: stdout.columns || 80, rows: stdout.rows || 30 }));
+  useEffect(() => {
+    // Ink relayouts its existing tree on resize, but does not re-run App. A
+    // reconnected VS Code terminal can therefore retain the old root height
+    // and leave the composer below the visible screen until another command
+    // happens to update React state.
+    const onResize = (): void => setTerminalSize({ columns: stdout.columns || 80, rows: stdout.rows || 30 });
+    stdout.on("resize", onResize);
+    onResize();
+    return () => { stdout.off("resize", onResize); };
+  }, [stdout]);
   const [config, setConfig] = useState(initialConfig);
   const [mode, setMode] = useState<AgentMode>("auto");
   const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages(initialConfig.workspace, initialConfig.model.name, initialConfig.planning));
@@ -960,13 +972,21 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setNotice("没有可复制的内容");
       return;
     }
+    // OSC 52 first (xterm/iTerm2/ghostty/Windows Terminal), then a native
+    // helper. GNOME Terminal's VTE ignores OSC 52 by default, so without the
+    // wl-copy/xclip/xsel path a "copy" never reaches the user's Ctrl+V.
     try {
       stdout.write(osc52CopySequence(text));
-    } catch { /* OSC52 unsupported: fall back to file below */ }
+    } catch { /* OSC52 unsupported: fall back to helper below */ }
+    const system = await writeSystemClipboard(text);
+    if (system) {
+      setNotice("已复制到系统剪贴板 · Ctrl+V 粘贴");
+      return;
+    }
     try {
       const path = join(config.home, "last-copy.md");
       await writeFile(path, text, "utf8");
-      setNotice(`已复制上次回答 · OSC52 已发送 · 另存 ${path}`);
+      setNotice(`OSC52 已发送（GNOME Terminal 可能忽略）· 未检测到剪贴板工具，已另存 ${path}`);
     } catch (error) {
       setNotice(`已发送 OSC52 复制 · 文件备份失败: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1869,6 +1889,25 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         : "Mouse off · 现在可直接拖选复制文本 · /copy 复制上次回答 · Ctrl+Y 恢复滚轮");
       return;
     }
+    // Ctrl+C no longer kills the process (render uses exitOnCtrlC: false):
+    // running it interrupts the task like Esc, idle it copies the last answer
+    // to the system clipboard. Exit is Ctrl+D or /exit.
+    if (!dialog && !approval && key.ctrl && (character === "c" || character === "\u0003")) {
+      if (running) {
+        abortRef.current?.abort(new Error("cancelled by user"));
+        return;
+      }
+      void copyLastToClipboard();
+      return;
+    }
+    if (!dialog && !approval && key.ctrl && character.toLowerCase() === "d") {
+      void (async () => {
+        await save();
+        runnerRef.current.close();
+        exit();
+      })();
+      return;
+    }
     const commandOptions = commandMatches(input);
     const argumentOptions = argumentMatches(input);
     const completionCount = commandOptions.length || argumentOptions.length;
@@ -1947,10 +1986,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     detail: `${record.project} · ${record.updatedAt.slice(0, 16).replace("T", " ")}`,
   })));
   const modelRows = filterDialogRows(config.models.map((model) => ({ key: model.id, title: model.name, detail: model.id })));
-  const rows = stdout.rows || 30;
-  const narrow = (stdout.columns || 80) < 110;
+  const rows = terminalSize.rows;
+  const narrow = terminalSize.columns < 110;
   // Each view has one ordered stream for its conversation and execution rows.
-  const streamTextWidth = transcriptSize.width || Math.max(20, (stdout.columns || 100) - (showPlan ? (narrow ? 25 : 34) : 0) - 10);
+  const streamTextWidth = transcriptSize.width || Math.max(20, terminalSize.columns - (showPlan ? (narrow ? 25 : 34) : 0) - 10);
   // Remote activity has its own view. Background traffic must never displace
   // the local prompt, streaming answer, or final response.
   const focusedJob = focusedJobId ? meshRows.find((row) => row.job.id === focusedJobId)?.job : undefined;
@@ -2033,7 +2072,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // push the cursor off the top of the terminal on a long paste.
   const inputMaxRows = Math.max(3, Math.min(12, Math.floor(rows / 3)));
   const inputIndent = (running ? 1 : modeLabel(mode).length) + 3;
-  const inputWidth = Math.max(1, (stdout.columns || 80) - 4 - inputIndent - (inputLines > 1 ? String(inputLines).length + 7 : 1));
+  const inputWidth = Math.max(1, terminalSize.columns - 4 - inputIndent - (inputLines > 1 ? String(inputLines).length + 7 : 1));
 
   return (
     <Box flexDirection="column" height={rows} backgroundColor={theme.background}>
