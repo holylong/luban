@@ -144,6 +144,39 @@ function envKey(provider: string): string {
   return provider.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase();
 }
 
+/**
+ * OpenCode's Go subscription reuses the CLI's own credential, so luban reads it
+ * instead of asking for a second copy. `OPENCODE_AUTH_CONTENT` is the override
+ * OpenCode exposes for hosts without a writable data directory; otherwise the
+ * key lives in `auth.json` (or the older `account.json`) under the OpenCode
+ * data directory.
+ */
+function opencodeAuthKey(): string {
+  const inline = process.env.OPENCODE_AUTH_CONTENT;
+  if (inline) {
+    try {
+      const value = text(record((JSON.parse(inline) as JsonObject)["opencode-go"]).key);
+      if (value) return value;
+    } catch {
+      // Malformed content falls through to the files.
+    }
+  }
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  for (const file of ["auth.json", "account.json"]) {
+    const data = readJson(join(dataHome, "opencode", file));
+    const direct = text(record(data["opencode-go"]).key);
+    if (direct) return direct;
+    for (const value of Object.values(record(data.accounts))) {
+      const entry = record(value);
+      if (text(entry.serviceID, entry.serviceId) === "opencode-go") {
+        const key = text(record(entry.credential).key);
+        if (key) return key;
+      }
+    }
+  }
+  return "";
+}
+
 function resolveKey(providerName: string, provider: JsonObject, fallback: JsonObject): string {
   const options = record(provider.options);
   const keyEnv = text(provider.api_key_env, provider.apiKeyEnv);
@@ -154,11 +187,81 @@ function resolveKey(providerName: string, provider: JsonObject, fallback: JsonOb
     options.apiKey,
     keyEnv ? process.env[keyEnv] : "",
     process.env[`${envKey(providerName)}_API_KEY`],
+    providerName === "opencode-go" ? opencodeAuthKey() : "",
     fallback.api_key,
     fallback.apiKey,
     process.env.OPENAI_API_KEY,
     process.env.DEEPSEEK_API_KEY,
   );
+}
+
+/**
+ * The Go subscription serves every model through one base URL but splits them
+ * across three protocols. This mirrors the routing OpenCode itself uses from
+ * models.dev: Anthropic-served models speak Messages, OpenAI-served models
+ * speak Responses, and everything else is OpenAI-compatible chat.
+ */
+const OPENCODE_GO_MODELS: Record<string, { name: string; api: "openai" | "anthropic" | "responses"; vision: boolean; temperature?: boolean }> = {
+  "kimi-k3": { name: "Kimi K3", api: "openai", vision: true },
+  "kimi-k2.7-code": { name: "Kimi K2.7 Code", api: "openai", vision: true },
+  "deepseek-v4-pro": { name: "DeepSeek V4 Pro", api: "openai", vision: false },
+  "deepseek-v4-flash": { name: "DeepSeek V4 Flash", api: "openai", vision: false },
+  "deepseek-v4.1-flash": { name: "DeepSeek V4.1 Flash", api: "openai", vision: true },
+  "deepseek-v4-flash-vision-exp": { name: "DeepSeek V4 Flash Vision Exp", api: "openai", vision: true },
+  "glm-5.3": { name: "GLM-5.3", api: "openai", vision: false },
+  "glm-5.3-flash": { name: "GLM-5.3-Flash", api: "openai", vision: true },
+  "glm-5.2": { name: "GLM-5.2", api: "openai", vision: false },
+  "hy3": { name: "Hy3", api: "openai", vision: false },
+  "hy4-preview": { name: "Hy4 preview", api: "openai", vision: false },
+  "longcat-2.0": { name: "LongCat-2.0", api: "openai", vision: false },
+  "longcat-2.5-preview-free": { name: "LongCat 2.5 Preview Free", api: "openai", vision: true },
+  "mimo-v2.6-pro": { name: "MiMo-V2.6-Pro", api: "openai", vision: true },
+  "mimo-v2.6-flash": { name: "MiMo-V2.6-Flash", api: "openai", vision: true },
+  "mimo-v2.5": { name: "MiMo V2.5", api: "openai", vision: true },
+  "mimo-v2.5-pro": { name: "MiMo V2.5 Pro", api: "openai", vision: false },
+  "qwen3.8-max": { name: "Qwen3.8 Max", api: "openai", vision: true },
+  "qwen3.7-plus": { name: "Qwen3.7 Plus", api: "openai", vision: true },
+  "space-bunny-free": { name: "Space Bunny Free", api: "openai", vision: true },
+  "qwen3.8-flash": { name: "Qwen3.8 Flash", api: "anthropic", vision: true },
+  "minimax-m3": { name: "MiniMax-M3", api: "anthropic", vision: true },
+  "minimax-m2.7": { name: "MiniMax-M2.7", api: "anthropic", vision: false },
+  "gpt-6-luna": { name: "GPT-6 Luna", api: "responses", vision: true, temperature: false },
+  "gpt-5.6-luna": { name: "GPT-5.6 Luna", api: "responses", vision: true, temperature: false },
+  "grok-4.7": { name: "Grok 4.7", api: "responses", vision: true },
+  "grok-4.6": { name: "Grok 4.6", api: "responses", vision: true },
+  "muse-spark-1.3-contributor": { name: "Muse Spark 1.3 Contributor", api: "responses", vision: true },
+  "muse-spark-1.2-contributor": { name: "Muse Spark 1.2 Contributor", api: "responses", vision: true },
+};
+
+/**
+ * Providers luban knows without any config file. OpenCode Go is only offered
+ * when its credential can be found, so an unconfigured install never shows
+ * models that could not authenticate.
+ */
+function builtinProviders(): Record<string, JsonObject> {
+  const key = text(process.env.OPENCODE_API_KEY, process.env.OPENCODE_GO_API_KEY, opencodeAuthKey());
+  if (!key) return {};
+  return {
+    "opencode-go": {
+      api_key_env: "OPENCODE_API_KEY",
+      base_url: "https://opencode.ai/zen/go/v1",
+      headers: { "x-opencode-session": "luban" },
+      models: Object.fromEntries(Object.entries(OPENCODE_GO_MODELS).map(([id, model]) => [id, {
+        name: model.name,
+        api: model.api,
+        capabilities: {
+          vision: model.vision,
+          thinking: true,
+          ...(model.temperature === false ? { temperature: false } : {}),
+        },
+      }])),
+    },
+  };
+}
+
+function headerMap(value: unknown): Record<string, string> {
+  return Object.fromEntries(Object.entries(record(value)).flatMap(([key, val]) =>
+    typeof val === "string" && val.trim() ? [[key, val.trim()]] : []));
 }
 
 function resolveBaseUrl(provider: JsonObject, fallback: JsonObject): string {
@@ -182,11 +285,14 @@ function collectModels(raw: JsonObject): ModelRef[] {
     const provider = record(value);
     const baseUrl = resolveBaseUrl(provider, modelConfig);
     const apiKey = resolveKey(providerName, provider, modelConfig);
-    const apiRaw = text(provider.api, provider.type, providerName === "anthropic" ? "anthropic" : "openai").toLowerCase();
-    const api = apiRaw === "anthropic" ? "anthropic" : apiRaw === "responses" ? "responses" : "openai";
+    const providerApi = text(provider.api, provider.type, providerName === "anthropic" ? "anthropic" : "openai").toLowerCase();
+    const providerHeaders = headerMap(provider.headers);
     for (const model of providerModels(provider)) {
       const perModel = record((record(provider.models as JsonObject)[model.id] ?? {}) as unknown);
       const caps = record(perModel.capabilities ?? provider.capabilities ?? modelConfig.capabilities);
+      const apiRaw = text(perModel.api, perModel.type, providerApi).toLowerCase();
+      const api = apiRaw === "anthropic" ? "anthropic" : apiRaw === "responses" ? "responses" : "openai";
+      const headers = { ...providerHeaders, ...headerMap(perModel.headers) };
       const modelId = `${providerName}/${model.id}`.toLowerCase();
       const visionDefault = /vision|gpt-4o|gpt-4\.1|claude.*(sonnet|opus)|gemini.*(pro|flash)|qwen.*vl/i.test(`${providerName} ${model.id}`);
       result.push({
@@ -197,11 +303,13 @@ function collectModels(raw: JsonObject): ModelRef[] {
         baseUrl,
         apiKey,
         api,
+        ...(Object.keys(headers).length ? { headers } : {}),
         capabilities: {
           vision: caps.vision !== undefined ? caps.vision === true : visionDefault,
           thinking: caps.thinking !== undefined ? caps.thinking === true : /qwen|deepseek-reasoner|claude|o1|o3/i.test(modelId),
           tools: caps.tools !== undefined ? caps.tools === true : true,
           responses: caps.responses !== undefined ? caps.responses === true : api === "responses",
+          temperature: caps.temperature !== undefined ? caps.temperature === true : true,
         },
       });
     }
@@ -271,10 +379,25 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const raw = { ...globalConfig, ...projectConfig };
   const globalProviders = record(globalConfig.providers);
   const projectProviders = record(projectConfig.providers);
-  if (Object.keys(globalProviders).length || Object.keys(projectProviders).length) {
-    raw.providers = { ...globalProviders, ...projectProviders };
+  const explicitProviders = { ...globalProviders, ...projectProviders };
+  const mergedModel = { ...record(globalConfig.model), ...record(projectConfig.model) };
+  // A config that describes a single model (Python luban's style) keeps that
+  // model as the default. Adding OpenCode Go there would silently outrank it,
+  // so built-ins are only skipped when the config relies on that single-model
+  // fallback; an explicit provider list or an OpenCode Go selection gets them.
+  const singleModel = text(mergedModel.model, mergedModel.base_url, mergedModel.baseURL);
+  const hasExplicitProviders = Object.keys(explicitProviders).length > 0;
+  const wantsBuiltin = hasExplicitProviders || !singleModel
+    || text(mergedModel.active).toLowerCase().startsWith("opencode-go");
+  const builtins = wantsBuiltin ? builtinProviders() : {};
+  // User providers stay first (and win) so defaults and ordering do not shift;
+  // built-ins are appended only when the user has not defined that provider.
+  const providers: JsonObject = { ...explicitProviders };
+  for (const [name, definition] of Object.entries(builtins)) {
+    if (!(name in explicitProviders)) providers[name] = definition;
   }
-  raw.model = { ...record(globalConfig.model), ...record(projectConfig.model) };
+  raw.providers = providers;
+  raw.model = mergedModel;
   raw.node = { ...record(globalConfig.node), ...record(projectConfig.node) };
   raw.mesh = { ...record(globalConfig.mesh), ...record(projectConfig.mesh) };
   raw.remote = { ...record(globalConfig.remote), ...record(projectConfig.remote) };

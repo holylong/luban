@@ -60,6 +60,17 @@
         "qwen3.8-max",
         "glm5.3-flash"
       ]
+    },
+    "opencode-go": {
+      "api_key_env": "OPENCODE_API_KEY",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "headers": { "x-opencode-session": "luban" },
+      "models": {
+        "kimi-k3": { "name": "Kimi K3", "api": "openai" },
+        "qwen3.8-max": { "name": "Qwen3.8 Max", "api": "openai" },
+        "qwen3.8-flash": { "name": "Qwen3.8 Flash", "api": "anthropic" },
+        "gpt-6-luna": { "name": "GPT-6 Luna", "api": "responses" }
+      }
     }
   },
   "contacts": [
