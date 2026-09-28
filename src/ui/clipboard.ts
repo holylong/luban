@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import type { ChatMessage, PendingInput } from "../core/types.js";
 import type { ExecutionEntry } from "./execution-view.js";
 
@@ -5,6 +6,49 @@ import type { ExecutionEntry } from "./execution-view.js";
 export function osc52CopySequence(text: string): string {
   const payload = Buffer.from(text, "utf8").toString("base64");
   return `\x1b]52;c;${payload}\x07`;
+}
+
+/** Clipboard helpers, tried in order: Wayland first, then X11. */
+const CLIPBOARD_COMMANDS: Array<{ command: string; args: string[] }> = [
+  { command: "wl-copy", args: [] },
+  { command: "xclip", args: ["-selection", "clipboard"] },
+  { command: "xsel", args: ["--clipboard", "--input"] },
+];
+
+/** Pipe text into one clipboard helper; resolve true only on a clean exit. */
+function pipeToClipboard(command: string, args: string[], text: string, timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value: boolean) => { if (!settled) { settled = true; resolve(value); } };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, { stdio: ["pipe", "ignore", "ignore"] });
+    } catch {
+      done(false);
+      return;
+    }
+    const timer = setTimeout(() => { child.kill(); done(false); }, timeoutMs);
+    timer.unref?.();
+    child.on("error", () => { clearTimeout(timer); done(false); });
+    child.on("close", (code) => { clearTimeout(timer); done(code === 0); });
+    child.stdin?.on("error", () => { /* EPIPE when the helper died early; close decides. */ });
+    child.stdin?.end(text);
+  });
+}
+
+/**
+ * Write the system clipboard through a native helper.
+ *
+ * OSC 52 alone is not enough on GNOME Terminal: VTE disables clipboard writes
+ * from terminal applications by default, so a copy that "succeeded" over OSC 52
+ * never reaches the user's Ctrl+V. wl-copy/xclip/xsel go straight to the
+ * desktop clipboard and are the path that actually works there.
+ */
+export async function writeSystemClipboard(text: string): Promise<boolean> {
+  for (const { command, args } of CLIPBOARD_COMMANDS) {
+    if (await pipeToClipboard(command, args, text)) return true;
+  }
+  return false;
 }
 
 export function lastAssistantText(messages: ChatMessage[]): string {

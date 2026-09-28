@@ -648,7 +648,9 @@ async function main(): Promise<number> {
       return 2;
     }
     const resume = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
-    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />);
+    // exitOnCtrlC off: Ctrl+C belongs to the app (interrupt a run / copy the
+    // last answer), not to the process. Exit is Ctrl+D or /exit.
+    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { exitOnCtrlC: false });
     await instance.waitUntilExit();
     return 0;
   } catch (error) {

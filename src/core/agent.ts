@@ -26,11 +26,42 @@ import type {
   LubanConfig,
   PendingInput,
   RunResult,
+  ToolCall,
   ToolDefinition,
 } from "./types.js";
 
 export type Approval = "once" | "tool" | "always" | "deny";
 export type ApproveTool = (tool: ToolDefinition, args: Record<string, unknown>) => Promise<Approval>;
+
+/** Some providers return familiar tool aliases despite receiving our schemas. */
+const TOOL_ALIASES: Record<string, string> = {
+  glob: "glob_files", grep: "grep_files", read: "read_file",
+  write: "write_file", edit: "edit_file", ls: "list_dir",
+};
+
+function normalizeToolCall(call: ToolCall, tools: Map<string, ToolDefinition>): ToolCall {
+  const requested = call.function.name.trim();
+  if (tools.has(requested)) return call;
+  const folded = [...tools.keys()].filter((name) => name.toLowerCase() === requested.toLowerCase());
+  const name = folded.length === 1 ? folded[0]! : TOOL_ALIASES[requested.toLowerCase()];
+  if (!name || !tools.has(name)) return call;
+  let args = call.function.arguments;
+  if (["read_file", "write_file", "edit_file"].includes(name)) {
+    try {
+      const parsed = JSON.parse(args || "{}");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const values = parsed as Record<string, unknown>;
+        if (values.path === undefined && values.file_path !== undefined) values.path = values.file_path;
+        if (name === "edit_file") {
+          if (values.old_text === undefined && values.old_string !== undefined) values.old_text = values.old_string;
+          if (values.new_text === undefined && values.new_string !== undefined) values.new_text = values.new_string;
+        }
+        args = JSON.stringify(values);
+      }
+    } catch { /* Invalid JSON is reported by the normal tool-call validator. */ }
+  }
+  return { ...call, function: { ...call.function, name, arguments: args } };
+}
 
 function wildcard(pattern: string, value: string): boolean {
   const source = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
@@ -581,7 +612,8 @@ export class AgentRunner {
       }
       signal.throwIfAborted();
       const ids = new Set<string>();
-      const toolCalls = completion.toolCalls.map((call) => {
+      const toolCalls = completion.toolCalls.map((original) => {
+        const call = normalizeToolCall(original, this.tools);
         const id = call.id && !ids.has(call.id) ? call.id : `call-${randomUUID()}`;
         ids.add(id);
         return { ...call, id };

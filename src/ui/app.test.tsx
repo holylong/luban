@@ -10,6 +10,41 @@ import { loadConfig } from "../core/config.js";
 import { SessionStore } from "../core/session-store.js";
 import { App } from "./app.js";
 
+it("keeps the composer visible when a terminal reconnects at a smaller size", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-resize-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const config = loadConfig({ workspace });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 120, rows: 40, isTTY: true });
+  let frame = "";
+  stdout.on("data", data => {
+    const text = stripVTControlCharacters(String(data));
+    if (text.includes("Auto")) frame = text;
+  });
+  const app = render(<App config={config} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: true, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame, { timeout: 5000 }).toContain("Message luban");
+    stdout.rows = 18;
+    stdout.columns = 80;
+    stdout.emit("resize");
+    await expect.poll(() => frame.split("\n").length).toBeLessThanOrEqual(19);
+    expect(frame).toContain("Message luban");
+    stdin.write("restored input");
+    await expect.poll(() => frame).toContain("restored input");
+  } finally {
+    app.unmount();
+    app.cleanup();
+    if (oldHome === undefined) delete process.env.LUBAN_HOME;
+    else process.env.LUBAN_HOME = oldHome;
+  }
+}, 10000);
+
 it("keeps the live composer on screen and pages inside a restored long reply", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-ui-"));
   const workspace = join(home, "workspace");
