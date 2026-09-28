@@ -27,7 +27,8 @@ import type {
   VerificationRecord,
 } from "../core/types.js";
 import { HighlightedCodeLine } from "./markdown.js";
-import { activeThemeId, applyTheme, findTheme, THEMES, theme, themeHasOverrides, themeIds } from "./theme.js";
+import { activeTheme, activeThemeId, applyTheme, findTheme, THEMES, theme, themeHasOverrides, themeIds } from "./theme.js";
+import { sessionColor } from "./session-color.js";
 import { toolLabel } from "./tool-labels.js";
 import { Spinner, ThinkingLine, type LivePhase } from "./thinking-line.js";
 import { currentStreamLine } from "./transcript.js";
@@ -427,16 +428,43 @@ function Welcome({ config, mesh }: { config: LubanConfig; mesh?: MeshRuntime }) 
   );
 }
 
-function CommandHints({ input }: { input: string }) {
+export function commandMatches(input: string): typeof COMMANDS[number][] {
+  if (!input.startsWith("/") || /\s/u.test(input)) return [];
+  const needle = input.toLowerCase();
+  const prefix = COMMANDS.filter(([name]) => name.startsWith(needle));
+  const rest = needle.length > 2
+    ? COMMANDS.filter(([name]) => !name.startsWith(needle) && name.includes(needle.slice(1)))
+    : [];
+  return [...prefix, ...rest];
+}
+
+export function argumentMatches(input: string): string[] {
+  const match = /^(\/\S+)\s+(\S*)$/u.exec(input);
+  if (!match) return [];
+  const command = match[1]!.toLowerCase();
+  const options = command === "/mode" ? MODES
+    : command === "/permissions" ? ["ask", "edits", "allow"]
+      : command === "/theme" ? THEMES.map((item) => item.id)
+        : command === "/sync" ? ["push", "pull"] : [];
+  return options.filter((option) => option.startsWith(match[2]!.toLowerCase()));
+}
+
+function CommandHints({ input, index }: { input: string; index: number }) {
   if (!input.startsWith("/")) return null;
   if (!input.includes(" ")) {
-    const matches = COMMANDS.filter(([name]) => name.startsWith(input.toLowerCase())).slice(0, 4);
+    const matches = commandMatches(input);
     if (!matches.length) return null;
+    const visibleRows = 8;
+    const start = Math.min(Math.max(0, index - Math.floor(visibleRows / 2)), Math.max(0, matches.length - visibleRows));
     return (
       <Box flexDirection="column" backgroundColor={theme.panel} paddingX={2} paddingY={1} marginX={1}>
-        <Text color={theme.dim}>COMMANDS · Tab 补全</Text>
-        {matches.map(([name, description]) => (
-          <Text key={name}><Text color={theme.primary}>{name.padEnd(12)}</Text><Text color={theme.muted}>{description}</Text></Text>
+        <Text color={theme.dim}>命令 · ↑↓ 选择 · Tab 补全 · {Math.min(index + 1, matches.length)}/{matches.length}</Text>
+        {matches.slice(start, start + visibleRows).map(([name, description], offset) => (
+          <Box key={name} backgroundColor={start + offset === index ? theme.selected : undefined}>
+            <Text color={start + offset === index ? theme.accent : theme.dim}>{start + offset === index ? "› " : "  "}</Text>
+            <Text color={theme.primary} bold={start + offset === index}>{name.padEnd(14)}</Text>
+            <Text color={theme.muted}>{description}</Text>
+          </Box>
         ))}
       </Box>
     );
@@ -444,9 +472,14 @@ function CommandHints({ input }: { input: string }) {
   const command = input.slice(0, input.search(/\s/u)).toLowerCase();
   const usage = COMMAND_USAGE[command];
   if (!usage) return null;
+  const options = argumentMatches(input);
+  const visibleRows = 8;
+  const start = Math.min(Math.max(0, index - Math.floor(visibleRows / 2)), Math.max(0, options.length - visibleRows));
   return (
-    <Box backgroundColor={theme.panel} paddingX={2} paddingY={1} marginX={1}>
-      <Text color={theme.dim}>用法 · </Text><Text color={theme.primary}>{usage}</Text>
+    <Box flexDirection="column" backgroundColor={theme.panel} paddingX={2} paddingY={1} marginX={1}>
+      <Text><Text color={theme.dim}>用法 · </Text><Text color={theme.primary}>{usage}</Text></Text>
+      {options.length ? <Text color={theme.dim}>↑↓ 选择 · Tab 补全参数 · {Math.min(index + 1, options.length)}/{options.length}</Text> : null}
+      {options.slice(start, start + visibleRows).map((option, offset) => <Text key={option} backgroundColor={start + offset === index ? theme.selected : undefined} color={start + offset === index ? theme.accent : theme.muted}>{start + offset === index ? "› " : "  "}{option}</Text>)}
     </Box>
   );
 }
@@ -467,27 +500,36 @@ function AtHints({ input, files }: { input: string; files: string[] }) {
   );
 }
 
-function SelectDialog({
+export function SelectDialog({
   title,
   rows,
   index,
   query,
+  activeKey,
 }: {
   title: string;
-  rows: Array<{ key: string; title: string; detail: string }>;
+  rows: Array<{ key: string; title: string; detail: string; project?: string; date?: string; turns?: number; color?: string }>;
   index: number;
   query?: string;
+  activeKey?: string;
 }) {
+  const visibleRows = 12;
+  const start = Math.min(Math.max(0, index - Math.floor(visibleRows / 2)), Math.max(0, rows.length - visibleRows));
   return (
     <Box flexDirection="column" backgroundColor={theme.panel} paddingX={2} paddingY={1} marginX={2}>
-      <Text color={theme.primary} bold>{title}{query ? <Text color={theme.muted}> · filter: {query}</Text> : null}</Text>
-      {rows.slice(0, 12).map((row, rowIndex) => (
-        <Box key={row.key} backgroundColor={rowIndex === index ? theme.selected : undefined} paddingX={1}>
-          <Text color={rowIndex === index ? theme.accent : theme.dim}>{rowIndex === index ? "› " : "  "}</Text>
-          <Text color={rowIndex === index ? theme.primary : theme.muted} bold={rowIndex === index}>{row.title}</Text>
-          <Text color={theme.muted}>  {row.detail}</Text>
+      <Text color={theme.primary} bold>{title}<Text color={theme.dim}> · {rows.length} 条</Text>{query ? <Text color={theme.muted}> · filter: {query}</Text> : null}</Text>
+      {start > 0 ? <Text color={theme.dim}>  ↑ 还有 {start} 条</Text> : null}
+      {rows.slice(start, start + visibleRows).map((row, offset) => (
+        <Box key={row.key} backgroundColor={start + offset === index ? theme.selected : undefined} paddingX={1}>
+          <Text color={start + offset === index ? theme.accent : theme.dim}>{start + offset === index ? "› " : "  "}</Text>
+          <Text color={row.color ?? theme.primary} bold={start + offset === index || row.key === activeKey}>{row.title}</Text>
+          {row.key === activeKey ? <Text color={theme.green}> ●当前</Text> : null}
+          {row.project ? <Text color={row.color ?? theme.muted}>  {row.project}</Text> : null}
+          <Text color={theme.dim}>  {row.date ?? row.detail}</Text>
+          {row.turns !== undefined ? <Text color={theme.yellow}>  {row.turns}轮</Text> : null}
         </Box>
       ))}
+      {start + visibleRows < rows.length ? <Text color={theme.dim}>  ↓ 还有 {rows.length - start - visibleRows} 条</Text> : null}
       {!rows.length ? <Text color={theme.dim}>无匹配 · 退格修改过滤</Text> : null}
       <Box marginTop={1}><Text color={theme.dim}>↑↓ navigate · enter select · esc close · 直接输入过滤</Text></Box>
     </Box>
@@ -501,6 +543,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const [mode, setMode] = useState<AgentMode>("auto");
   const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages(initialConfig.workspace, initialConfig.model.name, initialConfig.planning));
   const [input, setInput] = useState("");
+  const [commandIndex, setCommandIndex] = useState(0);
   const [running, setRunning] = useState(false);
   const [showPlan, setShowPlan] = useState(true);
   // Reads/searches start collapsed; edits always retain their inline diffs.
@@ -1782,10 +1825,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       else if (key.escape) { setDialog(null); setDialogQuery(""); }
       else if (key.return) {
         if (dialog.type === "models") {
-          const target = visibleModels[dialog.index] ?? config.models[dialog.index]!;
+          const target = visibleModels[dialog.index];
           if (target) switchModel(target);
         } else {
-          const record = visibleSessions[dialog.index] ?? sessions[dialog.index]!;
+          const record = visibleSessions[dialog.index];
           if (record) {
             sessionRef.current = record;
             setMessages(record.messages);
@@ -1826,6 +1869,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         : "Mouse off · 现在可直接拖选复制文本 · /copy 复制上次回答 · Ctrl+Y 恢复滚轮");
       return;
     }
+    const commandOptions = commandMatches(input);
+    const argumentOptions = argumentMatches(input);
+    const completionCount = commandOptions.length || argumentOptions.length;
+    if (!dialog && !approval && !showHelp && completionCount && (key.upArrow || key.downArrow)
+      && layoutInput(input, input.length, inputWidth, inputMaxRows).total === 1) {
+      setCommandIndex((current) => (current + (key.upArrow ? -1 : 1) + completionCount) % completionCount);
+      return;
+    }
     if (!dialog && !approval && !showHelp && key.upArrow) {
       // A multi-line value uses the arrows to move the cursor instead.
       if (layoutInput(input, input.length, inputWidth, inputMaxRows).total > 1 || !inputHistory.length) return;
@@ -1862,9 +1913,18 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       return;
     }
     if (!running && key.ctrl && character === "o") { setDialogQuery(""); void openSessions(); return; }
-    if (!running && key.tab && input.startsWith("/") && !input.includes(" ")) {
-      const match = COMMANDS.find(([name]) => name.startsWith(input.toLowerCase()));
-      if (match) setInput(match[0]);
+    if (key.tab && !key.shift && commandOptions.length) {
+      const match = commandOptions[Math.min(commandIndex, commandOptions.length - 1)];
+      if (match) {
+        setInput(input.toLowerCase() === match[0] && COMMAND_USAGE[match[0]] ? `${match[0]} ` : match[0]);
+        setCommandIndex(0);
+      }
+      return;
+    }
+    if (key.tab && !key.shift && argumentOptions.length) {
+      const option = argumentOptions[Math.min(commandIndex, argumentOptions.length - 1)];
+      if (option) setInput(input.replace(/\S*$/u, option));
+      setCommandIndex(0);
       return;
     }
     if (!running && key.tab && atToken(input) !== null) {
@@ -1879,7 +1939,13 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const dialogNeedle = dialogQuery.trim().toLowerCase();
   const filterDialogRows = <T extends { title: string; detail: string }>(items: T[]): T[] =>
     dialogNeedle ? items.filter((item) => `${item.title} ${item.detail}`.toLowerCase().includes(dialogNeedle)) : items;
-  const sessionRows = filterDialogRows(sessions.map((record) => ({ key: record.id, title: record.title, detail: `${record.project} · ${record.updatedAt.slice(0, 16).replace("T", " ")}` })));
+  const sessionRows = filterDialogRows(sessions.map((record, index) => ({
+    key: record.id, title: record.title, project: record.project,
+    color: sessionColor(index, activeTheme().mode),
+    date: record.updatedAt.slice(0, 16).replace("T", " "),
+    turns: record.messages.filter((message) => message.role === "user").length,
+    detail: `${record.project} · ${record.updatedAt.slice(0, 16).replace("T", " ")}`,
+  })));
   const modelRows = filterDialogRows(config.models.map((model) => ({ key: model.id, title: model.name, detail: model.id })));
   const rows = stdout.rows || 30;
   const narrow = (stdout.columns || 80) < 110;
@@ -1990,7 +2056,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         justifyContent={dialog ? "flex-start" : "flex-end"}
       >
         {dialog?.type === "models" ? <SelectDialog title="Models" rows={modelRows} index={Math.min(dialog.index, Math.max(0, modelRows.length - 1))} query={dialogQuery} /> : null}
-        {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} /> : null}
+        {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} activeKey={sessionRef.current.id} /> : null}
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
         {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} /> : null}
@@ -2071,7 +2137,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         </Box>
       ) : null}
       {!dialog && showHelp ? <HelpPanel /> : null}
-      <CommandHints input={input} />
+      {!dialog && !approval && !showHelp ? <CommandHints input={input} index={commandIndex} /> : null}
       {!dialog ? <AtHints input={input} files={workspaceFiles} /> : null}
       <Box flexDirection="column" backgroundColor={theme.panel} flexShrink={0}>
         <Box backgroundColor={theme.element} paddingX={2} paddingY={1} alignItems="flex-start">
@@ -2079,7 +2145,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           <Text color={!dialog && !approval && !showHelp ? theme.accent : theme.dim}>{!dialog && !approval && !showHelp ? " ❯ " : " · "}</Text>
           <TextArea
             value={input}
-            onChange={(value) => { setInput(stripMouseReports(value)); setHistoryIndex(null); }}
+            onChange={(value) => { setInput(stripMouseReports(value)); setHistoryIndex(null); setCommandIndex(0); }}
             onSubmit={(value) => { void submit(value); }}
             focus={!dialog && !approval && !showHelp}
             placeholder={running ? "补充指令 / /queue 排队 / 只读命令即时执行（/status /models…）· Esc 中断" : "Message luban…（Ctrl+J 换行 · @ 文件 · / 命令）"}

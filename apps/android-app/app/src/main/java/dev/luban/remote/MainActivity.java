@@ -1,8 +1,10 @@
 package dev.luban.remote;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -21,6 +23,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -30,10 +33,13 @@ public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(5, 7, 10);
     private static final int FG = Color.rgb(235, 240, 245);
     private static final int MUTED = Color.rgb(151, 160, 170);
+    private static final int ACCENT = Color.rgb(105, 210, 245);
     private LinearLayout root;
+    private ConnectionHistory history;
     private WebView web;
     private TextView status;
     private Uri origin;
+    private String pendingAddress;
     private String mainFrameHttpError;
 
     @Override public void onCreate(Bundle state) {
@@ -56,8 +62,11 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(BG);
         frame.addView(root, new FrameLayout.LayoutParams(-1, -1));
         setContentView(frame);
+        history = new ConnectionHistory(getPreferences(MODE_PRIVATE));
+        java.util.List<ConnectionHistory.Record> recent = history.load();
         String saved = getPreferences(MODE_PRIVATE).getString(PREF_URL, "");
-        if (saved.isEmpty()) showSetup("");
+        if (!recent.isEmpty()) open(recent.get(0).launchUrl);
+        else if (saved.isEmpty()) showSetup("");
         else open(saved);
     }
 
@@ -81,14 +90,22 @@ public final class MainActivity extends Activity {
 
     private void showSetup(String error) {
         root.removeAllViews();
-        root.setPadding(dp(20), dp(28), dp(20), dp(16));
+        if (web != null) { web.stopLoading(); web.destroy(); web = null; }
+        root.setPadding(0, 0, 0, 0);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(28), dp(20), dp(16));
+        scroll.addView(form);
         TextView heading = text("luban 遥控", 25, FG);
         heading.setTypeface(null, Typeface.BOLD);
-        root.addView(heading);
-        TextView help = text("输入中继打印的“手机访问链接”，或本机 Web 地址。令牌链接只需输入一次。", 14, MUTED);
+        form.addView(heading);
+        TextView help = text("输入中继打印的“手机访问链接”，或点击下方记录快速重连。", 14, MUTED);
         LinearLayout.LayoutParams helpParams = new LinearLayout.LayoutParams(-1, -2);
         helpParams.topMargin = dp(14);
-        root.addView(help, helpParams);
+        form.addView(help, helpParams);
         EditText address = new EditText(this);
         address.setSingleLine(true);
         address.setTextSize(15);
@@ -99,7 +116,7 @@ public final class MainActivity extends Activity {
         address.setText(getPreferences(MODE_PRIVATE).getString(PREF_URL, ""));
         LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(-1, -2);
         addressParams.topMargin = dp(24);
-        root.addView(address, addressParams);
+        form.addView(address, addressParams);
         Button connect = button("连接", v -> {
             String value = address.getText().toString().trim();
             Uri parsed = Uri.parse(value);
@@ -110,15 +127,65 @@ public final class MainActivity extends Activity {
             }
             open(value);
         });
-        root.addView(connect);
+        form.addView(connect);
         if (!error.isEmpty()) {
             TextView note = text(error, 13, Color.rgb(255, 145, 145));
-            root.addView(note);
+            form.addView(note);
+        }
+        java.util.List<ConnectionHistory.Record> recent = history.load();
+        if (!recent.isEmpty()) {
+            TextView recentHeading = text("最近连接", 17, FG);
+            recentHeading.setTypeface(null, Typeface.BOLD);
+            LinearLayout.LayoutParams headingParams = new LinearLayout.LayoutParams(-1, -2);
+            headingParams.topMargin = dp(28);
+            headingParams.bottomMargin = dp(8);
+            form.addView(recentHeading, headingParams);
+            for (ConnectionHistory.Record record : recent) {
+                LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(14), dp(10), dp(8), dp(10));
+                GradientDrawable background = new GradientDrawable();
+                background.setColor(Color.rgb(18, 24, 32));
+                background.setCornerRadius(dp(12));
+                row.setBackground(background);
+                LinearLayout labels = new LinearLayout(this);
+                labels.setOrientation(LinearLayout.VERTICAL);
+                Uri labelUri = Uri.parse(record.displayUrl);
+                String node = labelUri.getQueryParameter("node");
+                String host = labelUri.getHost() == null ? record.displayUrl : labelUri.getHost();
+                TextView name = text(host + (node == null ? "" : " · " + node), 15, ACCENT);
+                name.setSingleLine(true);
+                name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                labels.addView(name);
+                TextView url = text(record.displayUrl, 12, MUTED);
+                url.setSingleLine(true);
+                url.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+                labels.addView(url);
+                row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+                row.setOnClickListener(v -> open(record.launchUrl));
+                Button remove = button("删除", v -> new AlertDialog.Builder(this)
+                        .setMessage("删除这条连接记录？")
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("删除", (dialog, which) -> {
+                            if (!history.forget(record.displayUrl)) {
+                                Toast.makeText(this, "删除失败，请重试", Toast.LENGTH_SHORT).show();
+                                return;
+                            }
+                            if (record.displayUrl.equals(getPreferences(MODE_PRIVATE).getString(PREF_URL, ""))) {
+                                getPreferences(MODE_PRIVATE).edit().remove(PREF_URL).apply();
+                            }
+                            showSetup("");
+                        }).show());
+                row.addView(remove);
+                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2);
+                rowParams.bottomMargin = dp(8);
+                form.addView(row, rowParams);
+            }
         }
         TextView hint = text("HTTPS 使用系统受信证书；自签证书须先在 Android 设置中安装 CA。", 13, MUTED);
         LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(-1, -2);
         hintParams.topMargin = dp(18);
-        root.addView(hint, hintParams);
+        form.addView(hint, hintParams);
     }
 
     private static int port(Uri uri) {
@@ -134,8 +201,9 @@ public final class MainActivity extends Activity {
     private void open(String address) {
         Uri requested = Uri.parse(address);
         origin = requested;
+        pendingAddress = address;
         mainFrameHttpError = null;
-        boolean freshLogin = "/login".equals(requested.getPath()) && requested.getQueryParameter("token") != null;
+        boolean freshLogin = requested.getQueryParameter("token") != null;
         if (freshLogin) {
             // A prior same-origin cookie can make a failed token link look like
             // a successful connection to the old node. Start a new login cleanly.
@@ -150,7 +218,7 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(0, -2, 1);
         header.addView(status, statusParams);
         header.addView(button("刷新", v -> web.reload()));
-        header.addView(button("地址", v -> showSetup("")));
+        header.addView(button("连接记录", v -> showSetup("")));
         root.addView(header, new LinearLayout.LayoutParams(-1, dp(50)));
         if (web != null) {
             web.stopLoading();
@@ -171,31 +239,59 @@ public final class MainActivity extends Activity {
                 Toast.makeText(MainActivity.this, "已阻止跳转到其他服务器", Toast.LENGTH_SHORT).show();
                 return true;
             }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                if (view != web) return;
+                // An earlier 401 belongs to its navigation, not to a later
+                // successful login redirect or a manual reload.
+                mainFrameHttpError = null;
+                if (status != null) status.setText("连接中 · " + origin.getHost());
+            }
             @Override public void onPageFinished(WebView view, String url) {
+                if (view != web) return;
                 Uri loaded = Uri.parse(url);
                 String cookies = CookieManager.getInstance().getCookie(url);
                 boolean loggedIn = cookies != null && ("luban_token=".equals(cookies) || cookies.startsWith("luban_token=") || cookies.contains("; luban_token="));
-                if (sameOrigin(loaded) && "/m/".equals(loaded.getPath()) && loggedIn) {
+                boolean consoleReady = mainFrameHttpError == null && sameOrigin(loaded)
+                        && "/m/".equals(loaded.getPath()) && loggedIn;
+                if (consoleReady) {
                     // /login exchanges the one-time token for an HttpOnly cookie.
-                    // Keep only the clean console address in app preferences.
-                    getPreferences(MODE_PRIVATE).edit().putString(PREF_URL, loaded.buildUpon().clearQuery().build().toString()).apply();
+                    // Show a token-free address. The reconnect link itself stays encrypted.
+                    Uri.Builder clean = loaded.buildUpon().clearQuery().fragment(null);
+                    String node = loaded.getQueryParameter("node");
+                    if (node != null && !node.isEmpty()) clean.appendQueryParameter("node", node);
+                    String displayUrl = clean.build().toString();
+                    String reconnectUrl = pendingAddress != null ? pendingAddress : displayUrl;
+                    if (!history.remember(reconnectUrl, displayUrl)) {
+                        Toast.makeText(MainActivity.this, "连接成功，但保存记录失败", Toast.LENGTH_SHORT).show();
+                    }
+                    getPreferences(MODE_PRIVATE).edit().putString(PREF_URL, displayUrl).apply();
                     CookieManager.getInstance().flush();
                     view.clearHistory();
                 }
-                if (status != null && mainFrameHttpError == null) status.setText(loggedIn ? "已连接 · " + origin.getHost() : "未登录 · 点击地址输入令牌");
+                if (status != null && mainFrameHttpError == null) {
+                    status.setText(consoleReady ? "已连接 · " + origin.getHost() : "未登录 · 点击连接记录输入令牌");
+                }
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse response) {
+                if (view != web) return;
                 if (request.isForMainFrame()) {
                     mainFrameHttpError = "HTTP " + response.getStatusCode();
                     if (status != null) status.setText("连接失败 · " + mainFrameHttpError + " · 检查令牌或稍后重试");
                 }
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame() && status != null) status.setText("连接失败 · 点击刷新重试");
+                if (view != web) return;
+                if (request.isForMainFrame()) {
+                    mainFrameHttpError = "网络错误";
+                    if (status != null) status.setText("连接失败 · 点击刷新重试");
+                }
             }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
                 handler.cancel();
-                if (status != null) status.setText("证书不受信任 · 请安装 CA 或更换地址");
+                if (view == web) {
+                    mainFrameHttpError = "证书错误";
+                    if (status != null) status.setText("证书不受信任 · 请安装 CA 或更换地址");
+                }
             }
         });
         root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -204,9 +300,14 @@ public final class MainActivity extends Activity {
                 ? requested.buildUpon().path("/m/").build().toString() : address;
         if (freshLogin) {
             WebView target = web;
-            CookieManager.getInstance().removeAllCookies(removed -> {
-                CookieManager.getInstance().flush();
-                target.post(() -> { if (web == target) target.loadUrl(destination); });
+            CookieManager cookies = CookieManager.getInstance();
+            String cookieOrigin = requested.buildUpon().path("/").clearQuery().fragment(null).build().toString();
+            // Clear only this server's old login. Other saved servers keep their cookies.
+            cookies.setCookie(cookieOrigin, "luban_token=; Path=/; Max-Age=0", ignored -> {
+                cookies.setCookie(cookieOrigin, "luban_node=; Path=/; Max-Age=0", ignoredNode -> {
+                    cookies.flush();
+                    target.post(() -> { if (web == target) target.loadUrl(destination); });
+                });
             });
         } else {
             web.loadUrl(destination);
