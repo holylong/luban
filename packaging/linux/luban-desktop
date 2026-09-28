@@ -1,3 +1,4 @@
 #!/bin/sh
-cd "$HOME" || exit 1
-exec /usr/bin/luban
+export LUBAN_NODE_BIN=/opt/luban-desktop/node
+export LUBAN_CLI=/opt/luban-desktop/app/dist/cli.js
+exec /opt/luban-desktop/electron/electron /opt/luban-desktop/desktop "$@"

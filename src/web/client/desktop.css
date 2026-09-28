@@ -1,0 +1,46 @@
+.desktop-app { display: grid; grid-template-columns: 250px minmax(300px, 1fr) minmax(360px, 33%); grid-template-rows: minmax(0, 1fr) 24px; width: 100%; height: 100%; background: var(--bg); }
+.desktop-explorer, .desktop-editor, .desktop-agent { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.desktop-explorer { background: var(--side); border-right: 1px solid var(--line); }
+.desktop-editor { background: var(--bg); }
+.desktop-agent { border-left: 1px solid var(--line); }
+.desktop-brand { height: 54px; padding: 0 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+.desktop-mark { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; background: var(--fg); color: var(--bg); font-weight: 900; }
+.desktop-version { margin-left: auto; color: var(--dim); font-size: 11px; }
+.desktop-project { padding: 12px 12px 8px; display: grid; gap: 5px; }
+.desktop-project label { color: var(--dim); font-size: 11px; letter-spacing: .08em; }
+.desktop-project select { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; }
+.desktop-explorer-tabs { display: flex; padding: 0 8px; border-bottom: 1px solid var(--line); }
+.desktop-explorer-tabs button { flex: 1; padding: 9px 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; }
+.desktop-explorer-tabs button.active { color: var(--fg); border-bottom-color: var(--blue); }
+.desktop-section { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 12px; color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.desktop-section button { border: 0; background: transparent; color: var(--muted); font-size: 17px; }
+.desktop-explorer-scroll { flex: 1; overflow: auto; padding: 3px 0 16px; }
+.desktop-file { display: flex; align-items: center; gap: 5px; width: 100%; height: 27px; border: 0; background: transparent; color: var(--muted); text-align: left; white-space: nowrap; font: 12px var(--mono); }
+.desktop-file:hover, .desktop-file.active, .desktop-list-row:hover, .desktop-list-row.active { background: var(--panel-2); color: var(--fg); }
+.desktop-chevron { width: 12px; flex: none; font-size: 17px; text-align: center; }
+.desktop-file-icon { width: 13px; flex: none; color: var(--blue); }
+.desktop-file-name { overflow: hidden; text-overflow: ellipsis; }
+.desktop-muted, .desktop-error { padding: 12px; color: var(--dim); font-size: 12px; }
+.desktop-error { color: var(--red); }
+.desktop-new { width: calc(100% - 16px); margin: 7px 8px; padding: 8px; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.desktop-list-row { display: grid; gap: 3px; width: 100%; padding: 8px 12px; text-align: left; border: 0; background: transparent; color: var(--fg); }
+.desktop-list-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-list-row small { color: var(--dim); }
+.desktop-editor-head { height: 54px; padding: 0 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 11px; }
+.desktop-editor-title { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-size: 12px; }
+.desktop-editor .preview-body { min-height: 0; }
+.desktop-editor .code { font-size: 12px; }
+.desktop-editor .code-row { width: max-content; min-width: 100%; grid-template-columns: 48px auto; }
+.desktop-editor .code-row .src { white-space: pre; overflow-wrap: normal; }
+.desktop-agent .top { min-height: 54px; }
+.desktop-agent .top .pills { display: none; }
+.desktop-agent .thread { min-height: 0; flex: 1; }
+.desktop-agent .thread-inner { padding: 14px; }
+.desktop-agent .composer-wrap { flex: none; padding: 8px; }
+.desktop-agent .composer-row .hint { display: none; }
+.desktop-agent .composer select { max-width: 45%; }
+.desktop-approvals { max-height: 40%; overflow: auto; border-bottom: 1px solid var(--line); }
+.desktop-status { grid-column: 1 / -1; background: #172b45; display: flex; align-items: center; gap: 8px; padding: 0 10px; font-size: 11px; }
+.desktop-status span:not(.dot) { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-status span:last-child { margin-left: 12px; }
+@media (max-width: 1100px) { .desktop-app { grid-template-columns: 205px minmax(260px, 1fr) 360px; } }
