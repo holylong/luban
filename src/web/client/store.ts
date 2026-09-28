@@ -133,7 +133,7 @@ export function useWorkbench(): WorkbenchStore {
       setPeers(peerList);
       setJobs(jobList);
       setInbox(inboxList);
-      if (!project) setProjectState(info.projects && Object.keys(info.projects).length ? Object.keys(info.projects)[0]! : "");
+      if (!project) setProjectState(info.project && info.projects?.[info.project] ? info.project : Object.keys(info.projects ?? {})[0] ?? "");
       return jobList;
     } catch {
       setConnected(false);

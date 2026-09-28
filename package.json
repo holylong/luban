@@ -1,7 +1,7 @@
 {
   "name": "luban",
-  "version": "1.16.19",
-  "description": "Standalone Node.js agent with Grok-style TUI, native LAN mesh, jobs, sync, and Web workspace",
+  "version": "1.16.21",
+  "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
     "luban": "dist/cli.js"
@@ -20,10 +20,13 @@
     "web": "tsx src/cli.tsx web",
     "build": "node scripts/build.mjs",
     "start": "node dist/cli.js",
+    "desktop": "electron apps/desktop",
     "test": "vitest run",
     "eval": "tsx src/evals/run.ts",
     "package:vscode": "node scripts/package-vscode.mjs",
     "package:linux": "node scripts/package-linux.mjs",
+    "package:linux:cli": "node scripts/package-linux.mjs cli",
+    "package:linux:desktop": "node scripts/package-linux.mjs desktop",
     "build:web": "tsc -p tsconfig.client.json && vite build",
     "dev:web": "vite",
     "build:server": "tsc -p tsconfig.json",
@@ -40,6 +43,7 @@
     "@types/node": "24.10.1",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.7",
+    "electron": "44.4.5",
     "react-dom": "19.1.9",
     "tsx": "4.20.6",
     "vite": "7.3.6",

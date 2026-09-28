@@ -17,7 +17,7 @@ function useTick(active: boolean): void {
   }, [active]);
 }
 
-function Composer({ store }: { store: ReturnType<typeof useWorkbench> }): React.ReactElement {
+export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }): React.ReactElement {
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [cursor, setCursor] = useState(-1);
@@ -93,7 +93,7 @@ function Composer({ store }: { store: ReturnType<typeof useWorkbench> }): React.
   );
 }
 
-function TopBar({ store }: { store: ReturnType<typeof useWorkbench> }): React.ReactElement {
+export function TopBar({ store }: { store: ReturnType<typeof useWorkbench> }): React.ReactElement {
   const status = store.job?.status;
   const tone = status === "failed" || status === "cancelled" ? "bad" : status === "done" ? "ok" : status === "paused" ? "warn" : "";
   return (
@@ -112,7 +112,7 @@ function TopBar({ store }: { store: ReturnType<typeof useWorkbench> }): React.Re
   );
 }
 
-function Toasts({ store }: { store: ReturnType<typeof useWorkbench> }): React.ReactElement {
+export function Toasts({ store }: { store: ReturnType<typeof useWorkbench> }): React.ReactElement {
   return (
     <div className="toast">
       {store.toasts.map(toast => (
