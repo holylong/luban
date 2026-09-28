@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=luban
+GenericName=AI coding agent
+Comment=Run luban in a terminal
+Exec=/usr/bin/luban-desktop
+TryExec=/usr/bin/luban
+Icon=luban
+Terminal=true
+Categories=Development;
+StartupNotify=false

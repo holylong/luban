@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "1.16.11",
+  "version": "1.16.16",
   "description": "Standalone Node.js agent with Grok-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -23,6 +23,7 @@
     "test": "vitest run",
     "eval": "tsx src/evals/run.ts",
     "package:vscode": "node scripts/package-vscode.mjs",
+    "package:linux": "node scripts/package-linux.mjs",
     "build:web": "tsc -p tsconfig.client.json && vite build",
     "dev:web": "vite",
     "build:server": "tsc -p tsconfig.json",
