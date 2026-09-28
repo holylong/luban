@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,12 +7,33 @@ import { loadConfig, savePermissionMode, savePreferredModel, saveTheme, stripJso
 
 const originalHome = process.env.LUBAN_HOME;
 const originalUserHome = process.env.HOME;
+const originalDataHome = process.env.XDG_DATA_HOME;
+const originalOpencodeEnv = {
+  OPENCODE_API_KEY: process.env.OPENCODE_API_KEY,
+  OPENCODE_GO_API_KEY: process.env.OPENCODE_GO_API_KEY,
+  OPENCODE_AUTH_CONTENT: process.env.OPENCODE_AUTH_CONTENT,
+};
+
+beforeEach(async () => {
+  // Keep the OpenCode credential lookup from reading the developer's real
+  // files: every test starts with an empty data home and no OpenCode env.
+  process.env.XDG_DATA_HOME = await mkdtemp(join(tmpdir(), "luban-xdg-"));
+  delete process.env.OPENCODE_API_KEY;
+  delete process.env.OPENCODE_GO_API_KEY;
+  delete process.env.OPENCODE_AUTH_CONTENT;
+});
 
 afterEach(() => {
   if (originalHome === undefined) delete process.env.LUBAN_HOME;
   else process.env.LUBAN_HOME = originalHome;
   if (originalUserHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalUserHome;
+  if (originalDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = originalDataHome;
+  for (const [name, value] of Object.entries(originalOpencodeEnv)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 describe("config", () => {
@@ -202,5 +223,74 @@ describe("config", () => {
     expect(loadConfig({ workspace }).maxSteps).toBe(1);
     await writeFile(join(home, "config.json"), JSON.stringify({ max_steps: 99999 }));
     expect(loadConfig({ workspace }).maxSteps).toBe(2000);
+  });
+
+  it("auto-registers the OpenCode Go subscription from the environment", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-go-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    process.env.OPENCODE_API_KEY = "sk-go-test";
+    const config = loadConfig({ workspace });
+    expect(config.model.id).toBe("opencode-go/kimi-k3");
+    expect(config.model.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+    expect(config.model.apiKey).toBe("sk-go-test");
+    expect(config.model.api).toBe("openai");
+    expect(config.model.headers).toEqual({ "x-opencode-session": "luban" });
+    // Each model is routed to the protocol the gateway expects.
+    expect(config.models.find((item) => item.id === "opencode-go/qwen3.8-flash")?.api).toBe("anthropic");
+    const luna = config.models.find((item) => item.id === "opencode-go/gpt-6-luna");
+    expect(luna?.api).toBe("responses");
+    // GPT reasoning models reject an explicit temperature.
+    expect(luna?.capabilities.temperature).toBe(false);
+  });
+
+  it("discovers the OpenCode Go key from OpenCode's auth file", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-auth-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    const data = join(process.env.XDG_DATA_HOME!, "opencode");
+    await mkdir(data, { recursive: true });
+    await writeFile(join(data, "auth.json"), JSON.stringify({ "opencode-go": { type: "api", key: "sk-file-test" } }));
+    const model = loadConfig({ workspace }).models.find((item) => item.provider === "opencode-go");
+    expect(model?.apiKey).toBe("sk-file-test");
+  });
+
+  it("adds OpenCode Go alongside configured providers without changing the default", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-alongside-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    process.env.OPENCODE_API_KEY = "sk-go-test";
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      model: { active: "local/coder" },
+      providers: { local: { options: { baseURL: "http://127.0.0.1:9999/v1", apiKey: "sk" }, models: { coder: {} } } },
+    }));
+    const config = loadConfig({ workspace });
+    expect(config.model.id).toBe("local/coder");
+    expect(config.models.some((item) => item.provider === "opencode-go")).toBe(true);
+  });
+
+  it("does not register OpenCode Go without a credential", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-none-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    expect(loadConfig({ workspace }).models.some((item) => item.provider === "opencode-go")).toBe(false);
+  });
+
+  it("lets a user provider override the built-in OpenCode Go definition", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-override-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    process.env.OPENCODE_API_KEY = "sk-go-test";
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { "opencode-go": { base_url: "https://example.test/v1", models: ["custom"] } },
+    }));
+    const config = loadConfig({ workspace });
+    expect(config.models.map((item) => item.model)).toEqual(["custom"]);
+    expect(config.models[0]?.baseUrl).toBe("https://example.test/v1");
   });
 });
