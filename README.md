@@ -105,9 +105,16 @@ Anthropic Messages 与 Responses 三种 API；交互侧提供交互式 TUI、非
 
 ### Linux 桌面安装包（x64 / arm64）
 
-下载对应架构的 `luban_<版本>_<架构>.deb` 后，双击安装，或运行 `sudo apt install ./luban_<版本>_<架构>.deb`。安装包自带 Node.js 和运行依赖，无需先安装 npm。应用菜单中的 **luban** 图标会打开终端版 Agent；也可在任意项目目录运行 `luban`。
+Linux 安装包按用途命名，选对应架构即可：
 
-维护者在 Linux 上运行 `npm run package:linux`，会在 `release/` 生成安装包。桌面图标使用与 Android App 相同的 L 形标识，Web/PWA 图标也保持一致。
+| 文件名 | 安装后入口 | 内容 |
+| --- | --- | --- |
+| `luban-cli_<版本>_<架构>.deb` | `luban` 或 `luban-cli` | 终端 Agent，内置 Node.js |
+| `luban-desktop_<版本>_<架构>.deb` | 应用菜单中的 luban Desktop，或 `luban-desktop` | 图形工作台，内置 Node.js 和 Electron |
+
+双击 `.deb` 安装，或运行 `sudo apt install ./release/luban-cli_<版本>_<架构>.deb` / `sudo apt install ./release/luban-desktop_<版本>_<架构>.deb`。两个安装包可以同时安装。桌面版左侧是项目文件树，中间是带行号和语法高亮的只读代码预览，右侧是 Agent 对话与执行记录。首次启动默认打开家目录；菜单「文件 → 打开项目文件夹」（`Ctrl+O`）可选择项目，之后会记住上次项目。也可以执行 `luban-desktop /path/to/project`。
+
+维护者在 Linux 上运行 `npm ci && npm run package:linux`，会在 `release/` 同时生成两种安装包；也可以单独运行 `npm run package:linux:cli` 或 `npm run package:linux:desktop`。源码开发时可先 `npm run build`，再用 `npm run desktop -- /path/to/project` 启动桌面版。桌面图标使用与 Android App 相同的 L 形标识，Web/PWA 图标也保持一致。
 
 ### 从源码安装
 

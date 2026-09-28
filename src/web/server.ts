@@ -80,7 +80,7 @@ async function workspaceTree(root: string, sub: string): Promise<JsonObject[]> {
   const entries = await readdir(target, { withFileTypes: true });
   const rows: JsonObject[] = [];
   for (const entry of entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
-    if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+    if (entry.name === ".git" || entry.isSymbolicLink()) continue;
     const path = resolve(target, entry.name);
     const itemPath = relative(canonicalRoot, path).split(sep).join("/");
     if (entry.isDirectory()) rows.push({ name: entry.name, path: itemPath, type: "dir", children: [] });

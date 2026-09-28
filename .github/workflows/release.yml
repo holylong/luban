@@ -1,0 +1,61 @@
+name: Publish Linux release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Verify version tag
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          test "${GITHUB_REF_NAME}" = "v${version}"
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build CLI and Desktop packages
+        run: npm run package:linux
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          cli="release/luban-cli_${version}_amd64.deb"
+          desktop="release/luban-desktop_${version}_amd64.deb"
+          test -s "$cli"
+          test -s "$desktop"
+          cat > release-notes.md <<EOF
+          Linux amd64 安装包：
+
+          - **luban-cli_${version}_amd64.deb**：终端版，安装后运行 \`luban\` 或 \`luban-cli\`。
+          - **luban-desktop_${version}_amd64.deb**：图形桌面版，安装后运行 \`luban-desktop\`。
+
+          两个安装包可单独安装，也可同时安装。Desktop 提供项目文件树、代码预览和 Agent 对话。
+          EOF
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$cli" "$desktop" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$cli" "$desktop" --verify-tag --title "luban ${version}" --notes-file release-notes.md
+          fi
+          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -ge 2
+      - name: Record publication for SSH verification
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git notes --ref=release-status add -m "GitHub Release ${GITHUB_REF_NAME} published with CLI and Desktop packages" "$GITHUB_SHA"
+          git push origin refs/notes/release-status

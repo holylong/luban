@@ -104,6 +104,8 @@ describe("LubanWebServer", () => {
     const config = testConfig(root);
     await mkdir(config.workspace, { recursive: true });
     await writeFile(join(config.workspace, "README.md"), "web context\n", "utf8");
+    await writeFile(join(config.workspace, ".gitignore"), "dist\n", "utf8");
+    await mkdir(join(config.workspace, ".git"));
     const mesh = new MeshRuntime(config);
     mesh.setJobRunner(async (job, _signal, log) => {
       log("tool", "read_file: README.md");
@@ -130,7 +132,10 @@ describe("LubanWebServer", () => {
       expect(await inbox.json()).toEqual([{ id: "msg-test", from: "peer", to: "web-node", text: "hello", received_at: 1 }]);
 
       const workspace = await jsonRequest(`${base}api/workspace?project=web-project`);
-      expect(workspace.body.tree).toEqual([{ name: "README.md", path: "README.md", type: "file", size: 12 }]);
+      expect(workspace.body.tree).toEqual([
+        { name: ".gitignore", path: ".gitignore", type: "file", size: 5 },
+        { name: "README.md", path: "README.md", type: "file", size: 12 },
+      ]);
       const escaped = await jsonRequest(`${base}api/workspace?project=web-project&sub=..`);
       expect(escaped.status).toBe(400);
 

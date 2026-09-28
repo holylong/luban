@@ -35,7 +35,7 @@ function Tree({ store }: { store: WorkbenchStore }): React.ReactElement {
   );
 }
 
-function Approvals({ store }: { store: WorkbenchStore }): React.ReactElement | null {
+export function Approvals({ store }: { store: WorkbenchStore }): React.ReactElement | null {
   if (!store.approvals.length) return null;
   return (
     <div className="block">
