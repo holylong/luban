@@ -272,6 +272,23 @@ JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会
 `~/.luban/config.json` 可以由 Python 和 Node 两个版本直接共用。设置了 Mesh token 时，
 所有节点必须使用相同的 `LUBAN_MESH_TOKEN`。
 
+### OpenCode Go
+
+luban 内置 `opencode-go` provider：只要在本机找得到 OpenCode 的凭据（`OPENCODE_API_KEY`
+环境变量，或 OpenCode 在 `$XDG_DATA_HOME/opencode/auth.json`（旧版为 `account.json`）里
+保存的 `opencode-go` key），就会自动注册订阅里的模型，无需手写配置。用 `Ctrl+P`
+选 `opencode-go/kimi-k3` 这类 id 即可，也可以在 `model.active` 里写死。
+
+Go 订阅的模型走同一个 base URL，但分属三种协议：多数是 OpenAI 兼容的
+`chat/completions`，`@ai-sdk/anthropic` 模型（如 `qwen3.8-flash`、`minimax-m3`）走
+Messages，`@ai-sdk/openai` 模型（GPT / Grok / Muse Spark）走 Responses。luban 按模型
+自动选择，配置里给单个模型写 `"api": "anthropic" | "responses" | "openai"` 也能覆盖。
+GPT Luna 这类推理模型不接受显式 `temperature`，内置定义用
+`"capabilities": { "temperature": false }` 标注，luban 会省略该字段；自己配置模型时
+同样可以这样写。请求还需要带上 `x-opencode-session` 头，内置 provider 已自动附上；
+自己配置时照 `config.example.json` 写上即可。要退回自己的 key，直接在 `providers`
+里定义同名 `opencode-go`，它会覆盖内置定义。
+
 ## 日常交互
 
 | 操作 | 作用 |

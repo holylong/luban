@@ -139,7 +139,7 @@ export class OpenAiClient {
       model: this.config.model.model,
       messages: await openAiWireMessages(messages, this.config.workspace),
       max_tokens: options?.maxTokens ?? this.config.maxTokens,
-      temperature: this.config.temperature,
+      ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
       stream: true,
       // OpenAI-compatible servers (e.g. vLLM) omit usage from the stream
       // unless explicitly requested; the TUI token counters depend on it.
@@ -163,6 +163,7 @@ export class OpenAiClient {
             "content-type": "application/json",
             accept: "text/event-stream, application/json",
             ...(this.config.model.apiKey ? { authorization: `Bearer ${this.config.model.apiKey}` } : {}),
+            ...this.config.model.headers,
           },
           body,
           signal: controller.signal,

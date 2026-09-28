@@ -36,6 +36,8 @@ export interface ModelRef {
   baseUrl: string;
   apiKey: string;
   api: "openai" | "anthropic" | "responses";
+  /** Extra request headers a provider requires (e.g. OpenCode Go's session id). */
+  headers?: Record<string, string>;
   capabilities: ModelCapabilities;
 }
 
@@ -44,6 +46,8 @@ export interface ModelCapabilities {
   thinking: boolean;
   tools: boolean;
   responses: boolean;
+  /** Set false for reasoning models that reject an explicit temperature. */
+  temperature?: boolean;
 }
 
 export interface MeshContact {
