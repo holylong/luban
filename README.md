@@ -103,6 +103,14 @@ Anthropic Messages 与 Responses 三种 API；交互侧提供交互式 TUI、非
 
 ## 安装
 
+### Linux 桌面安装包（x64 / arm64）
+
+下载对应架构的 `luban_<版本>_<架构>.deb` 后，双击安装，或运行 `sudo apt install ./luban_<版本>_<架构>.deb`。安装包自带 Node.js 和运行依赖，无需先安装 npm。应用菜单中的 **luban** 图标会打开终端版 Agent；也可在任意项目目录运行 `luban`。
+
+维护者在 Linux 上运行 `npm run package:linux`，会在 `release/` 生成安装包。桌面图标使用与 Android App 相同的 L 形标识，Web/PWA 图标也保持一致。
+
+### 从源码安装
+
 需要 Node.js 20 或更高版本。
 
 ```bash
@@ -630,7 +638,7 @@ WantedBy=default.target
 
 在各自机器上执行 `systemctl --user daemon-reload` 和 `systemctl --user enable --now <对应服务名>`；用 `systemctl --user status <对应服务名>` 检查状态。如需无人登录时自动启动，开启该用户的 systemd linger。手机只访问中继，**不要**把电脑的 `127.0.0.1` 地址填进 APK。
 
-**手机：**在 APK 中输入中继打印的 `https://relay.example.com:8788/login?token=<手机访问令牌>`。首次访问会把令牌换成 HttpOnly Cookie 并进入 `/m/`；之后 App 保存不含令牌的地址，重启可以直接连接。若清除 App 数据、退出登录或更换服务器，需要重新输入完整令牌链接。
+**手机：**在 APK 中输入中继打印的 `https://relay.example.com:8788/login?token=<手机访问令牌>`。首次访问会把令牌换成 HttpOnly Cookie 并进入 `/m/`；之后 App 在本机加密保存最近连接，重启可以直接连接。若清除 App 数据或令牌失效，需要重新输入完整令牌链接。
 
 #### 当前部署：39.105.10.158
 
@@ -664,7 +672,7 @@ adb devices
 adb -s <设备序列号> install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-首次打开 App，在“地址”中输入方案 A 的电脑链接或方案 B 的中继“手机访问”链接，点“连接”。页面上的项目选择器决定任务的工作区；输入指令后可看实时输出、工具调用、任务列表和审批，也可取消或继续任务。点 App 顶部“地址”可更换服务器；再次需要登录时，重新输入带 `?token=` 的完整链接。Android WebView 只信任系统证书和用户明确安装的 CA，证书错误不会被忽略。
+首次打开 App，输入方案 A 的电脑链接或方案 B 的中继“手机访问”链接，点“连接”。连接成功后，点顶部“连接记录”即可查看最近连接；点一条记录即可重连，也能删除过期记录。列表只显示不含令牌的地址，重连链接使用 Android Keystore 加密保存在本机，最多保留 12 条。页面上的项目选择器决定任务的工作区；输入指令后可看实时输出、工具调用、任务列表和审批，也可取消或继续任务。令牌失效时需重新输入完整链接。Android WebView 只信任系统证书和用户明确安装的 CA，证书错误不会被忽略。
 
 调试 APK 适合自用和测试；正式分发需自行配置 Android release 签名。任务和界面由 luban 服务提供，APK 不包含模型；只更新 Web 界面时重新构建并重启服务即可，APK 无需重装。
 

@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /opt/luban/node /opt/luban/app/dist/cli.js "$@"
