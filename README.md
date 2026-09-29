@@ -4,8 +4,12 @@ Node.js/TypeScript 版 luban。它使用 Ink 渲染风格的终端工作台，�
 Python luban 的局域网发现、节点通信、远程任务和工作区同步。
 
 需要 **Node.js 20 或更高版本**。模型侧支持 OpenAI 兼容的 Chat Completions、
-Anthropic Messages 与 Responses 三种 API；交互侧提供交互式 TUI、非交互 `--prompt`
+Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT 订阅账号；交互侧提供交互式 TUI、非交互 `--prompt`
 和浏览器工作台三种入口，共用同一套会话与 Mesh job 存储。
+
+### ChatGPT Plus 登录 Codex
+
+先安装官方 Codex CLI，使 `codex` 在 PATH 中可用。运行 `luban login codex`，在浏览器中用 ChatGPT Plus 账号完成登录。然后运行 `luban --model codex/gpt-6-sol`，或在 TUI 的 `/models` 中先选择 Codex 模型、再选择推理强度（CLI default、Low、Medium、High、Extra high、Max；支持的模型还会列出 Ultra）。TUI 选择会保存为 luban 下次启动的模型和该模型的推理强度。内置模型有 `codex/default`、`codex/gpt-6-astra`、`codex/gpt-6-sol`、`codex/gpt-6-luna`；实际可用性以账号和 Codex CLI 为准。`codex/default` 使用 `~/.codex/config.toml` 中的 `model = "gpt-6-sol"` 等设置，也可以直接指定任何 CLI 支持的模型，例如 `luban --model codex/<模型名>`。推理强度也可在 Codex 配置中写 `model_reasoning_effort = "high"`，或在单次 luban 进程中设置 `LUBAN_CODEX_EFFORT=xhigh`。这个后端复用 Codex CLI 的登录状态，无需 OpenAI API key；登录失效时重新运行 `luban login codex`。当前此后端每次模型调用会启动一次 CLI，回答在调用完成后显示，暂不支持图片附件。
 
 ## 目录
 

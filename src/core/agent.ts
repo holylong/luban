@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { OpenAiClient, type ModelRequestOptions } from "./openai.js";
 import { AnthropicClient } from "./anthropic.js";
 import { ResponsesClient } from "./responses.js";
+import { CodexClient } from "./codex.js";
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactMessages, estimateMessagesTokens } from "./context.js";
 import { isContextOverflowError } from "./model-errors.js";
@@ -254,7 +255,7 @@ export class AgentRunner {
     // The Responses API shares the Chat Completions transport here; provider
     // gateways that require native /responses payloads should set a dedicated
     // baseUrl and file an issue with a recorded request/response pair.
-    this.client = client ?? (config.model.api === "anthropic"
+    this.client = client ?? (config.model.api === "codex" ? new CodexClient(config) : config.model.api === "anthropic"
       ? new AnthropicClient(config)
       : config.model.api === "responses" ? new ResponsesClient(config) : new OpenAiClient(config));
     if (depth < 2) {
