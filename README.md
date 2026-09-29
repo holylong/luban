@@ -11,6 +11,8 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 
 先安装官方 Codex CLI，使 `codex` 在 PATH 中可用。运行 `luban login codex`，在浏览器中用 ChatGPT Plus 账号完成登录。然后运行 `luban --model codex/gpt-6-sol`，或在 TUI 的 `/models` 中先选择 Codex 模型、再选择推理强度（CLI default、Low、Medium、High、Extra high、Max；支持的模型还会列出 Ultra）。TUI 选择会保存为 luban 下次启动的模型和该模型的推理强度。内置模型有 `codex/default`、`codex/gpt-6-astra`、`codex/gpt-6-sol`、`codex/gpt-6-luna`；实际可用性以账号和 Codex CLI 为准。`codex/default` 使用 `~/.codex/config.toml` 中的 `model = "gpt-6-sol"` 等设置，也可以直接指定任何 CLI 支持的模型，例如 `luban --model codex/<模型名>`。推理强度也可在 Codex 配置中写 `model_reasoning_effort = "high"`，或在单次 luban 进程中设置 `LUBAN_CODEX_EFFORT=xhigh`。这个后端复用 Codex CLI 的登录状态，无需 OpenAI API key；登录失效时重新运行 `luban login codex`。当前此后端每次模型调用会启动一次 CLI，回答在调用完成后显示，暂不支持图片附件。
 
+在 TUI 中，`/status` 显示当前模型、会话上下文估计和 ChatGPT Codex 额度剩余比例、重置时间、可用重置卡数量；`/status <peer>` 仍查询 mesh 节点。`/usage` 显示额度和每日 token 活动，也可使用 `/usage weekly`、`/usage cumulative`。运行 `/usage reset` 会先显示确认界面；按 Enter 才向 Codex 尝试使用一张可用重置卡，Esc 取消。请求完成后会重新读取额度。额度、用量和重置卡通过官方 Codex App Server 获取，不读取或复制本地登录令牌。
+
 ## 目录
 
 - [特性总览](#特性总览)
