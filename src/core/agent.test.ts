@@ -14,6 +14,34 @@ function config(workspace: string): LubanConfig {
 }
 
 describe("AgentRunner", () => {
+  it("lets the model correct malformed JSON tool arguments without failing the task", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-invalid-tool-json-"));
+    let calls = 0;
+    let executions = 0;
+    const runner = new AgentRunner(config(workspace), {
+      async complete(messages: ChatMessage[]) {
+        calls += 1;
+        if (calls === 1) return {
+          content: "", usage: { input: 1, output: 1 },
+          toolCalls: [{ id: "bad", type: "function" as const, function: { name: "read_file", arguments: '{"path":"C:\\q"}' } }],
+        };
+        expect(messages.find((message) => message.tool_call_id === "bad")?.content).toContain("TOOL ERROR: invalid JSON arguments");
+        return { content: "recovered", toolCalls: [], usage: { input: 1, output: 1 } };
+      },
+    });
+    runner.tools.set("read_file", { name: "read_file", description: "read", risk: "read", parameters: {}, async execute() { executions++; return "unexpected"; } });
+    try {
+      const result = await runner.run(
+        [...initialMessages(workspace), { role: "user", content: "Read the file" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once",
+      );
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe("recovered");
+      expect(calls).toBe(2);
+      expect(executions).toBe(0);
+    } finally { runner.close(); }
+  });
+
   it("runs provider-style Bash and Glob aliases through the registered tools", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-tool-alias-"));
     await writeFile(join(workspace, "sample.txt"), "hello\n");
