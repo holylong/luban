@@ -9,9 +9,22 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 
 ### ChatGPT Plus 登录 Codex
 
-先安装官方 Codex CLI，使 `codex` 在 PATH 中可用。运行 `luban login codex`，在浏览器中用 ChatGPT Plus 账号完成登录。然后运行 `luban --model codex/gpt-6-sol`，或在 TUI 的 `/models` 中先选择 Codex 模型、再选择推理强度（CLI default、Low、Medium、High、Extra high、Max；支持的模型还会列出 Ultra）。TUI 选择会保存为 luban 下次启动的模型和该模型的推理强度。内置模型有 `codex/default`、`codex/gpt-6-astra`、`codex/gpt-6-sol`、`codex/gpt-6-luna`；实际可用性以账号和 Codex CLI 为准。`codex/default` 使用 `~/.codex/config.toml` 中的 `model = "gpt-6-sol"` 等设置，也可以直接指定任何 CLI 支持的模型，例如 `luban --model codex/<模型名>`。推理强度也可在 Codex 配置中写 `model_reasoning_effort = "high"`，或在单次 luban 进程中设置 `LUBAN_CODEX_EFFORT=xhigh`。这个后端复用 Codex CLI 的登录状态，无需 OpenAI API key；登录失效时重新运行 `luban login codex`。当前此后端每次模型调用会启动一次 CLI，回答在调用完成后显示，暂不支持图片附件。
+先安装官方 Codex CLI，使 `codex` 在 PATH 中可用。运行 `luban login codex`，在浏览器中用 ChatGPT Plus 账号完成登录。新配置可参考 [config.codex.example.json](config.codex.example.json)；如果已有 `~/.luban/config.json`，只需将其中的 `model` 字段改为：
 
-在 TUI 中，`/status` 显示当前模型、会话上下文估计和 ChatGPT Codex 额度剩余比例、重置时间、可用重置卡数量；`/status <peer>` 仍查询 mesh 节点。`/usage` 显示额度和每日 token 活动，也可使用 `/usage weekly`、`/usage cumulative`。运行 `/usage reset` 会先显示确认界面；按 Enter 才向 Codex 尝试使用一张可用重置卡，Esc 取消。请求完成后会重新读取额度。额度、用量和重置卡通过官方 Codex App Server 获取，不读取或复制本地登录令牌。
+```json
+{
+  "model": {
+    "active": "codex/gpt-6-sol",
+    "reasoning_effort": "xhigh"
+  }
+}
+```
+
+`active` 选择模型，`reasoning_effort` 是该模型的二级推理强度，可写 `low`、`medium`、`high`、`xhigh`、`max`，支持的模型还可选 `ultra`；省略时使用 Codex CLI 的默认设置。运行 `luban` 即按配置启动，也可用 `luban --model codex/gpt-6-sol` 临时指定模型。在 TUI 中输入 `/models`，先选择 Codex 模型，再选择推理强度；选择结果会保存到 `~/.luban/node-preferences.json`，供下次启动使用。内置模型有 `codex/default`、`codex/gpt-6-astra`、`codex/gpt-6-sol`、`codex/gpt-6-luna`，实际可用性以账号和 Codex CLI 为准；也可用 `codex/<模型名>` 指定 CLI 支持的其他模型。
+
+`codex/default` 使用 `~/.codex/config.toml` 中的默认模型；未在 luban 中设置 `reasoning_effort` 时，也使用其中的默认推理强度，例如 `model_reasoning_effort = "high"`。`LUBAN_CODEX_EFFORT=xhigh luban` 可覆盖本次进程的推理强度。这个后端复用 Codex CLI 的登录状态，无需 OpenAI API key；登录失效时重新运行 `luban login codex`。当前每次模型调用会启动一次 CLI，回答在调用完成后显示，暂不支持图片附件。
+
+在 TUI 中，`/status` 显示当前模型、会话上下文估计和 ChatGPT Codex 额度剩余比例、重置时间、可用重置卡数量；`/status <peer>` 查询 mesh 节点。`/usage` 显示额度和每日 token 活动，`/usage weekly` 和 `/usage cumulative` 可切换统计周期。`/usage reset` 会先显示确认界面；按 Enter 才尝试使用一张可用重置卡，Esc 取消。请求完成后会重新读取额度。额度、用量和重置卡通过官方 Codex App Server 获取，不读取或复制本地登录令牌。
 
 ## 目录
 
@@ -277,6 +290,8 @@ JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会
 配置优先级：CLI `--model` > `LUBAN_MODEL` > Node 偏好 > `model.active`。
 `~/.luban/config.json` 可以由 Python 和 Node 两个版本直接共用。设置了 Mesh token 时，
 所有节点必须使用相同的 `LUBAN_MESH_TOKEN`。
+完整示例见 [config.example.json](config.example.json)，其中 `model.active` 已选择 Codex；
+只需 Codex 登录和模型设置时，使用 [config.codex.example.json](config.codex.example.json)。
 
 ### OpenCode Go
 
@@ -324,6 +339,9 @@ GPT Luna 这类推理模型不接受显式 `temperature`，内置定义用
 | `/branch [n]` | 分叉当前会话，保留前 n 条非系统消息（工具断点自动修复） |
 | `/theme [名称]` | 切换配色；不带参数打开选择器：`↑`/`↓` 逐行预览（整个界面即时换色，含色块与 `当前` 标记），列表超过一屏时随光标滚动并提示还有多少个配色，`Enter` 确认并写入 `~/.luban/node-preferences.json`，`Esc` 放弃预览恢复原配色。名称支持别名如 `light` / `dark` / `solarized` / `樱花粉` / `酒红` / `梅子紫` |
 | `/settings` | 显示模式、模型、配色、工作区和后端 |
+| `/status` | 查看本地模型、上下文估计、Codex 额度与可用重置卡 |
+| `/usage [daily\|weekly\|cumulative]` | 查看 Codex 额度和对应周期的 token 用量 |
+| `/usage reset` | 确认后尝试使用一张可用的 Codex 重置卡 |
 | `/permissions ask\|edits\|allow` | 切换当前进程的工具确认策略 |
 | `/peers` | 查看自动发现及静态配置的节点 |
 | `/ping <peer>` / `/status <peer>` | 检查节点与远端 worker/job 状态 |
