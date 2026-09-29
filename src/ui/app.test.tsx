@@ -8,7 +8,6 @@ import { render } from "ink";
 import { expect, it } from "vitest";
 import { loadConfig } from "../core/config.js";
 import { SessionStore } from "../core/session-store.js";
-import { osc52CopySequence } from "./clipboard.js";
 import { App } from "./app.js";
 
 it("keeps the composer visible when a terminal reconnects at a smaller size", async () => {
@@ -46,8 +45,8 @@ it("keeps the composer visible when a terminal reconnects at a smaller size", as
   }
 }, 10000);
 
-it("copies only the selected text from a dragged output selection", async () => {
-  const home = await mkdtemp(join(tmpdir(), "luban-select-ui-"));
+it("copies the last answer with Ctrl+Y", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-copy-ui-"));
   const workspace = join(home, "workspace");
   await mkdir(workspace);
   const oldHome = process.env.LUBAN_HOME;
@@ -74,21 +73,13 @@ it("copies only the selected text from a dragged output selection", async () => 
   });
   try {
     await expect.poll(() => frame).toContain("previous answer");
+    // Ctrl+Y is the keyboard copy (opencode-style); selection itself is the
+    // terminal's Shift+drag, so there is no in-app selection mode.
     stdin.write("\u0019");
-    await expect.poll(() => frame).toContain("选择模式");
-    const displayed = frame.split("\n");
-    const row = displayed.findIndex(line => line.includes("previous answer")) + 1;
-    const column = displayed[row - 1]!.indexOf("previous answer") + 1;
-    expect(row).toBeGreaterThan(0);
-    const report = (code: number, x: number, end = "M") => `\u001b[<${code};${x};${row}${end}`;
-    stdin.write(report(0, column));
-    stdin.write(report(32, column + 8));
-    stdin.write(report(0, column + 8, "m"));
-    // A drag across "previous answer" from its first column copies exactly the
-    // first eight cells, and the selection survives in the transcript.
-    await expect.poll(() => raw).toContain(osc52CopySequence("previous"));
-    await expect.poll(() => frame).toMatch(/已复制选中内容|已发送 OSC52/u);
-    expect(frame).toContain("previous answer");
+    await expect.poll(() => raw).toContain("\u001b]52;c;");
+    const payload = /\]52;c;([A-Za-z0-9+/=]+)\u0007/u.exec(raw);
+    expect(Buffer.from(payload![1]!, "base64").toString("utf8")).toContain("previous answer");
+    await expect.poll(() => frame).toMatch(/已复制到系统剪贴板|已发送 OSC52|OSC52 已发送/u);
   } finally {
     app.unmount();
     app.cleanup();
