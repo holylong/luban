@@ -651,7 +651,10 @@ async function main(): Promise<number> {
           workspace: config.workspace,
           projects: mesh.projectMap(),
           relayCa,
-          log: (message) => process.stderr.write(`手机远控：${message}\n`),
+          // Ink patches console, so a background retry line is written above
+          // the frame and the TUI is redrawn. A raw stderr write would move the
+          // cursor behind Ink's back and flicker the whole screen.
+          log: (message) => console.error(`手机远控：${message}`),
         });
         mobileLink = `${normalizedRelayUrl}/login?token=${encodeURIComponent(phoneToken)}`;
         await remoteTunnel.start();
@@ -666,7 +669,10 @@ async function main(): Promise<number> {
     const resume = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
     // exitOnCtrlC off: Ctrl+C belongs to the app (interrupt a run / copy the
     // last answer), not to the process. Exit is Ctrl+D or /exit.
-    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { exitOnCtrlC: false });
+    // incrementalRendering rewrites only the lines that changed; without it Ink
+    // erases and redraws the whole terminal on every streamed token, which
+    // flickers on a full-height TUI.
+    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { exitOnCtrlC: false, incrementalRendering: true });
     await instance.waitUntilExit();
     return 0;
   } catch (error) {

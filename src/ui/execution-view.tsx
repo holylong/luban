@@ -70,7 +70,7 @@ function EditHalf({ cell }: { cell: EditCell }) {
 
 /** Removed text on the left, its replacement on the right, split by a divider. */
 export function SideBySideEditRow({ left, right }: { left: EditCell; right: EditCell }) {
-  return <Box flexShrink={0} flexDirection="row">
+  return <Box flexShrink={0} flexGrow={1} flexDirection="row" overflow="hidden">
     <EditHalf cell={left} />
     <Text color={theme.border}>│</Text>
     <EditHalf cell={right} />

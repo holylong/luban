@@ -27,8 +27,12 @@ describe("side scrollbar", () => {
     expect(oldest.split("\n").filter(Boolean)[0]).toContain("█");
   });
 
-  it("renders nothing for a track too short to be meaningful", () => {
-    expect(renderToString(<ScrollBar window={listWindow(100, 10, 0)} height={1} />, { columns: 1 })).toBe("");
+  it("keeps its column even when the track is too short to be meaningful", () => {
+    // Dropping the column changed the transcript width, which changed the wrap,
+    // which changed the height again — a feedback loop that flickered.
+    const output = renderToString(<ScrollBar window={listWindow(100, 10, 0)} height={1} />, { columns: 1 });
+    expect(output).toContain("│");
+    expect(output).not.toBe("");
   });
 });
 

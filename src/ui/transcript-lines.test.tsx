@@ -38,6 +38,28 @@ describe("physical transcript rows", () => {
     expect(buildTranscript(messages, { ...options, edits })).toHaveLength(1);
   });
 
+  it("keeps both sides of a wide edit visible inside a one-line transcript row", () => {
+    const preview = "Edited a.ts (+1 -1)\n     1 -old code\n     1 +new code";
+    const blocks = buildTranscript(
+      [{ role: "tool" as const, name: "edit_file", tool_call_id: "edit-1", content: preview, editPreview: preview }],
+      { expanded: true, width: 120 },
+    );
+    const rows = transcriptLines(blocks, 120);
+    const output = renderToString(
+      <Box flexDirection="column">
+        {rows.map(row => <Box key={row.id} height={1} flexShrink={0}><TranscriptLineView line={row} /></Box>)}
+      </Box>,
+      { columns: 120 },
+    );
+    // The split row must fill the row width; a content-sized box collapsed the
+    // two halves to nothing and left only the divider, so the code vanished
+    // until Ctrl+Y switched to the plain selectable renderer.
+    const line = output.split("\n").find(text => text.includes("old code"));
+    expect(line).toBeDefined();
+    expect(line).toContain("│");
+    expect(line).toContain("new code");
+  });
+
   it("shows user text literally with an explicit speaker", () => {
     const rows = transcriptLines(buildTranscript([{ role: "user", content: "# heading\n*literal*" }], options), 30);
     expect(rows.map(row => row.text)).toEqual(["你", "  # heading", "  *literal*", ""]);
