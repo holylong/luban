@@ -10,6 +10,7 @@ import { CodexClient } from "./codex.js";
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactMessages, estimateMessagesTokens } from "./context.js";
 import { isContextOverflowError } from "./model-errors.js";
+import { parseToolArguments } from "./json-args.js";
 import { repairToolHistory } from "./history.js";
 import { cleanTitle, hasNameableContent, titlePrompt } from "./session-title.js";
 import { planTools, planVerificationStatus } from "./plan.js";
@@ -49,7 +50,7 @@ function normalizeToolCall(call: ToolCall, tools: Map<string, ToolDefinition>): 
   let args = call.function.arguments;
   if (["read_file", "write_file", "edit_file"].includes(name)) {
     try {
-      const parsed = JSON.parse(args || "{}");
+      const parsed = parseToolArguments(args || "{}");
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const values = parsed as Record<string, unknown>;
         if (values.path === undefined && values.file_path !== undefined) values.path = values.file_path;
@@ -697,7 +698,7 @@ export class AgentRunner {
         let ok = true;
         let run: (() => Promise<string>) | undefined;
         try {
-          const parsed = JSON.parse(call.function.arguments || "{}");
+          const parsed = parseToolArguments(call.function.arguments || "{}");
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("arguments must be an object");
           args = parsed as Record<string, unknown>;
         } catch (error) {

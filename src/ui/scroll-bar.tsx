@@ -45,8 +45,10 @@ export interface ScrollBarProps {
  * the clamped window, so its position always matches what is on screen.
  */
 export function ScrollBar({ window: view, height, measureRef }: ScrollBarProps): React.ReactElement | null {
+  // Always occupy the track's width, even at a tiny height: dropping the column
+  // when it shrank changed the transcript's width, which changed the wrap, which
+  // changed the height again — a layout feedback loop that flickered the screen.
   const track = Math.max(1, Math.trunc(height) || 1);
-  if (track < 2) return null;
   const thumb = scrollbarThumb(view, track);
   return (
     <Box

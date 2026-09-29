@@ -4,6 +4,7 @@ import { finalizeCompletion } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler } from "./openai.js";
 
 import { parseModelEvent, sseData, validateCompletion } from "./sse.js";
+import { parseToolArguments } from "./json-args.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
 
 type JsonObject = Record<string, unknown>;
@@ -15,7 +16,7 @@ function endpoint(baseUrl: string): string {
 
 function parseArguments(value: string): JsonObject {
   try {
-    const parsed = JSON.parse(value || "{}");
+    const parsed = parseToolArguments(value || "{}");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as JsonObject : {};
   } catch { return {}; }
 }
