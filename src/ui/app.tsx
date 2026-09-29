@@ -61,6 +61,15 @@ import { buildCopyText, osc52CopySequence, writeSystemClipboard } from "./clipbo
 import { buildSessionMarkdown, collectExportedEdits, defaultExportFilename, expandExportPath, summarizeEdits } from "./session-export.js";
 
 const MODES: AgentMode[] = ["auto", "agent", "ask"];
+const CODEX_EFFORTS: Array<{ value: ModelRef["reasoningEffort"]; title: string; detail: string }> = [
+  { value: undefined, title: "CLI default", detail: "Use Codex config.toml" },
+  { value: "low", title: "Low", detail: "low" },
+  { value: "medium", title: "Medium", detail: "medium" },
+  { value: "high", title: "High", detail: "high" },
+  { value: "xhigh", title: "Extra high", detail: "xhigh" },
+  { value: "max", title: "Max", detail: "max" },
+  { value: "ultra", title: "Ultra", detail: "ultra" },
+];
 /** Rows per wheel notch when scrolling execution details. */
 const WHEEL_ROWS = 2;
 /** Bounded per-job event buffer: the stream is a view, the session is the record. */
@@ -167,8 +176,9 @@ interface ApprovalRequest {
 }
 
 interface DialogState {
-  type: "models" | "sessions" | "diff" | "verify" | "info" | "export" | "theme";
+  type: "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "export" | "theme";
   index: number;
+  modelId?: string;
   title?: string;
   content?: string;
 }
@@ -905,12 +915,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   }, []);
 
   const switchModel = (model: ModelRef) => {
-    const nextConfig = { ...config, model };
+    const nextConfig = { ...config, model, models: config.models.map((entry) => entry.id === model.id ? model : entry) };
     setConfig(nextConfig);
     swapRunner(() => new AgentRunner(nextConfig, undefined, mesh));
     sessionRef.current.model = model.id;
-    void savePreferredModel(config.home, model.id);
-    setNotice(`Model switched to ${model.id}`);
+    void savePreferredModel(config.home, model.id, model.api === "codex" ? model.reasoningEffort ?? null : undefined);
+    setNotice(`Model switched to ${model.id}${model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}`);
   };
 
   const newSession = (nextMode = mode) => {
@@ -1439,7 +1449,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       return;
     }
     if (command === "/settings") {
-      setNotice(`${mode.toUpperCase()} · ${config.model.id} · permissions ${config.permissionMode} · theme ${activeThemeId()}${themeHasOverrides() ? "(自定义色)" : ""} · ${config.workspace}${mesh ? ` · mesh ${config.mesh.nodeName}:${config.mesh.port}` : " · mesh off"}${config.backendUrl ? ` · backend ${config.backendUrl}` : ""}`);
+      setNotice(`${mode.toUpperCase()} · ${config.model.id}${config.model.reasoningEffort ? ` · ${config.model.reasoningEffort}` : ""} · permissions ${config.permissionMode} · theme ${activeThemeId()}${themeHasOverrides() ? "(自定义色)" : ""} · ${config.workspace}${mesh ? ` · mesh ${config.mesh.nodeName}:${config.mesh.port}` : " · mesh off"}${config.backendUrl ? ` · backend ${config.backendUrl}` : ""}`);
       return;
     }
     if (command === "/token") {
@@ -1831,6 +1841,19 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         return;
       }
       if (dialog.type === "diff" || dialog.type === "verify" || dialog.type === "info") { if (key.escape || key.return) { setDialog(null); setDialogQuery(""); } return; }
+      if (dialog.type === "codex-effort") {
+        const model = config.models.find((item) => item.id === dialog.modelId);
+        const efforts = CODEX_EFFORTS.filter((item) => item.value !== "ultra" || model?.model !== "gpt-6-luna");
+        if (key.upArrow) setDialog({ ...dialog, index: (dialog.index - 1 + efforts.length) % efforts.length });
+        else if (key.downArrow) setDialog({ ...dialog, index: (dialog.index + 1) % efforts.length });
+        else if (key.escape) setDialog({ type: "models", index: Math.max(0, config.models.findIndex((item) => item.id === dialog.modelId)) });
+        else if (key.return) {
+          const selected = efforts[dialog.index];
+          if (model && selected) switchModel({ ...model, reasoningEffort: selected.value });
+          setDialog(null);
+        }
+        return;
+      }
       const needle = dialogQuery.trim().toLowerCase();
       const visibleModels = needle
         ? config.models.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(needle))
@@ -1846,6 +1869,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       else if (key.return) {
         if (dialog.type === "models") {
           const target = visibleModels[dialog.index];
+          if (target?.api === "codex") {
+            const efforts = CODEX_EFFORTS.filter((item) => item.value !== "ultra" || target.model !== "gpt-6-luna");
+            setDialog({ type: "codex-effort", index: Math.max(0, efforts.findIndex((item) => item.value === target.reasoningEffort)), modelId: target.id });
+            setDialogQuery("");
+            return;
+          }
           if (target) switchModel(target);
         } else {
           const record = visibleSessions[dialog.index];
@@ -1985,7 +2014,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     turns: record.messages.filter((message) => message.role === "user").length,
     detail: `${record.project} · ${record.updatedAt.slice(0, 16).replace("T", " ")}`,
   })));
-  const modelRows = filterDialogRows(config.models.map((model) => ({ key: model.id, title: model.name, detail: model.id })));
+  const modelRows = filterDialogRows(config.models.map((model) => ({ key: model.id, title: model.name, detail: `${model.id}${model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}` })));
   const rows = terminalSize.rows;
   const narrow = terminalSize.columns < 110;
   // Each view has one ordered stream for its conversation and execution rows.
@@ -2095,6 +2124,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         justifyContent={dialog ? "flex-start" : "flex-end"}
       >
         {dialog?.type === "models" ? <SelectDialog title="Models" rows={modelRows} index={Math.min(dialog.index, Math.max(0, modelRows.length - 1))} query={dialogQuery} /> : null}
+        {dialog?.type === "codex-effort" ? <SelectDialog title={`Reasoning · ${config.models.find((item) => item.id === dialog.modelId)?.name ?? "Codex"}`} rows={CODEX_EFFORTS.filter((item) => item.value !== "ultra" || config.models.find((model) => model.id === dialog.modelId)?.model !== "gpt-6-luna").map((item) => ({ key: item.value ?? "default", title: item.title, detail: item.detail }))} index={dialog.index} query="" /> : null}
         {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} activeKey={sessionRef.current.id} /> : null}
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
