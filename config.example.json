@@ -13,10 +13,6 @@
     ]
   },
   "model": {
-    "api_key_env": "DEEPSEEK_API_KEY",
-    "api_key": "",
-    "base_url": "http://127.0.0.1:8000/v1",
-    "model": "qwen3.8-27b",
     "max_tokens": 128000,
     "temperature": 0.2,
     "top_p": 1,
@@ -24,7 +20,7 @@
     "timeout": 120,
     "context_window": 262144,
     "max_history_messages": 120,
-    "active": "dashscope/deepseek-v4.1-flash",
+    "active": "codex/gpt-6-sol",
     "reasoning_effort": "xhigh"
   },
   "providers": {
