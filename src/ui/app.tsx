@@ -10,6 +10,7 @@ import { planVerificationStatus, readPlan, readVerifications } from "../core/pla
 import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
 import { estimateMessagesTokens } from "../core/context.js";
 import { savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
+import { consumeCodexReset, formatCodexRateLimits, formatCodexUsage, readCodexRateLimits, readCodexUsage } from "../core/codex-account.js";
 import type { JobStreamRecord, MeshChatMessage, MeshJob, MeshRuntime } from "../core/mesh/runtime.js";
 import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
 import { chatBlocks, jobBlocks } from "./mesh-transcript.js";
@@ -87,7 +88,8 @@ const COMMANDS = [
   ["/permissions", "ask / edits / allow"],
   ["/peers", "LAN collaborators"],
   ["/ping", "ping <peer>"],
-  ["/status", "status <peer>"],
+  ["/status", "local Codex quota / status <peer>"],
+  ["/usage", "token activity / reset card"],
   ["/message", "message <peer> <text>"],
   ["/handoff", "handoff <peer> <task>"],
   ["/ask-all", "ask-all <task>"],
@@ -113,7 +115,7 @@ const COMMANDS = [
 /** Read-only or view commands that execute immediately during a run, like codex:
  * a status query never waits behind the active task. */
 const RUN_IMMEDIATE_COMMANDS = new Set([
-  "/status", "/ping", "/peers", "/jobs", "/inbox", "/cancel-job", "/add-contact",
+  "/status", "/usage", "/ping", "/peers", "/jobs", "/inbox", "/cancel-job", "/add-contact",
   "/models", "/mode", "/settings", "/permissions",
   "/token",
   "/plan", "/theme", "/details", "/mesh", "/help", "/diff", "/verify",
@@ -127,7 +129,8 @@ const COMMAND_USAGE: Record<string, string> = {
   "/export": "/export [文件名|路径] — markdown transcript (默认 luban-export-<项目>-<sessionId>.md)",
   "/ping": "/ping <peer>",
   "/jobs": "/jobs [<job-id>] — 列出最近的 mesh 任务，给出 id 时在主流程里展开它的完整执行过程",
-  "/status": "/status <peer>",
+  "/status": "/status [peer] — 本地额度或远端节点状态",
+  "/usage": "/usage [daily|weekly|cumulative|reset]",
   "/message": "/message <peer> <text>",
   "/handoff": "/handoff <peer> <task>",
   "/ask-all": "/ask-all <task>",
@@ -176,9 +179,10 @@ interface ApprovalRequest {
 }
 
 interface DialogState {
-  type: "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "export" | "theme";
+  type: "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme";
   index: number;
   modelId?: string;
+  creditId?: string;
   title?: string;
   content?: string;
 }
@@ -301,6 +305,14 @@ function InfoDialog({ title, content }: { title: string; content: string }) {
   </Box>;
 }
 
+function ResetDialog({ content }: { content: string }) {
+  return <Box flexDirection="column" borderStyle="round" borderColor={theme.yellow} paddingX={1} flexShrink={0}>
+    <Text color={theme.yellow} bold>使用 Codex 重置卡？</Text>
+    {content.split("\n").map((line, index) => <Text key={index} color={theme.muted}>{line}</Text>)}
+    <Text color={theme.accent}>Enter 确认使用一张 · Esc 取消</Text>
+  </Box>;
+}
+
 /** Swatch order for a theme row: the hues that carry status at a glance. */
 const SWATCH_KEYS = ["accent", "green", "yellow", "red", "purple", "text"] as const;
 
@@ -415,7 +427,7 @@ function HelpPanel() {
       <Text color={theme.muted}>Ctrl+Y 鼠标开关 · 关后可选中复制 · /copy 复制上次回答 · /theme 换配色</Text>
       <Text color={theme.muted}>Ctrl+C 运行中中断任务 / 空闲复制回答 · Ctrl+D 保存并退出 · /exit 退出</Text>
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
-      <Text color={theme.muted}>运行中只读命令即时执行：/status /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
+      <Text color={theme.muted}>运行中只读命令即时执行：/status /usage /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
       <Text color={theme.muted}>直接输入任务，!command 执行 shell，/ 命令补全（含参数用法）</Text>
       <Text color={theme.dim}>/new /sessions /models /mode /permissions /theme /plan /details /mesh /copy /export /help /exit</Text>
     </Box>
@@ -1452,6 +1464,54 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setNotice(`${mode.toUpperCase()} · ${config.model.id}${config.model.reasoningEffort ? ` · ${config.model.reasoningEffort}` : ""} · permissions ${config.permissionMode} · theme ${activeThemeId()}${themeHasOverrides() ? "(自定义色)" : ""} · ${config.workspace}${mesh ? ` · mesh ${config.mesh.nodeName}:${config.mesh.port}` : " · mesh off"}${config.backendUrl ? ` · backend ${config.backendUrl}` : ""}`);
       return;
     }
+    if (command === "/status" && !argument) {
+      const local = [
+        `模型：${config.model.id}${config.model.reasoningEffort ? ` · ${config.model.reasoningEffort}` : ""}`,
+        `模式：${mode} · 权限：${config.permissionMode}`,
+        `会话上下文估计：${estimateMessagesTokens(messages).toLocaleString("zh-CN")} / ${config.contextWindow.toLocaleString("zh-CN")} token`,
+        `工作区：${config.workspace}`,
+      ];
+      try {
+        const limits = await readCodexRateLimits();
+        setDialog({ type: "info", index: 0, title: "状态与 Codex 额度", content: `${local.join("\n")}\n\n${formatCodexRateLimits(limits)}` });
+      } catch (error) {
+        setDialog({ type: "info", index: 0, title: "本地状态", content: `${local.join("\n")}\n\nCodex 额度读取失败：${error instanceof Error ? error.message : String(error)}` });
+      }
+      return;
+    }
+    if (command === "/usage") {
+      const action = argument.trim().toLowerCase();
+      if (!["", "daily", "weekly", "cumulative", "reset"].includes(action)) {
+        setNotice("用法：/usage [daily|weekly|cumulative|reset]");
+        return;
+      }
+      if (action === "reset") {
+        if (running) { setNotice("请在当前任务结束后使用重置卡。"); return; }
+        try {
+          const limits = await readCodexRateLimits();
+          const count = limits.rateLimitResetCredits?.availableCount;
+          if (typeof count !== "number" || count < 1) {
+            setDialog({ type: "info", index: 0, title: "Codex 重置卡", content: typeof count === "number" ? "当前没有可用重置卡。" : "Codex 未返回重置卡信息；请确认已用 ChatGPT 账号登录。" });
+            return;
+          }
+          const card = limits.rateLimitResetCredits?.credits?.find((item) => item.status === "available" && item.id);
+          setDialog({ type: "codex-reset", index: 0, creditId: card?.id,
+            content: `当前可用 ${count} 张。\n${card?.title || "使用下一张可用重置卡"}\n确认后会尝试重置；若服务端判定无可重置窗口，则不会消耗卡。` });
+        } catch (error) {
+          setDialog({ type: "info", index: 0, title: "Codex 重置卡", content: `读取失败：${error instanceof Error ? error.message : String(error)}` });
+        }
+        return;
+      }
+      try {
+        const [limits, activity] = await Promise.all([readCodexRateLimits(), readCodexUsage()]);
+        const view = (action || "daily") as "daily" | "weekly" | "cumulative";
+        setDialog({ type: "info", index: 0, title: `Codex 用量 · ${view}`,
+          content: `${formatCodexRateLimits(limits)}\n\n${formatCodexUsage(activity, view)}\n\n/usage daily|weekly|cumulative 查看不同周期 · /usage reset 使用重置卡` });
+      } catch (error) {
+        setDialog({ type: "info", index: 0, title: "Codex 用量", content: `读取失败：${error instanceof Error ? error.message : String(error)}\n请运行 luban login codex 检查登录状态。` });
+      }
+      return;
+    }
     if (command === "/token") {
       if (mobileLink) {
         setDialog({ type: "info", index: 0, title: "本实例手机登录", content: mobileLink });
@@ -1791,6 +1851,28 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       return;
     }
     if (dialog) {
+      if (dialog.type === "codex-reset") {
+        if (key.escape) { setDialog(null); setNotice("未使用重置卡。"); }
+        else if (key.return) {
+          const creditId = dialog.creditId;
+          setDialog(null);
+          setNotice("正在使用 Codex 重置卡…");
+          void (async () => {
+            try {
+              const result = await consumeCodexReset(creditId);
+              const outcome = result.outcome === "reset" ? "已使用一张重置卡。"
+                : result.outcome === "alreadyRedeemed" ? "这张重置卡已使用。"
+                  : result.outcome === "nothingToReset" ? "当前没有可重置的额度窗口，未消耗重置卡。"
+                    : "当前没有可用重置卡。";
+              const limits = await readCodexRateLimits();
+              setDialog({ type: "info", index: 0, title: "Codex 重置结果", content: `${outcome}\n\n${formatCodexRateLimits(limits)}` });
+            } catch (error) {
+              setDialog({ type: "info", index: 0, title: "Codex 重置结果", content: `请求结果不确定：${error instanceof Error ? error.message : String(error)}\n请先用 /status 查看额度，再决定是否重试。` });
+            }
+          })();
+        }
+        return;
+      }
       if (dialog.type === "export") {
         // The dialog owns the composer: Enter writes the file, Esc cancels,
         // typing edits the name, and Ctrl+U clears it back to the default.
@@ -2129,6 +2211,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
         {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} /> : null}
+        {dialog?.type === "codex-reset" ? <ResetDialog content={dialog.content ?? ""} /> : null}
         {dialog?.type === "theme" ? <ThemeDialog index={dialog.index} /> : null}
         {dialog?.type === "export" ? <ExportDialog value={dialogQuery} defaultName={defaultExportFilename(config.project, sessionRef.current.id)} dest={expandExportPath(dialogQuery, config.project, sessionRef.current.id)} /> : null}
         {!dialog && !hasActivity ? showMesh
