@@ -6,6 +6,7 @@ import { MeshRuntime } from "../core/mesh/runtime.js";
 import { AgentRunner } from "../core/agent.js";
 import { configureRemoteJobs } from "../core/mesh/agent-runner.js";
 import { SessionStore } from "../core/session-store.js";
+import { sharedHistory } from "../core/session-history.js";
 import type { LubanConfig } from "../core/types.js";
 import { LubanWebServer } from "./server.js";
 
@@ -16,6 +17,7 @@ function testConfig(root: string): LubanConfig {
     home: join(root, "home"), workspace, project: "web-project", model, models: [model],
     maxTokens: 1000, temperature: 0, timeoutMs: 5_000, maxSteps: 5,
     backendUrl: "", permissionMode: "allow",
+    history: { enabled: false, directory: "", maxMessagesPerSession: 0 },
     mesh: {
       enabled: true, nodeName: "web-node", host: "127.0.0.1", port: 0, udpPort: 0,
       capabilities: ["agent", "nodejs"], contacts: [], token: "", syncMode: "chunk",
@@ -184,6 +186,40 @@ describe("LubanWebServer", () => {
       });
       expect(cancelled.body).toMatchObject({ ok: true, status: "cancelled" });
       await waitForJob(base, id, "cancelled");
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
+
+  it("serves the session-history mirror over /api/history", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-history-"));
+    const config = testConfig(root);
+    config.history = { enabled: true, directory: join(root, "home", "history"), maxMessagesPerSession: 0 };
+    await mkdir(config.workspace, { recursive: true });
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh, { port: 0 });
+    await mesh.start();
+    const base = await web.start();
+    try {
+      const store = new SessionStore(config.home, sharedHistory(config.history, config.home));
+
+      // The endpoint answers with an empty listing before anything is saved.
+      expect(await jsonRequest(`${base}api/history`)).toMatchObject({ status: 200, body: { enabled: true, sessions: [] } });
+
+      const record = store.create(config.project, config.workspace, "agent", "test/model", [
+        { role: "user", content: "why is the relay rejecting the token" },
+      ]);
+      await store.save(record);
+
+      const listed = await jsonRequest(`${base}api/history`);
+      expect(listed.body.sessions).toEqual([expect.objectContaining({ id: record.id, project: config.project, messages: 1 })]);
+
+      const hits = await jsonRequest(`${base}api/history?q=relay`);
+      expect(hits.body.hits).toEqual([expect.objectContaining({ sessionId: record.id, role: "user" })]);
+      expect((await jsonRequest(`${base}api/history?q=nothing-matches-this`)).body.hits).toEqual([]);
+      expect((await jsonRequest(`${base}api/history?project=absent`)).body.sessions).toEqual([]);
     } finally {
       await web.stop();
       await mesh.stop();

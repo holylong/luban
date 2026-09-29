@@ -103,7 +103,7 @@ describe("parseEditRecord", () => {
 
   it("preserves the file path, line numbers and before/after content", () => {
     const rows = parseEditRecord(preview);
-    expect(rows[0]).toEqual({ kind: "header", text: "src/app.ts", changes: 3 });
+    expect(rows[0]).toEqual({ kind: "header", text: "src/app.ts", changes: 3, raw: "Edited src/app.ts (+2 -1)" });
     expect(rows[1]).toMatchObject({ kind: "context", line: 4, text: "const a = 1;" });
     expect(rows[2]).toMatchObject({ kind: "remove", line: 5, text: "const b = 2;" });
     expect(rows[3]).toMatchObject({ kind: "add", line: 5, text: "const b = 3;" });

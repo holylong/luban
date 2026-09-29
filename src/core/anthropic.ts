@@ -4,6 +4,7 @@ import { finalizeCompletion } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler } from "./openai.js";
 
 import { parseModelEvent, sseData, validateCompletion } from "./sse.js";
+import { recoverTextToolCalls } from "./tool-call-text.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -112,7 +113,7 @@ export class AnthropicClient {
         if ((response.headers.get("content-type") || "").includes("text/event-stream")) {
           if (!response.body) throw new Error("model returned an empty stream");
           clearTimeout(timer);
-          return await this.consumeStream(response.body, onDelta, controller, onNotice);
+          return await this.consumeStream(response.body, onDelta, controller, onNotice, signal);
         }
         const data = await response.json() as JsonObject;
         const blocks = Array.isArray(data.content) ? data.content as JsonObject[] : [];
@@ -121,11 +122,13 @@ export class AnthropicClient {
         const toolCalls: ToolCall[] = blocks.filter((block) => block.type === "tool_use").map((block) => ({
           id: String(block.id || ""), type: "function", function: { name: String(block.name || ""), arguments: JSON.stringify(block.input ?? {}) },
         }));
-        const check = validateCompletion(content, toolCalls, data.stop_reason);
+        const recovered = recoverTextToolCalls(content);
+        const calls = [...toolCalls, ...recovered.toolCalls];
+        const check = validateCompletion(recovered.content, calls, data.stop_reason);
         if (reasoning) onDelta?.(reasoning, "reasoning");
-        if (content) onDelta?.(content, "content");
+        if (recovered.content) onDelta?.(recovered.content, "content");
         const usage = data.usage && typeof data.usage === "object" ? data.usage as JsonObject : {};
-        return finalizeCompletion(check, content, reasoning, toolCalls,
+        return finalizeCompletion(check, recovered.content, reasoning, calls,
           { input: Number(usage.input_tokens || 0), output: Number(usage.output_tokens || 0) });
       } finally {
         clearTimeout(timer);
@@ -134,7 +137,7 @@ export class AnthropicClient {
     }
   }
 
-  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler): Promise<CompletionResult> {
+  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, signal?: AbortSignal): Promise<CompletionResult> {
     const toolSlots = new Map<number, ToolCall>();
     let finished = false;
     let finishReason: unknown;
@@ -148,33 +151,52 @@ export class AnthropicClient {
       controller.abort(new Error(`model stream idle timeout after ${idleTimeout / 1000}s`));
     };
     let timer = setTimeout(idleAbort, idleTimeout);
-    try { for await (const raw of sseData(stream, controller.signal)) {
-      clearTimeout(timer);
-      timer = setTimeout(idleAbort, idleTimeout);
-      const data = parseModelEvent(raw);
-      if (data.type === "message_stop") { finished = true; break; }
-      const message = data.message && typeof data.message === "object" ? data.message as JsonObject : {};
-      const usage = (data.usage && typeof data.usage === "object" ? data.usage : message.usage) as JsonObject | undefined;
-      input = Number(usage?.input_tokens ?? input);
-      output = Number(usage?.output_tokens ?? output);
-      const index = Number(data.index ?? 0);
-      const block = data.content_block && typeof data.content_block === "object" ? data.content_block as JsonObject : {};
-      if (block.type === "tool_use") {
-        toolSlots.set(index, { id: String(block.id || ""), type: "function", function: { name: String(block.name || ""), arguments: "" } });
+    let failure: unknown;
+    try {
+      for await (const raw of sseData(stream, controller.signal)) {
+        clearTimeout(timer);
+        timer = setTimeout(idleAbort, idleTimeout);
+        const data = parseModelEvent(raw);
+        if (data.type === "message_stop") { finished = true; break; }
+        const message = data.message && typeof data.message === "object" ? data.message as JsonObject : {};
+        const usage = (data.usage && typeof data.usage === "object" ? data.usage : message.usage) as JsonObject | undefined;
+        input = Number(usage?.input_tokens ?? input);
+        output = Number(usage?.output_tokens ?? output);
+        const index = Number(data.index ?? 0);
+        const block = data.content_block && typeof data.content_block === "object" ? data.content_block as JsonObject : {};
+        if (block.type === "tool_use") {
+          toolSlots.set(index, { id: String(block.id || ""), type: "function", function: { name: String(block.name || ""), arguments: "" } });
+        }
+        const delta = data.delta && typeof data.delta === "object" ? data.delta as JsonObject : {};
+        if (delta.stop_reason != null) finishReason = delta.stop_reason;
+        if (typeof delta.text === "string") { content += delta.text; onDelta?.(delta.text, "content"); }
+        if (typeof delta.thinking === "string") { reasoning += delta.thinking; onDelta?.(delta.thinking, "reasoning"); }
+        if (typeof delta.partial_json === "string") {
+          const slot = toolSlots.get(index);
+          if (slot) slot.function.arguments += delta.partial_json;
+        }
       }
-      const delta = data.delta && typeof data.delta === "object" ? data.delta as JsonObject : {};
-      if (delta.stop_reason != null) finishReason = delta.stop_reason;
-      if (typeof delta.text === "string") { content += delta.text; onDelta?.(delta.text, "content"); }
-      if (typeof delta.thinking === "string") { reasoning += delta.thinking; onDelta?.(delta.thinking, "reasoning"); }
-      if (typeof delta.partial_json === "string") {
-        const slot = toolSlots.get(index);
-        if (slot) slot.function.arguments += delta.partial_json;
+    } catch (error) {
+      failure = error;
+    } finally { clearTimeout(timer); }
+    if (signal?.aborted) throw signal.reason ?? failure ?? new Error("aborted");
+    if (!finished) {
+      // Same recovery as the OpenAI client: a dropped or stalled stream keeps
+      // the text it already produced and lets the runner ask for the rest.
+      const declared = failure instanceof Error
+        && /model stream error|model returned malformed|model returned invalid|model SSE event exceeds/u.test(failure.message);
+      if (declared) throw failure;
+      if (content || reasoning || toolSlots.size) {
+        onNotice?.("模型连接在输出中途中断，已保留已收到的内容并继续");
+        return { content, reasoning, toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };
       }
-    } } finally { clearTimeout(timer); }
-    if (!finished) throw new Error("model stream ended before message_stop; partial response was not accepted");
+      throw failure ?? new Error("model stream ended before message_stop; partial response was not accepted");
+    }
     for (const call of toolSlots.values()) if (!call.function.arguments) call.function.arguments = "{}";
-    const check = validateCompletion(content, [...toolSlots.values()], finishReason);
+    const recovered = recoverTextToolCalls(content);
     const calls = [...toolSlots.entries()].sort(([a], [b]) => a - b).map(([, call]) => call);
-    return finalizeCompletion(check, content, reasoning, calls, { input, output });
+    const allCalls = [...calls, ...recovered.toolCalls];
+    const check = validateCompletion(recovered.content, allCalls, finishReason);
+    return finalizeCompletion(check, recovered.content, reasoning, allCalls, { input, output });
   }
 }

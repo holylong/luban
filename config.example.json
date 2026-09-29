@@ -111,7 +111,7 @@
     "workspace": ""
   },
   "max_workers": 2,
-  "max_steps": 120,
+  "max_steps": 1000,
   "permission": {
     "mode": "edits"
   }

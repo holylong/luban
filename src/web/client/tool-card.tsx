@@ -1,12 +1,28 @@
 import React, { useMemo, useState } from "react";
-import { formatDuration, parseEditRecord, editRecordStats, toolLabel } from "./timeline";
+import { editDisplayRows, editRecordStats, formatDuration, parseEditRecord, toolLabel } from "./timeline";
+import type { EditCell } from "./timeline";
 import type { ToolRun } from "./types";
 import { HighlightedLine } from "./markdown";
 
-/** The inline execution record for one file mutation. */
+/** One side of a split row: line number, sign, and the code. */
+function EditCellView({ cell, side }: { cell: EditCell; side: "left" | "right" }): React.ReactElement {
+  const sign = cell.kind === "add" ? "+" : cell.kind === "remove" ? "−" : "";
+  // Bound only what is drawn: the stored record keeps the full line.
+  const text = cell.text.length > 400 ? `${cell.text.slice(0, 400)}…` : cell.text;
+  return (
+    <div className={`edit-cell ${cell.kind} ${side}`}>
+      <span className="ln">{cell.line ?? ""}</span>
+      <span className="sign">{sign}</span>
+      <span className="code">{cell.kind === "empty" ? "" : <HighlightedLine line={text} />}</span>
+    </div>
+  );
+}
+
+/** The inline execution record for one file mutation, removed left / added right. */
 export function EditRecord({ preview }: { preview: string }): React.ReactElement {
-  const rows = useMemo(() => parseEditRecord(preview), [preview]);
-  const stats = useMemo(() => editRecordStats(rows), [rows]);
+  const parsed = useMemo(() => parseEditRecord(preview), [preview]);
+  const rows = useMemo(() => editDisplayRows(parsed), [parsed]);
+  const stats = useMemo(() => editRecordStats(parsed), [parsed]);
   return (
     <div className="edit-record">
       <div className="edit-summary">
@@ -19,17 +35,14 @@ export function EditRecord({ preview }: { preview: string }): React.ReactElement
           </span>
         )}
       </div>
-      <div className="edit-lines">
-        {rows.filter(row => row.kind !== "header").map((row, index) => {
+      <div className="edit-split">
+        {rows.map((row, index) => {
+          if (row.kind === "header") return <div className="edit-split-head" key={index}>{row.text}</div>;
           if (row.kind === "meta") return <div className="edit-meta" key={index}>{row.text}</div>;
-          const sign = row.kind === "add" ? "+" : row.kind === "remove" ? "−" : " ";
-          // Bound only what is drawn: the stored record keeps the full line.
-          const text = row.text.length > 400 ? `${row.text.slice(0, 400)}…` : row.text;
           return (
-            <div className={`edit-line ${row.kind}`} key={index}>
-              <span className="ln">{row.line ?? ""}</span>
-              <span className="sign">{sign}</span>
-              <span className="code"><HighlightedLine line={text} /></span>
+            <div className="edit-split-row" key={index}>
+              <EditCellView cell={row.left} side="left" />
+              <EditCellView cell={row.right} side="right" />
             </div>
           );
         })}

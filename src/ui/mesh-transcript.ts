@@ -114,7 +114,7 @@ export function jobBlocks(job: RemoteJobView, records: JobStreamRecord[], option
           status: "running",
         };
         positions.set(event.callId, blocks.length);
-        blocks.push(toolTranscriptBlock(`remote-${job.id}-tool-${event.callId}`, entry, expanded));
+        blocks.push(toolTranscriptBlock(`remote-${job.id}-tool-${event.callId}`, entry, expanded, width));
         break;
       }
       case "tool-end": {
@@ -129,7 +129,7 @@ export function jobBlocks(job: RemoteJobView, records: JobStreamRecord[], option
           preview: event.preview,
           ...(event.editPreview ? { editPreview: event.editPreview } : {}),
         };
-        const block = toolTranscriptBlock(`remote-${job.id}-tool-${event.callId}`, entry, expanded);
+        const block = toolTranscriptBlock(`remote-${job.id}-tool-${event.callId}`, entry, expanded, width);
         // Upgrade the row in place so the running call keeps its position, the
         // same way a local tool row does.
         if (index === undefined) { positions.set(event.callId, blocks.length); blocks.push(block); }

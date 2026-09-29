@@ -140,6 +140,20 @@ export interface LubanConfig {
   toolOutputMaxBytes: number;
   mcpMaxTools: number;
   mcpLazy: boolean;
+  /** Queryable SQLite mirror of session messages; see `session-history.ts`. */
+  history: HistorySettings;
+}
+
+/**
+ * `history` block of config.json. The mirror is off unless `enabled` is true,
+ * so an upgrade never starts writing a database nobody asked for.
+ */
+export interface HistorySettings {
+  enabled: boolean;
+  /** Database directory; empty uses `<home>/history`. */
+  directory: string;
+  /** Most recent messages kept per session; 0 keeps the whole transcript. */
+  maxMessagesPerSession: number;
 }
 
 export interface RemoteControlSettings {

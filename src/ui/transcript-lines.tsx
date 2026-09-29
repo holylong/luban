@@ -61,3 +61,16 @@ export function TranscriptLineView({ line }: { line: TranscriptLine }) {
   return <Text wrap="truncate-end" color={color} bold={line.kind === "heading"}
     backgroundColor={line.kind === "user" ? theme.panel : undefined}>{line.text || " "}</Text>;
 }
+
+/** Plain rows keep screen columns stable while an in-app selection is dragged. */
+export function SelectableTranscriptLine({ line, span }: { line: TranscriptLine; span: { start: number; end: number } | null }) {
+  const value = line.text || " ";
+  const color = line.kind === "heading" ? theme.accent : line.kind === "note" ? theme.muted : theme.text;
+  return <Text wrap="truncate-end" color={color}>
+    {span ? <>
+      {value.slice(0, span.start)}
+      <Text color={theme.background} backgroundColor={theme.accent}>{value.slice(span.start, span.end)}</Text>
+      {value.slice(span.end)}
+    </> : value}
+  </Text>;
+}

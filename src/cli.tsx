@@ -11,6 +11,8 @@ import { loadConfig, savePreferredModel } from "./core/config.js";
 import { announceHost, directedBroadcasts, MeshRuntime } from "./core/mesh/runtime.js";
 import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
+import { sharedHistory } from "./core/session-history.js";
+import { runHistory } from "./core/history-command.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
 import { App } from "./ui/app.js";
 import { applyTheme, resolveThemeId, themeIds } from "./ui/theme.js";
@@ -102,9 +104,22 @@ function readEnvFileValue(path: string, key: string): string {
   return "";
 }
 
+/**
+ * A session store for one loaded config: the JSON records plus, when the
+ * `history` block enables it, the queryable SQLite mirror that shares them.
+ * Every entry point builds its store here so the TUI, one-shot runs, the Web
+ * API and remote jobs all mirror the same way.
+ *
+ * @param config Loaded configuration carrying the home directory and `history`.
+ * @returns Store used for every session save in this process.
+ */
+function sessionStore(config: LubanConfig): SessionStore {
+  return new SessionStore(config.home, sharedHistory(config.history, config.home));
+}
+
 async function runHeadless(config: LubanConfig, prompt: string, mesh?: MeshRuntime): Promise<number> {
   process.stderr.write(`luban v${VERSION}\n`);
-  const store = new SessionStore(config.home);
+  const store = sessionStore(config);
   const messages: ChatMessage[] = [...initialMessages(config.workspace, config.model.name, config.planning), { role: "user", content: prompt }];
   const session = store.create(config.project, config.workspace, "agent", config.model.id, messages);
   const runner = new AgentRunner(config, undefined, mesh);
@@ -518,7 +533,7 @@ async function main(): Promise<number> {
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
     .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
     .option("-p, --prompt <text>", "run once without the TUI")
-    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban serve [path]  native mesh/worker daemon\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
+    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban serve [path]  native mesh/worker daemon\n  luban history       search the SQLite mirror of saved sessions\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
   program.parse();
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -741,11 +756,13 @@ const entry = command === "login" && process.argv[3] === "codex"
       ? runAcp(process.argv.slice(3))
       : command === "mesh"
         ? runMeshCheck(process.argv.slice(3))
-        : command === "relay"
-          ? runRelay(process.argv.slice(3))
-          : command === "token"
-            ? runToken(process.argv.slice(3))
-          : main();
+        : command === "history"
+          ? runHistory(process.argv.slice(3))
+          : command === "relay"
+            ? runRelay(process.argv.slice(3))
+            : command === "token"
+              ? runToken(process.argv.slice(3))
+              : main();
 
 entry.then((code) => { process.exitCode = code; }).catch((error) => {
   process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`);

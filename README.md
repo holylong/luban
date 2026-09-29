@@ -62,7 +62,7 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 - `AUTO` / `AGENT` / `ASK` 三种工作模式，`Shift+Tab` 直接切换。
 - **单一记录流**：对话、工具调用、文件编辑与状态提示按真实发生顺序排成一条时间线，共用一个滚动位置；不再是"对话窗口 + 执行详情窗口"两块拼接，结论也不再重复置顶，`/details` 只控制工具输出的完整程度。
 - 输入框支持多行：粘贴整段文本会原样进入（`\r\n`/`\r` 统一为换行、制表符展开为空格），`Ctrl+J` 或 `Shift+Enter` 换行，`Enter` 提交。输入框高度受屏幕约束（最多约屏幕的 1/3），并随光标滚动，长文本粘贴后再也不会把光标和尾部顶出屏幕；多行时光标可用 ↑↓ 移动，单行时 ↑↓ 仍是历史召回。工作中可继续输入补充指令，`/queue` 排队下一任务，待处理消息随会话保存。
-- 鼠标滚轮、**拖动右侧滚动条**或 `PageUp`/`PageDown` 翻阅整条历史。滚动条常驻在主面板右缘（`│` 轨道、`█` 滑块）：按住拖动即按比例滚动，点击轨道上下翻页，滑块位置与百分比读数始终反映当前视口。鼠标捕获默认开启（滚轮是主要交互），需要拖选复制时按 `Ctrl+Y` 释放鼠标，再按一次恢复。滚动位置经过钳制，不会出现“滚过头后要往回滚很多格才动”的空转。
+- 鼠标滚轮、**拖动右侧滚动条**或 `PageUp`/`PageDown` 翻阅整条历史。滚动条常驻在主面板右缘（`│` 轨道、`█` 滑块）：按住拖动即按比例滚动，点击轨道上下翻页，滑块位置与百分比读数始终反映当前视口。按 `Ctrl+Y` 切到选择模式，在输出区拖选会显示高对比度背景，松开鼠标即复制选中内容；再按一次返回滚动模式。滚动位置经过钳制，不会出现“滚过头后要往回滚很多格才动”的空转。
 - `/plan` 显示任务计划面板，`/verify` 打开验证记录面板（逐条列出测试命令、通过/失败、输出摘要，并显示计划验证门禁状态），`/pending` 查看待处理指令，`/diff` 查看工作区 Git 变更；退出/切换会话会清理受管理的后台进程。
 - `/` 命令发现、Tab 补全、`Ctrl+P` 模型选择、`Ctrl+O` 会话选择。
 - `!command` 直接 shell，不经过模型。
@@ -72,12 +72,13 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 
 - OpenAI-compatible Chat Completions + SSE 流式响应，以及原生 Anthropic Messages；支持多 provider/多模型。
 - 工具循环：文件读写、精确编辑、glob、grep、目录、shell。
-- 严格检查 SSE 完成标记、错误事件、输出截断和工具参数，断流不会误报成功。
-- 通用 Agent runtime：任务内上下文压缩（含工具定义预算）、瞬时错误退避重试、并行只读工具调用。
+- 严格检查 SSE 完成标记、错误事件、输出截断和工具参数，断流不会误报成功；连接在输出中途断开时保留已收到内容并让模型接着写，不再丢掉整段回答。
+- 通用 Agent runtime：任务内上下文压缩（含工具定义预算）、瞬时错误退避重试、并行只读工具调用；网关漏传的 DeepSeek XML 风格工具调用会被还原成真正的调用而不是当作正文。
 - 压缩通知只在一次任务首次丢弃历史时写入记录（`Compacted N older messages`），之后每一步的再次压缩只更新工作行里的累计条数；否则长任务会把「Compacted 2 older messages」按步数刷满整条历史。
 - **并行只读工具**：同一条消息里连续的只读调用（读文件、搜索、列目录等）真正并发执行，写与 shell 保持严格串行；结果仍按调用顺序写入记录。
 - `update_plan` / `read_plan` 维护任务计划，`record_verification` / `read_verification` 记录测试命令与通过状态；计划与验证随会话保存、压缩保留，未验证成功会明确标注。`@截图.png` 以原生视觉部件发给视觉模型（OpenAI/Anthropic/Responses 三客户端全支持，8MB 上限，会话只存路径）。
 - 大工具结果自动归档（`tool_output.retention_days`/`max_bytes` 自动清理，默认 7 天/500MB），`read_tool_output` 按页回读，避免为找回日志重复执行命令。
+- 可选会话历史镜像（`history.enabled`）：把每条消息追加进 SQLite，用 `luban history` 或 `GET /api/history` 检索历史，会话 JSON 始终是权威记录。
 - CLI/TUI 在工具调用前后保存进度；中断后恢复会补齐消息协议并标注执行状态未知。
 
 ### 工具、权限与安全
@@ -107,7 +108,7 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 ### Web 工作台
 
 - 原生 HTTP 后台和浏览器工作台：节点、peers、jobs、workspace、sync、chat、contacts API。
-- React + Vite 浏览器工作台：事件流（SSE）实时转录、工具调用卡片、内联编辑记录（文件路径 / 增删计数 / 行号 / 修改前后行内容）、Markdown 与代码高亮、文件查看器、Git 变更视图、会话浏览、工作区文件树。
+- React + Vite 浏览器工作台：事件流（SSE）实时转录、工具调用卡片、内联编辑记录（文件路径 / 增删计数 / 行号，左右对比：左侧删除、右侧新增）、Markdown 与代码高亮、文件查看器、Git 变更视图、会话浏览、工作区文件树。
 - Web 端交互审批：写文件、shell、网络工具会在此页面等待允许/拒绝，审批内容含工具名、风险与参数；`--web-port` 同时把审批带到浏览器。
 - `web`/`serve` 守护模式，或让 TUI 通过 `--web-port` 同进程提供 Web 服务。
 - 手机远控：同一局域网可直连电脑，异地可通过公网中继与节点拨出隧道；Android APK 或浏览器 `/m/` 控制台都能下发指令、看实时状态、审批与取消。
@@ -235,6 +236,7 @@ node dist/cli.js ~/dev/my-project
   "lspServers": { "python": { "command": "pyright-langserver", "args": ["--stdio"], "languages": ["python"] } },
   "code_intelligence": { "worker": false },
   "tool_output": { "retention_days": 7, "max_bytes": 524288000 },
+  "history": { "enabled": false, "directory": "", "max_messages_per_session": 0 },
   "mcp": { "max_tools": 64, "lazy": false },
   "mcpServers": {
     "filesystem-extra": {
@@ -317,7 +319,7 @@ GPT Luna 这类推理模型不接受显式 `temperature`，内置定义用
 | `Shift+Tab` | 循环切换 AUTO / AGENT / ASK |
 | `Ctrl+P` | 打开模型选择器 |
 | `Ctrl+O` | 打开会话选择器 |
-| `Ctrl+Y` | 开关鼠标捕获 · 默认开启（滚轮/拖动滚动条可用）· 关闭后可直接选中复制 |
+| `Ctrl+Y` | 切换滚动和选择模式；选择模式在输出区拖选高亮，松开即复制 |
 | `Ctrl+J` | 在输入框插入换行，多行任务/贴代码用 |
 | `@path` | 文件补全（Tab）+ 提交时自动附带内容，最多 5 个 |
 | 底栏 `ctx` | 当前会话 token 占上下文窗口比例，≥85% 变红 |
@@ -410,6 +412,45 @@ GPT Luna 这类推理模型不接受显式 `temperature`，内置定义用
 ```json
 { "model": { "timeout": 120, "thinking_timeout": 90, "max_retries": 3 } }
 ```
+
+### 连接中断不再丢掉已生成的内容
+
+模型服务在输出中途断开（SSE 还没收到 `finish_reason`/`[DONE]` 就结束），或长时间无输出被空闲超时中断时，
+以前整轮报错、已经收到的文字全部丢弃——自建或局域网模型服务在高负载下掉流时最常见。现在只要已经收到
+正文、推理或工具调用片段，就**保留已收到的内容**并让模型接着写，和输出上限截断走同一条继续路径：
+
+```
+· 模型连接在输出中途中断，已保留 1240 字并继续
+✓ 任务已完成 · 3 步 · 4 次模型调用 · 41.2s
+```
+
+- 中断时若只有半截工具调用，一律**不执行**，而是重新请求。
+- 连续 3 次仍然中断会暂停，并提示检查网络与模型服务稳定性、或换用更稳定的 provider。
+- 只有“一个 token 都没收到就断开”才按错误处理，避免把服务不可用当成正常完成。
+- 收到响应头**之前**的连接失败仍按原有退避重试（`max_retries`，默认 3），并在转录流里写明原因。
+
+对自建、经网关或排队较久的模型，可以适当调大首字节等待与重试次数：
+
+```json
+{ "model": { "timeout": 300, "thinking_timeout": 600, "max_retries": 5 } }
+```
+
+### 网关漏传的工具调用会被还原
+
+部分 OpenAI 兼容网关（多见于 DeepSeek 系列）不会把模型 XML 风格的工具调用翻译成
+`tool_calls`，而是把它当作普通正文返回，形如：
+
+```
+<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="bash">
+<｜｜DSML｜ parameter name="command" string="true">ls -la</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>
+```
+
+以前 luban 会把这段标记当回答打印出来，工具根本不执行，模型却以为已经做过——用户只能事后发现
+“上次那个 edit 没落盘”。现在客户端会识别这种块，把它还原成真正的工具调用并从正文里去掉，
+`bash` / `edit_file` / `apply_patch` 等照常执行；普通回答不含这种标记时完全不受影响。
 
 ## 速度与规划
 
@@ -772,7 +813,7 @@ TUI 工作时直接输入消息，会在下一工具/模型边界送给 Agent；
 等待权限确认时仍需先允许、拒绝或取消该确认，再输入新指令。
 
 输入框支持 `↑` / `↓` 召回历史（含 `/` 命令和运行中补充指令），`resume`/切换会话后从用户消息自动恢复。
-输出复制有两条路：`Ctrl+Y` 关鼠标后直接选中复制，或 `/copy` 经 OSC52 发送到系统剪贴板并另存 `~/.luban/last-copy.md`；
+输出复制有两条路：`Ctrl+Y` 进入选择模式后拖选高亮，松开即复制选中内容；或 `/copy` 复制上次回答和最近工具结果。选择模式和 `/copy` 都优先尝试 OSC52 与系统剪贴板工具；
 鼠标开时滚轮翻执行详情（并自动展开 `/details`），`Shift+选中` 在多数终端也可绕过鼠标上报直接复制。
 
 `/plan` 切换计划面板；底栏显示待处理输入数量。后台任务可跨普通对话轮次继续运行，`send_background_input` 可向运行中任务写 stdin（交互式 CLI/REPL）；
@@ -808,6 +849,23 @@ Agent 可用 `read_tool_output` 回读（`offset` / `next_offset` 为 UTF-8 字�
 工具自身已有的输出采集上限仍生效；归档按 `tool_output.retention_days`（默认 7 天）与
 `max_bytes`（默认 500 MB）自动清理，超限时从最旧的开始删除。
 
+会话 JSON 仍是唯一权威记录，resume、branch、导出和 Web 接口都读它。把 `history.enabled`
+设为 `true` 后会额外把每条消息追加写入 `<history.directory 或 ~/.luban>/history.sqlite`，
+让长会话的历史在增长过程中可被查询，而不是每步重写整个 JSON。该镜像按会话记录逐条追加：
+条目被压缩、`/branch` 裁掉或工具结果被替换导致列表变短时，会先删除该会话的旧行再从当前位置重建，
+不保留 JSON 里已经不存在的记录。`max_messages_per_session`（`0` 表示不裁剪）可给单会话设上限，
+超出的最旧行会随写入删除。数据库写入失败时镜像自行停用并在 stderr 说明原因，会话 JSON 不受影响。
+
+```sh
+luban history [path]              # 最近的镜像会话（时间、ID、条数、项目、标题）
+luban history -q "关键词"          # 检索消息正文，默认每行首行、200 字符
+luban history -q "关键词" --full   # 打印完整消息
+luban history -p myapp -n 50      # 按项目过滤并调整条数
+```
+
+`luban history` 只读打开数据库，关闭写入时也能查询已存在的镜像。Web 控制台通过
+`GET /api/history?q=<关键词>&project=<项目名>&limit=<条数>` 使用同一份数据。
+
 CLI/TUI 逐步保存到原有会话目录。如果进程在工具执行后、结果保存前退出，恢复记录会明确
 提示“执行状态未知”，Agent 应检查现状后决定下一步。Mesh job 仍使用原有 job/log 保存机制。
 
@@ -823,7 +881,7 @@ ASK 只允许标记为只读的内置工具；AUTO 不会因为任务描述未�
 - Unix 上的 `bash` 工具统一使用 `/bin/bash` 并启用 `pipefail`，前台和后台命令行为一致，不受登录 Shell 为 sh/fish 的影响；系统需安装 Bash。Windows 仍使用 cmd。
 - Web 控制台提供 `/diff?project=<项目名>` 代码变更页，按当前 Git HEAD 显示修改文件列表和带颜色的 unified diff；任务完成后可直接打开该地址审阅修改。
 
-从 v0.4.3 开始，TUI 每次执行 `write_file`、`edit_file`、`apply_patch` 后会直接展开 `Edited 文件 (+新增 -删除)` 和带行号的红绿差异。内容来自执行前后的文件，适用于未提交文件和非 Git 目录。执行详情默认展开，可用 PageUp/PageDown 或鼠标滚轮翻阅，`/details` 用于收起或重新展开完整输出；新记录随会话保存，压缩上下文后仍可恢复。任务结束后会固定显示“已完成 / 已失败 / 已暂停 / 已取消”状态，成功时展示最终回答，失败或暂停时直接展示原因。大改动的预览最多保留每文件 160 行，每行最多 300 字符，并注明省略。升级前未保存原文的历史编辑无法还原当时的完整差异。Shell/MCP 内部的文件修改尚不生成这种逐次编辑记录。
+从 v0.4.3 开始，TUI 每次执行 `write_file`、`edit_file`、`apply_patch` 后会直接展开 `Edited 文件 (+新增 -删除)` 和带行号的红绿差异。内容来自执行前后的文件，适用于未提交文件和非 Git 目录。终端宽度足够时（可用宽度 ≥ 72 列）差异以左右对比显示：左侧是删除/未变的旧行，右侧是新增/未变的新行，中间用 `│` 分隔，一眼即可看出某一行被替换成了什么；窄终端自动回退为单栏 unified 列表，保证代码不被挤成碎片。执行详情默认展开，可用 PageUp/PageDown 或鼠标滚轮翻阅，`/details` 用于收起或重新展开完整输出；新记录随会话保存，压缩上下文后仍可恢复。任务结束后会固定显示“已完成 / 已失败 / 已暂停 / 已取消”状态，成功时展示最终回答，失败或暂停时直接展示原因。大改动的预览最多保留每文件 160 行，每行最多 300 字符，并注明省略。升级前未保存原文的历史编辑无法还原当时的完整差异。Shell/MCP 内部的文件修改尚不生成这种逐次编辑记录。
 
 复杂任务默认最多执行 200 个 Agent/AUTO 工具轮次；可在 `~/.luban/config.json` 设置 `max_steps`，范围为 1–2000。Agent 会在预算用尽时生成总结并暂停，只有明确完成或发生错误才会正常结束，不能安全地无限运行。
 

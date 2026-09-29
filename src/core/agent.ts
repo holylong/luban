@@ -211,16 +211,16 @@ interface ModelClient {
     /** Retry/timeout progress for the wait between requests. */
     onNotice?: (text: string) => void,
     options?: ModelRequestOptions,
-  ): Promise<{ content: string; reasoning?: string; toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>; usage: { input: number; output: number }; truncated?: boolean }>;
+  ): Promise<{ content: string; reasoning?: string; toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>; usage: { input: number; output: number }; truncated?: boolean; streamEnded?: boolean }>;
 }
 
 /**
  * How many times one run asks the model to continue past a provider's output cap
- * before reporting it. Three covers a long answer split by a small cap without
- * letting a model that only reasons loop forever.
+ * or a dropped connection before reporting it. Three covers a long answer split
+ * by a small cap without letting a model that only reasons loop forever.
  */
 const MAX_TRUNCATION_CONTINUES = 3;
-/** Marks the nudge that asks for the rest of a truncated answer. */
+/** Marks the nudge that asks for the rest of an answer cut short mid-stream. */
 const TRUNCATION_MARKER = "output-limit";
 
 /**
@@ -587,14 +587,20 @@ export class AgentRunner {
         const partial = completion.content.trim();
         const reasoningChars = (completion.reasoning ?? "").length;
         const consumed = `推理 ${reasoningChars} 字 / 正文 ${partial.length} 字`;
+        // A dropped connection and a provider output cap both arrive as partial
+        // output; only the provider cap is the model's own doing, so the advice
+        // to the user differs and a reasoning-starved answer is not retried.
+        const dropped = completion.streamEnded === true;
         truncationContinues += 1;
         // Reasoning that consumed the whole budget will consume it again; only
         // say so after a retry proved that it repeats.
-        const starvedByReasoning = !partial && reasoningChars > 0;
+        const starvedByReasoning = !dropped && !partial && reasoningChars > 0;
         if (truncationContinues > MAX_TRUNCATION_CONTINUES || (starvedByReasoning && truncationContinues > 1)) {
           const text = starvedByReasoning
             ? `模型的推理占满了输出上限（${consumed}），没有留下正文，继续重试只会重复截断。请降低 reasoning_effort/thinking，或提高 max_tokens。`
-            : `模型输出连续 ${truncationContinues} 次被输出上限截断（${consumed}）。请提高 max_tokens，或把任务拆小后继续。`;
+            : dropped
+              ? `模型连接连续 ${truncationContinues} 次在输出中途中断（${consumed}）。请检查网络与模型服务稳定性，或换用更稳定的 provider 后重试。`
+              : `模型输出连续 ${truncationContinues} 次被输出上限截断（${consumed}）。请提高 max_tokens，或把任务拆小后继续。`;
           onEvent({ type: "error", text });
           return { ok: false, text, steps: totalSteps, messages, stopReason: "truncated", modelCalls, elapsedMs: Date.now() - runStartedAt };
         }
@@ -603,12 +609,16 @@ export class AgentRunner {
           truncatedText += partial;
           messages.push({ role: "assistant", content: partial });
           // Without its own text the model restarts instead of continuing.
-          messages.push({ role: "user", name: TRUNCATION_MARKER, content: "上一条回复在输出长度上限处被截断。请从中断处继续，不要重复已写内容；需要调用工具时直接调用。" });
+          messages.push({ role: "user", name: TRUNCATION_MARKER, content: dropped
+            ? "上一条回复在输出过程中连接中断。请从中断处继续，不要重复已写内容；需要调用工具时直接调用。"
+            : "上一条回复在输出长度上限处被截断。请从中断处继续，不要重复已写内容；需要调用工具时直接调用。" });
           truncatedSpanCount += 2;
           lastText = truncatedText;
           await persist();
         }
-        onEvent({ type: "status", text: `模型输出被输出上限截断（${consumed}），已保留并继续` });
+        onEvent({ type: "status", text: dropped
+          ? (partial ? `模型连接在输出中途中断，已保留 ${partial.length} 字并继续` : "模型连接在输出中途中断，正在重试")
+          : `模型输出被输出上限截断（${consumed}），已保留并继续` });
         continue;
       }
       signal.throwIfAborted();

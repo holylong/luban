@@ -3,6 +3,7 @@ import { resolveImageParts } from "./vision.js";
 import { finalizeCompletion } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler } from "./openai.js";
 import { parseModelEvent, sseData } from "./sse.js";
+import { recoverTextToolCalls } from "./tool-call-text.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -170,7 +171,7 @@ export class ResponsesClient {
           if (!response.body) throw new Error("model returned an empty stream");
           // Do not retry after streaming starts: callbacks may already have rendered output.
           clearTimeout(timeout);
-          return await this.consumeStream(response.body, onDelta, controller, onNotice);
+          return await this.consumeStream(response.body, onDelta, controller, onNotice, signal);
         }
       } catch (error) {
         if (signal.aborted || response?.ok || attempt >= retries) throw error;
@@ -196,11 +197,12 @@ export class ResponsesClient {
     }
     const truncated = incompleteReason(data) !== undefined;
     const usage = data.usage && typeof data.usage === "object" ? data.usage as JsonObject : {};
-    return finalizeCompletion({ truncated }, content, "", toolCalls,
+    const recovered = recoverTextToolCalls(content);
+    return finalizeCompletion({ truncated }, recovered.content, "", [...toolCalls, ...recovered.toolCalls],
       { input: Number(usage.input_tokens || 0), output: Number(usage.output_tokens || 0) });
   }
 
-  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler): Promise<CompletionResult> {
+  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, signal?: AbortSignal): Promise<CompletionResult> {
     let content = "";
     const argBuffers = new Map<string, { name: string; arguments: string; order: number }>();
     let order = 0;
@@ -215,6 +217,7 @@ export class ResponsesClient {
       controller.abort(new Error(`model stream idle timeout after ${idleTimeout / 1000}s`));
     };
     let timer = setTimeout(idleAbort, idleTimeout);
+    let failure: unknown;
     try {
       for await (const raw of sseData(stream, controller.signal)) {
         clearTimeout(timer);
@@ -281,16 +284,32 @@ export class ResponsesClient {
           }
         }
       }
+    } catch (error) {
+      failure = error;
     } finally {
       clearTimeout(timer);
     }
-    if (!finished) throw new Error("model stream ended before response.completed; partial response was not accepted");
+    if (signal?.aborted) throw signal.reason ?? failure ?? new Error("aborted");
+    if (!finished) {
+      // Same recovery as the other clients: a dropped or stalled stream keeps
+      // the text it already produced and lets the runner ask for the rest.
+      const declared = failure instanceof Error
+        && /model stream error|model returned malformed|model returned invalid|model SSE event exceeds/u.test(failure.message);
+      if (declared) throw failure;
+      if (content || argBuffers.size) {
+        onNotice?.("模型连接在输出中途中断，已保留已收到的内容并继续");
+        return { content, reasoning: "", toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };
+      }
+      throw failure ?? new Error("model stream ended before response.completed; partial response was not accepted");
+    }
     const toolCalls: ToolCall[] = [...argBuffers.entries()]
       .sort(([, a], [, b]) => a.order - b.order)
       .filter(([, slot]) => slot.name)
       .map(([id, slot]) => ({ id, type: "function" as const, function: { name: slot.name, arguments: slot.arguments || "{}" } }));
+    const recovered = recoverTextToolCalls(content);
+    const allCalls = [...toolCalls, ...recovered.toolCalls];
     const check = { truncated: incomplete };
-    if (!incomplete && !content.trim() && !toolCalls.length) throw new Error("model returned an empty response");
-    return finalizeCompletion(check, content, "", toolCalls, { input, output });
+    if (!incomplete && !recovered.content.trim() && !allCalls.length) throw new Error("model returned an empty response");
+    return finalizeCompletion(check, recovered.content, "", allCalls, { input, output });
   }
 }

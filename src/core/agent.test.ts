@@ -251,6 +251,52 @@ describe("AgentRunner", () => {
     expect(events.some((event) => event.type === "status" && event.text?.includes("截断"))).toBe(true);
   });
 
+  it("keeps a dropped stream's answer and asks for the rest instead of failing", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-dropped-"));
+    let calls = 0;
+    const client = {
+      async complete() {
+        calls += 1;
+        if (calls === 1) {
+          // The connection dropped mid-answer: no finish reason, but real text.
+          return { content: "连接中断前的半截答案", toolCalls: [], usage: { input: 1, output: 1 }, truncated: true, streamEnded: true };
+        }
+        return { content: "，续写完成。", toolCalls: [], usage: { input: 1, output: 1 } };
+      },
+    };
+    const runner = new AgentRunner(config(workspace), client);
+    const events: Array<{ type: string; text?: string }> = [];
+    const result = await runner.run(
+      [...initialMessages(workspace), { role: "user", content: "写一段长答案" }],
+      "agent", new AbortController().signal,
+      (event) => events.push(event as { type: string; text?: string }),
+      async () => "once",
+    );
+    runner.close();
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(2);
+    expect(result.text).toBe("连接中断前的半截答案，续写完成。");
+    expect(events.some((event) => event.type === "status" && event.text?.includes("中断"))).toBe(true);
+  });
+
+  it("gives up with network advice after repeated dropped streams", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-dropped-loop-"));
+    const client = {
+      async complete() {
+        return { content: "", toolCalls: [], usage: { input: 1, output: 1 }, truncated: true, streamEnded: true };
+      },
+    };
+    const runner = new AgentRunner(config(workspace), client);
+    const result = await runner.run(
+      [...initialMessages(workspace), { role: "user", content: "写一段长答案" }],
+      "agent", new AbortController().signal, () => undefined, async () => "once",
+    );
+    runner.close();
+    expect(result.ok).toBe(false);
+    expect(result.stopReason).toBe("truncated");
+    expect(result.text).toContain("连接");
+  });
+
   it("stops with something actionable when reasoning eats the whole output budget", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-starved-"));
     let calls = 0;

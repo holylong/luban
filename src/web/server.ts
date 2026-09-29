@@ -6,6 +6,7 @@ import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { JobStreamRecord, MeshEvent, MeshRuntime } from "../core/mesh/runtime.js";
 import { SessionStore } from "../core/session-store.js";
+import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
 import { VERSION } from "../version.js";
 import { DASHBOARD_HTML, DOCS_HTML, webAssetPath, WEB_CONTENT_TYPES } from "./assets.js";
@@ -400,7 +401,7 @@ export class LubanWebServer {
     if (url.pathname === "/api/sessions") {
       const project = url.searchParams.get("project") || this.config.project;
       const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 60)));
-      const store = new SessionStore(this.config.home);
+      const store = new SessionStore(this.config.home, sharedHistory(this.config.history, this.config.home));
       const sessions = (await store.list(project)).slice(0, limit).map(session => ({
         id: session.id,
         title: session.title,
@@ -415,9 +416,23 @@ export class LubanWebServer {
       }));
       return json(res, sessions);
     }
+    if (url.pathname === "/api/history") {
+      const query = url.searchParams.get("q");
+      const project = url.searchParams.get("project") || undefined;
+      const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 30)));
+      const history = SessionHistory.openForRead(this.config.history, this.config.home);
+      if (!history) return json(res, { enabled: this.config.history.enabled, sessions: [], hits: [] });
+      try {
+        return json(res, query
+          ? { enabled: true, hits: history.search(query, limit) }
+          : { enabled: true, sessions: history.sessions(project, limit) });
+      } finally {
+        history.close();
+      }
+    }
     const sessionMatch = /^\/api\/sessions\/([^/]+)$/u.exec(url.pathname);
     if (sessionMatch) {
-      const store = new SessionStore(this.config.home);
+      const store = new SessionStore(this.config.home, sharedHistory(this.config.history, this.config.home));
       const project = url.searchParams.get("project") || this.config.project;
       const session = await store.load(decodeURIComponent(sessionMatch[1]!), project);
       if (!session) throw new HttpError(404, "unknown session");
