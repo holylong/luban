@@ -28,7 +28,7 @@ function promptFor(messages: ChatMessage[], tools: Array<Record<string, unknown>
   return [
     "You are the model for luban. Return only the JSON response specified by the output schema.",
     "Do not use your own tools or modify files. Luban executes the tool calls you return after checking permissions.",
-    "If a tool is needed, return its exact name and JSON-stringified arguments in tool_calls. Otherwise put the answer in content.",
+    "If a tool is needed, return its exact name and valid JSON-stringified arguments in tool_calls. Escape backslashes inside JSON string values. Otherwise put the answer in content.",
     "Available luban tools:", JSON.stringify(tools),
     "Conversation (JSON):", JSON.stringify(messages.map(({ role, content, name, tool_call_id, tool_calls }) =>
       ({ role, content, name, tool_call_id, tool_calls }))),
@@ -81,7 +81,8 @@ export class CodexClient {
       const toolCalls: ToolCall[] = raw.tool_calls.map((item: unknown) => {
         const call = item as { name?: unknown; arguments?: unknown };
         if (typeof call.name !== "string" || typeof call.arguments !== "string") throw new Error("Codex CLI returned an invalid tool call");
-        JSON.parse(call.arguments);
+        // Leave argument validation to AgentRunner. It reports malformed JSON as a
+        // tool result so the model can correct the call instead of ending the task.
         return { id: `codex_${randomUUID()}`, type: "function", function: { name: call.name, arguments: call.arguments } };
       });
       if (raw.content) onDelta?.(raw.content, "content");
