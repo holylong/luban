@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import { randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import type { AgentMode, ChatMessage, SessionRecord } from "./types.js";
+import type { SessionHistory } from "./session-history.js";
 import { repairToolHistory } from "./history.js";
 import { fallbackTitle, MAX_TITLE_LENGTH } from "./session-title.js";
 
@@ -19,7 +20,12 @@ export class SessionStore {
   readonly root: string;
   private static readonly writes = new Map<string, Promise<void>>();
 
-  constructor(home: string) {
+  /**
+   * @param home luban home directory holding the session records.
+   * @param history Queryable mirror kept in step with every save; omit it to
+   *   leave session history in JSON only.
+   */
+  constructor(home: string, private readonly history?: SessionHistory) {
     this.root = join(home, "sessions-node");
   }
 
@@ -56,6 +62,7 @@ export class SessionStore {
     // with the raw opening line on the very next save.
     if (record.titleSource !== "model") record.title = fallbackTitle(record.messages);
     record.updatedAt = new Date().toISOString();
+    this.history?.append(record);
     const path = this.path(record);
     // Capture the admitted state now, then commit snapshots in call order.
     const body = `${JSON.stringify(record, null, 2)}\n`;

@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { editDisplayRows, editPairText, parseEditRecord, type EditCell } from "../core/edit-preview.js";
 import { HighlightedCodeLine } from "./markdown.js";
 import { listWindow, scrollPercent } from "./scroll.js";
 import { theme } from "./theme.js";
@@ -8,18 +9,72 @@ export interface ExecutionEntry {
   name: string; detail: string; status: "running" | "done" | "failed";
   preview?: string; editPreview?: string; elapsedMs?: number;
 }
-export interface ExecutionRow { kind: "header" | "argument" | "output" | "edit" | "gap"; text: string; entry: ExecutionEntry }
-export function executionRows(entries: ExecutionEntry[], expanded = true): ExecutionRow[] {
+export interface ExecutionRow {
+  kind: "header" | "argument" | "output" | "edit" | "edit-pair" | "gap";
+  text: string;
+  entry: ExecutionEntry;
+  /** Cells for an `edit-pair` row: removed/context on the left, added on the right. */
+  left?: EditCell;
+  right?: EditCell;
+}
+
+/** Below this usable width a split view is too cramped; the unified list is kept. */
+export const SIDE_BY_SIDE_MIN_WIDTH = 72;
+
+/**
+ * Turn one edit record into transcript rows.
+ *
+ * Wide terminals get one aligned `edit-pair` row per change; narrow ones get
+ * the unified `- old` / `+ new` lines the record already stores, so no terminal
+ * has to read a two-column layout squeezed into a few characters.
+ */
+function editRows(preview: string, entry: ExecutionEntry, width: number): ExecutionRow[] {
+  const rows: ExecutionRow[] = [];
+  for (const row of editDisplayRows(parseEditRecord(preview))) {
+    if (row.kind === "header" || row.kind === "meta") { rows.push({ kind: "edit", text: row.text, entry }); continue; }
+    if (width < SIDE_BY_SIDE_MIN_WIDTH) {
+      if (row.left.kind !== "empty") rows.push({ kind: "edit", text: `${String(row.left.line ?? "").padStart(6)} ${row.left.kind === "remove" ? "-" : " "}${row.left.text}`, entry });
+      if (row.right.kind !== "empty" && row.right.kind !== "context") rows.push({ kind: "edit", text: `${String(row.right.line ?? "").padStart(6)} +${row.right.text}`, entry });
+      continue;
+    }
+    rows.push({ kind: "edit-pair", text: editPairText(row.left, row.right), entry, left: row.left, right: row.right });
+  }
+  return rows;
+}
+
+export function executionRows(entries: ExecutionEntry[], expanded = true, width = 80): ExecutionRow[] {
   return entries.flatMap(entry => [
     { kind: "gap" as const, text: "", entry },
     { kind: "header" as const, text: entry.name, entry },
     ...(entry.detail ? [{ kind: "argument" as const, text: entry.detail, entry }] : []),
     ...(entry.editPreview
-      ? entry.editPreview.split("\n").map(text => ({ kind: "edit" as const, text, entry }))
+      ? editRows(entry.editPreview, entry, width)
       : (entry.preview || "").split("\n").filter(Boolean).flatMap((text, index) =>
         expanded || index < 2 ? [{ kind: "output" as const, text, entry }]
           : index === 2 ? [{ kind: "output" as const, text: "… /details 展开更多输出", entry }] : [])),
   ]);
+}
+
+/** One side of a split edit row: line number, sign, and syntax-highlighted code. */
+function EditHalf({ cell }: { cell: EditCell }) {
+  const background = cell.kind === "add" ? theme.codeAddedBackground
+    : cell.kind === "remove" ? theme.codeRemovedBackground : theme.codeBackground;
+  const sign = cell.kind === "add" ? "+" : cell.kind === "remove" ? "-" : " ";
+  const signColor = cell.kind === "add" ? theme.green : cell.kind === "remove" ? theme.red : theme.dim;
+  return <Box flexGrow={1} flexBasis={0} overflow="hidden" backgroundColor={background}>
+    <Text color={theme.muted}>{cell.line === undefined ? "    " : String(cell.line).padStart(4)} </Text>
+    <Text color={signColor}>{sign} </Text>
+    <Box flexGrow={1} overflow="hidden"><HighlightedCodeLine line={cell.text || " "} /></Box>
+  </Box>;
+}
+
+/** Removed text on the left, its replacement on the right, split by a divider. */
+export function SideBySideEditRow({ left, right }: { left: EditCell; right: EditCell }) {
+  return <Box flexShrink={0} flexDirection="row">
+    <EditHalf cell={left} />
+    <Text color={theme.border}>│</Text>
+    <EditHalf cell={right} />
+  </Box>;
 }
 
 export function DiffLine({ line }: { line: string }) {
@@ -44,6 +99,7 @@ export function ExecutionRowView({ row }: { row: ExecutionRow }) {
   const { entry, text, kind } = row;
   if (kind === "gap") return <Text> </Text>;
   if (kind === "edit") return <DiffLine line={text} />;
+  if (kind === "edit-pair") return <SideBySideEditRow left={row.left!} right={row.right!} />;
   if (kind === "header") {
     const color = entry.status === "failed" ? theme.red : entry.status === "running" ? theme.yellow : theme.green;
     const toolColor = entry.name === "bash" ? theme.yellow : /edit|write|patch/u.test(entry.name) ? theme.purple : theme.accent;
@@ -53,8 +109,8 @@ export function ExecutionRowView({ row }: { row: ExecutionRow }) {
   return <Text wrap="truncate-end"><Text color={theme.dim}>  ↳ </Text><Text color={entry.status === "failed" ? theme.red : theme.muted}>{text}</Text></Text>;
 }
 
-export function ExecutionTimeline({ entries, expanded, offset = 0, pageSize = 14 }: { entries: ExecutionEntry[]; expanded: boolean; offset?: number; pageSize?: number }) {
-  const all = executionRows(entries, expanded);
+export function ExecutionTimeline({ entries, expanded, offset = 0, pageSize = 14, width = 80 }: { entries: ExecutionEntry[]; expanded: boolean; offset?: number; pageSize?: number; width?: number }) {
+  const all = executionRows(entries, expanded, width);
   if (!all.length) return null;
   // Clamp here rather than trusting the call site: an over-scrolled wheel
   // offset used to make the view stick at the top while the counter kept

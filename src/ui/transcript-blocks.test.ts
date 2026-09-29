@@ -125,5 +125,13 @@ it("settles live execution records before the session receives the result", () =
   ], { ...options, executions: [{ id: "live", name: "edit_file", detail: "a.ts", status: "done", elapsedMs: 20,
     editPreview: "Edited a.ts (+1 -1)\n     1 -old\n     1 +new" }] });
   expect(blocks[0]!.entry).toMatchObject({ status: "done", elapsedMs: 20 });
-  expect(blocks[0]!.rows?.map(row => row.text)).toContain("     1 +new");
+  const rows = blocks[0]!.rows ?? [];
+  // A wide terminal pairs the removed line with its replacement.
+  expect(rows.some(row => row.kind === "edit-pair" && row.left?.text === "old" && row.right?.text === "new")).toBe(true);
+  // A narrow one keeps the unified line the record stores.
+  const narrow = buildTranscript([
+    { role: "assistant", content: "", tool_calls: [call("live", "edit_file", '{"path":"a.ts"}')] },
+  ], { ...options, width: 40, executions: [{ id: "live", name: "edit_file", detail: "a.ts", status: "done", elapsedMs: 20,
+    editPreview: "Edited a.ts (+1 -1)\n     1 -old\n     1 +new" }] });
+  expect(narrow[0]!.rows?.map(row => row.text)).toContain("     1 +new");
 });

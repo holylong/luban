@@ -60,6 +60,8 @@ export interface EditRecordRow {
   /** Total changed lines, only on the header row. */
   changes?: number;
   text: string;
+  /** Original line for a header or trailer note, so a renderer can echo it verbatim. */
+  raw?: string;
 }
 
 export interface EditRecordStats {
@@ -84,7 +86,7 @@ export function parseEditRecord(preview: string): EditRecordRow[] {
     if (!raw.trim()) continue;
     const header = /^Edited (.*) \(\+(\d+) -(\d+)\)$/u.exec(raw);
     if (header) {
-      rows.push({ kind: "header", text: header[1] || "", changes: Number(header[2]) + Number(header[3]) });
+      rows.push({ kind: "header", text: header[1] || "", changes: Number(header[2]) + Number(header[3]), raw });
       continue;
     }
     if (/^\s*⋮\s*$/u.test(raw)) { rows.push({ kind: "meta", text: "⋮" }); continue; }
@@ -120,4 +122,65 @@ export function editRecordTitle(path: string, stats: EditRecordStats): string {
     ? ""
     : stats.firstLine === stats.lastLine ? ` · L${stats.firstLine}` : ` · L${stats.firstLine}–L${stats.lastLine}`;
   return `\`${path || "unknown file"}\` (+${stats.added} −${stats.removed})${range}`;
+}
+
+/* ---------------------------------------------------------------------------
+ * Side-by-side view
+ *
+ * A unified record lists deletions and additions as separate rows, so a reader
+ * has to scan down to pair an old line with its replacement. These helpers turn
+ * the same rows into aligned left/right cells — removed text on the left, added
+ * text on the right — which is what the terminal and the browser render.
+ * ------------------------------------------------------------------------- */
+
+/** One cell of a side-by-side row. `empty` pads the shorter side of a change. */
+export interface EditCell {
+  kind: "context" | "add" | "remove" | "empty";
+  /** Source line number; unset for a padding cell. */
+  line?: number;
+  text: string;
+}
+
+export type EditDisplayRow =
+  | { kind: "header"; text: string }
+  | { kind: "pair"; left: EditCell; right: EditCell }
+  | { kind: "meta"; text: string };
+
+/**
+ * Pair a parsed record into side-by-side rows.
+ *
+ * Runs of removals are matched with the additions that follow, position by
+ * position; a change with more deletions than insertions leaves the extra
+ * deletions on the left with an empty right cell. Context lines appear on both
+ * sides, and each record header stays a full-width row.
+ */
+export function editDisplayRows(rows: EditRecordRow[]): EditDisplayRow[] {
+  const out: EditDisplayRow[] = [];
+  const pending: EditCell[] = [];
+  const flush = (): void => {
+    while (pending.length) out.push({ kind: "pair", left: pending.shift()!, right: { kind: "empty", text: "" } });
+  };
+  for (const row of rows) {
+    if (row.kind === "header") { flush(); out.push({ kind: "header", text: row.raw ?? `Edited ${row.text}` }); continue; }
+    if (row.kind === "meta") { flush(); out.push({ kind: "meta", text: row.text }); continue; }
+    if (row.kind === "remove") { pending.push({ kind: "remove", line: row.line, text: row.text }); continue; }
+    if (row.kind === "add") {
+      const left = pending.shift() ?? { kind: "empty" as const, text: "" };
+      out.push({ kind: "pair", left, right: { kind: "add", line: row.line, text: row.text } });
+      continue;
+    }
+    flush();
+    const cell: EditCell = { kind: "context", line: row.line, text: row.text };
+    out.push({ kind: "pair", left: cell, right: { ...cell } });
+  }
+  flush();
+  return out;
+}
+
+/** One-line text for a side-by-side row, used where only text can be shown. */
+export function editPairText(left: EditCell, right: EditCell): string {
+  if (left.kind === "context") return `  ${left.text}`;
+  if (left.kind === "empty") return `+ ${right.text}`;
+  if (right.kind === "empty") return `- ${left.text}`;
+  return `- ${left.text}  + ${right.text}`;
 }

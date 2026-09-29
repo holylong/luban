@@ -59,14 +59,14 @@ function note(id: string, text: string, tone: TranscriptBlock["tone"] = "muted")
   return { id, kind: "note", text, tone, lines: 1 };
 }
 
-function toolBlock(id: string, entry: ExecutionEntry, expanded: boolean): TranscriptBlock {
-  const rows = executionRows([entry], expanded);
+function toolBlock(id: string, entry: ExecutionEntry, expanded: boolean, width: number): TranscriptBlock {
+  const rows = executionRows([entry], expanded, width);
   return { id, kind: "tool", entry, rows, lines: Math.max(1, rows.length) };
 }
 
 /** Exported for transports that build the same rows from a remote job's events. */
-export function toolTranscriptBlock(id: string, entry: ExecutionEntry, expanded: boolean): TranscriptBlock {
-  return toolBlock(id, entry, expanded);
+export function toolTranscriptBlock(id: string, entry: ExecutionEntry, expanded: boolean, width: number): TranscriptBlock {
+  return toolBlock(id, entry, expanded, width);
 }
 
 function parseArgs(raw: string | undefined): Record<string, unknown> {
@@ -132,7 +132,7 @@ export function buildTranscript(messages: ChatMessage[], options: TranscriptOpti
     if (known.has(edit.id)) continue;
     blocks.push(toolBlock(`saved-edit-${edit.id}`, {
       name: edit.name, detail: "", status: "done", editPreview: edit.preview,
-    }, expanded));
+    }, expanded, width));
   }
 
   messages.forEach((message, index) => {
@@ -161,7 +161,7 @@ export function buildTranscript(messages: ChatMessage[], options: TranscriptOpti
         const settled = result ? applyResult(entry, result) : entry;
         // tool-end arrives before its result is appended to the session array.
         const live = call.id ? executions.get(call.id) : undefined;
-        blocks.push(toolBlock(`call-${call.id || `${index}-${name}`}`, live ? { ...settled, ...live } : settled, expanded));
+        blocks.push(toolBlock(`call-${call.id || `${index}-${name}`}`, live ? { ...settled, ...live } : settled, expanded, width));
       }
       return;
     }
@@ -171,12 +171,12 @@ export function buildTranscript(messages: ChatMessage[], options: TranscriptOpti
       if (rendered.has(id)) return;
       if (message.editPreview || content.startsWith("Edited ")) {
         const entry: ExecutionEntry = { name: message.name || "edit_file", detail: "", status: "done" };
-        blocks.push(toolBlock(`tool-${index}`, applyResult(entry, message), expanded));
+        blocks.push(toolBlock(`tool-${index}`, applyResult(entry, message), expanded, width));
         return;
       }
       if (/^TOOL ERROR:/u.test(content.trim())) {
         const entry: ExecutionEntry = { name: message.name || "tool", detail: "", status: "failed" };
-        blocks.push(toolBlock(`tool-${index}`, applyResult(entry, message), expanded));
+        blocks.push(toolBlock(`tool-${index}`, applyResult(entry, message), expanded, width));
       }
     }
   });

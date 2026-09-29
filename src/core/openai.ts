@@ -1,6 +1,7 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
 import { parseModelEvent, sseData, validateCompletion, type CompletionCheck } from "./sse.js";
+import { recoverTextToolCalls } from "./tool-call-text.js";
 
 export interface CompletionResult {
   content: string;
@@ -13,6 +14,12 @@ export interface CompletionResult {
    * out of room may have been cut mid-call.
    */
   truncated?: boolean;
+  /**
+   * The stream stopped without a finish reason — the connection dropped or the
+   * provider went silent mid-answer. The partial text is real output, so the
+   * runner keeps it and asks the model to continue instead of failing the run.
+   */
+  streamEnded?: boolean;
 }
 
 /** Apply a validation verdict to one completion. */
@@ -182,7 +189,7 @@ export class OpenAiClient {
           if (!response.body) throw new Error("model returned an empty stream");
           // Do not retry after streaming starts: callbacks may already have rendered output.
           clearTimeout(timeout);
-          return await this.consumeStream(response.body, onDelta, controller, onNotice, options?.thinkingTimeoutMs);
+          return await this.consumeStream(response.body, onDelta, controller, onNotice, options?.thinkingTimeoutMs, signal);
         }
       } catch (error) {
         if (signal.aborted || response?.ok || attempt >= retries) throw error;
@@ -207,15 +214,19 @@ export class OpenAiClient {
       ? message.reasoning_content
       : typeof message.reasoning === "string" ? message.reasoning : "";
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls as ToolCall[] : [];
-    const check = validateCompletion(content, toolCalls, choice.finish_reason);
+    // A gateway that leaves DeepSeek's XML-style calls in the text would
+    // otherwise print the markup as an answer and never run the tool.
+    const recovered = recoverTextToolCalls(content);
+    const calls = [...toolCalls, ...recovered.toolCalls];
+    const check = validateCompletion(recovered.content, calls, choice.finish_reason);
     if (reasoning) onDelta?.(reasoning, "reasoning");
-    if (content) onDelta?.(content, "content");
+    if (recovered.content) onDelta?.(recovered.content, "content");
     const usage = data.usage && typeof data.usage === "object" ? data.usage as Record<string, unknown> : {};
-    return finalizeCompletion(check, content, reasoning, toolCalls,
+    return finalizeCompletion(check, recovered.content, reasoning, calls,
       { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0) });
   }
 
-  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, idleOverrideMs?: number): Promise<CompletionResult> {
+  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, idleOverrideMs?: number, signal?: AbortSignal): Promise<CompletionResult> {
     const toolSlots = new Map<number, ToolCall>();
     let finished = false;
     let finishReason: unknown;
@@ -232,36 +243,56 @@ export class OpenAiClient {
       controller.abort(new Error(`model stream idle timeout after ${idleTimeout / 1000}s`));
     };
     let timer = setTimeout(idleAbort, idleTimeout);
-    try { for await (const raw of sseData(stream, controller.signal)) {
-      clearTimeout(timer);
-      timer = setTimeout(idleAbort, idleTimeout);
-      if (raw.trim() === "[DONE]") { finished = true; break; }
-      const data = parseModelEvent(raw);
-      const usage = data.usage && typeof data.usage === "object" ? data.usage as Record<string, unknown> : {};
-      input = Number(usage.prompt_tokens || input);
-      output = Number(usage.completion_tokens || output);
-      const choices = Array.isArray(data.choices) ? data.choices : [];
-      const choice = (choices[0] ?? {}) as Record<string, unknown>;
-      if (choice.finish_reason != null) { finishReason = choice.finish_reason; finished = true; }
-      const delta = choice.delta && typeof choice.delta === "object" ? choice.delta as Record<string, unknown> : {};
-      const reasoningFragment = typeof delta.reasoning_content === "string"
-        ? delta.reasoning_content
-        : typeof delta.reasoning === "string" ? delta.reasoning : "";
-      if (reasoningFragment) {
-        reasoning += reasoningFragment;
-        onDelta?.(reasoningFragment, "reasoning");
+    let failure: unknown;
+    try {
+      for await (const raw of sseData(stream, controller.signal)) {
+        clearTimeout(timer);
+        timer = setTimeout(idleAbort, idleTimeout);
+        if (raw.trim() === "[DONE]") { finished = true; break; }
+        const data = parseModelEvent(raw);
+        const usage = data.usage && typeof data.usage === "object" ? data.usage as Record<string, unknown> : {};
+        input = Number(usage.prompt_tokens || input);
+        output = Number(usage.completion_tokens || output);
+        const choices = Array.isArray(data.choices) ? data.choices : [];
+        const choice = (choices[0] ?? {}) as Record<string, unknown>;
+        if (choice.finish_reason != null) { finishReason = choice.finish_reason; finished = true; }
+        const delta = choice.delta && typeof choice.delta === "object" ? choice.delta as Record<string, unknown> : {};
+        const reasoningFragment = typeof delta.reasoning_content === "string"
+          ? delta.reasoning_content
+          : typeof delta.reasoning === "string" ? delta.reasoning : "";
+        if (reasoningFragment) {
+          reasoning += reasoningFragment;
+          onDelta?.(reasoningFragment, "reasoning");
+        }
+        if (typeof delta.content === "string") {
+          content += delta.content;
+          onDelta?.(delta.content, "content");
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const fragment of delta.tool_calls) mergeToolCall(toolSlots, fragment as Record<string, unknown>);
+        }
       }
-      if (typeof delta.content === "string") {
-        content += delta.content;
-        onDelta?.(delta.content, "content");
-      }
-      if (Array.isArray(delta.tool_calls)) {
-        for (const fragment of delta.tool_calls) mergeToolCall(toolSlots, fragment as Record<string, unknown>);
-      }
-    } } finally { clearTimeout(timer); }
-    if (!finished) throw new Error("model stream ended before completion; partial response was not accepted");
+    } catch (error) {
+      failure = error;
+    } finally { clearTimeout(timer); }
+    if (signal?.aborted) throw signal.reason ?? failure ?? new Error("aborted");
     const calls = [...toolSlots.entries()].sort(([a], [b]) => a - b).map(([, call]) => call);
-    const check = validateCompletion(content, calls, finishReason);
-    return finalizeCompletion(check, content, reasoning, calls, { input, output });
+    if (!finished) {
+      // A dropped connection or an idle stall after real output is recoverable:
+      // keep the text and let the runner ask for the rest, rather than throwing
+      // a long answer away. Provider-declared errors still surface as errors.
+      const declared = failure instanceof Error
+        && /model stream error|model returned malformed|model returned invalid|model SSE event exceeds/u.test(failure.message);
+      if (declared) throw failure;
+      if (content || reasoning || calls.length) {
+        onNotice?.("模型连接在输出中途中断，已保留已收到的内容并继续");
+        return { content, reasoning, toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };
+      }
+      throw failure ?? new Error("model stream ended before completion; partial response was not accepted");
+    }
+    const recovered = recoverTextToolCalls(content);
+    const allCalls = [...calls, ...recovered.toolCalls];
+    const check = validateCompletion(recovered.content, allCalls, finishReason);
+    return finalizeCompletion(check, recovered.content, reasoning, allCalls, { input, output });
   }
 }

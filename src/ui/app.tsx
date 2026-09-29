@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useInput, useStdout, measureElement, type DOMElement } from "ink";
+import { Box, Text, useApp, useInput, useStdin, useStdout, measureElement, type DOMElement } from "ink";
 import fg from "fast-glob";
 import { VERSION } from "../version.js";
 import { basename, dirname, join } from "node:path";
@@ -15,6 +15,7 @@ import type { JobStreamRecord, MeshChatMessage, MeshJob, MeshRuntime } from "../
 import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
 import { chatBlocks, jobBlocks } from "./mesh-transcript.js";
 import { SessionStore } from "../core/session-store.js";
+import { sharedHistory } from "../core/session-history.js";
 import { summarizeToolArgs } from "../core/tools.js";
 import type {
   AgentEvent,
@@ -33,8 +34,9 @@ import { sessionColor } from "./session-color.js";
 import { toolLabel } from "./tool-labels.js";
 import { Spinner, ThinkingLine, type LivePhase } from "./thinking-line.js";
 import { currentStreamLine } from "./transcript.js";
-import { layoutInput } from "./input-layout.js";
-import { transcriptLines, TranscriptLineView } from "./transcript-lines.js";
+import { displayWidth, layoutInput } from "./input-layout.js";
+import { transcriptLines, SelectableTranscriptLine, TranscriptLineView } from "./transcript-lines.js";
+import { selectedTranscriptText, selectionSpan, type SelectionPoint, type TranscriptSelection } from "./transcript-selection.js";
 import { TextArea } from "./text-area.js";
 import { DiffLine as CodeDiffLine } from "./execution-view.js";
 import { listWindow, scrollPercent, scrollbarThumb } from "./scroll.js";
@@ -50,6 +52,7 @@ import {
   parseMouseReports,
   screenRect,
   stripMouseReports,
+  type MouseReport,
   type ScreenRect,
 } from "./mouse-input.js";
 import { buildTranscript, estimateLines } from "./transcript-blocks.js";
@@ -424,7 +427,7 @@ function HelpPanel() {
       <Text color={theme.accent} bold>快捷键与命令</Text>
       <Text color={theme.muted}>Shift+Tab 模式 · Ctrl+P 模型 · Ctrl+O 会话 · Esc 取消</Text>
       <Text color={theme.muted}>↑↓ 历史 · PgUp/PgDn 翻页 · Ctrl+J 换行 · @ 文件补全</Text>
-      <Text color={theme.muted}>Ctrl+Y 鼠标开关 · 关后可选中复制 · /copy 复制上次回答 · /theme 换配色</Text>
+      <Text color={theme.muted}>Ctrl+Y 选择/滚动模式 · 选择模式拖选高亮并复制 · /copy 复制上次回答</Text>
       <Text color={theme.muted}>Ctrl+C 运行中中断任务 / 空闲复制回答 · Ctrl+D 保存并退出 · /exit 退出</Text>
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /usage /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
@@ -562,6 +565,7 @@ export function SelectDialog({
 export function App({ config: initialConfig, mesh, resume, initialPrompt, mobileLink }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const { stdin } = useStdin();
   const [terminalSize, setTerminalSize] = useState(() => ({ columns: stdout.columns || 80, rows: stdout.rows || 30 }));
   useEffect(() => {
     // Ink relayouts its existing tree on resize, but does not re-run App. A
@@ -686,10 +690,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const namedSessionsRef = useRef(new Set<string>());
   const titleAbortRef = useRef<AbortController | null>(null);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
-  // Mouse capture defaults on: wheel scrolling of the execution history is a
-  // primary interaction, and a hidden Ctrl+Y prerequisite made it look broken.
-  // Ctrl+Y releases the mouse when native text selection is needed instead.
+  // Ctrl+Y changes what a drag does. Mouse reports stay enabled in both modes
+  // so selection can be painted by Ink and copied even when the terminal does
+  // not offer visible or persistent native selection for a live TUI.
   const [mouseEnabled, setMouseEnabled] = useState(true);
+  const [selection, setSelection] = useState<TranscriptSelection | null>(null);
+  const selectionRef = useRef<TranscriptSelection | null>(null);
+  const selectionAnchorRef = useRef<SelectionPoint | null>(null);
+  const selectionRowsRef = useRef<{ rect: ScreenRect | null; first: number; visible: number; lines: string[] }>({ rect: null, first: 0, visible: 0, lines: [] });
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
@@ -722,12 +730,26 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     setScrollOffset((current) => Math.min(max, Math.max(0, current + (direction === "up" ? delta : -delta))));
   }, []);
   useEffect(() => {
-    const inputStream = process.stdin;
+    const inputStream = stdin;
     const outputStream = stdout;
-    // Mouse reporting hijacks terminal text selection; Ctrl+Y toggles it off
-    // so the user can select and copy output natively. 1002 enables
-    // button-event tracking, which is what makes dragging the scrollbar work.
-    if (mouseEnabled) outputStream.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+    // Keep button-motion reports in selection mode: native terminal selection
+    // cannot be highlighted reliably while Ink keeps redrawing the screen.
+    outputStream.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+    const selectionPoint = (report: MouseReport, clamp: boolean): SelectionPoint | null => {
+      const { rect, first, visible, lines } = selectionRowsRef.current;
+      if (!rect || !visible) return null;
+      const adjusted = clamp ? {
+        ...report,
+        x: Math.min(Math.max(report.x, rect.left + 1), rect.left + rect.width),
+        y: Math.min(Math.max(report.y, rect.top + 1), rect.top + rect.height),
+      } : report;
+      const cell = cellIn(rect, adjusted);
+      if (!cell) return null;
+      const rowInPane = cell.row - Math.max(0, rect.height - visible);
+      if (rowInPane < 0 && !clamp) return null;
+      const row = first + Math.min(visible - 1, Math.max(0, rowInPane));
+      return { row, column: Math.min(Math.max(0, cell.column), displayWidth(lines[row] ?? "")) };
+    };
     const onData = (chunk: Buffer) => {
       let up = 0;
       let down = 0;
@@ -744,6 +766,15 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
 
         const { x, y } = report;
         if (isMotion(report)) { // bit 5 is set while a button is held
+          if (!mouseEnabled && selectionAnchorRef.current) {
+            const focus = selectionPoint(report, true);
+            if (focus) {
+              const next = { anchor: selectionAnchorRef.current, focus };
+              selectionRef.current = next;
+              setSelection(next);
+            }
+            continue;
+          }
           const drag = dragRef.current;
           if (!drag) continue;
           const { totalLines, viewport } = streamMetricsRef.current;
@@ -756,6 +787,26 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         }
 
         if (report.released) { // a click that never moved pages toward the click
+          if (!mouseEnabled && selectionAnchorRef.current) {
+            const focus = selectionPoint(report, true);
+            const selected = focus ? { anchor: selectionAnchorRef.current, focus } : selectionRef.current;
+            selectionAnchorRef.current = null;
+            selectionRef.current = selected;
+            setSelection(selected);
+            const text = selected ? selectedTranscriptText(selectionRowsRef.current.lines, selected) : "";
+            if (text) void (async () => {
+              try { outputStream.write(osc52CopySequence(text)); } catch { /* Use the system helper below. */ }
+              if (await writeSystemClipboard(text)) {
+                setNotice("已复制选中内容 · Ctrl+V 粘贴 · Ctrl+Y 返回滚动模式");
+              } else {
+                const path = join(config.home, "last-selection.txt");
+                await mkdir(config.home, { recursive: true });
+                await writeFile(path, text, "utf8");
+                setNotice(`已发送 OSC52；终端若未复制，可从 ${path} 读取选中内容`);
+              }
+            })().catch((error) => setNotice(`选区复制失败：${error instanceof Error ? error.message : String(error)}`));
+            continue;
+          }
           const drag = dragRef.current;
           dragRef.current = null;
           if (!drag || drag.moved) continue;
@@ -771,6 +822,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         }
 
         if (!isLeftPress(report)) continue;
+
+        if (!mouseEnabled) {
+          const anchor = selectionPoint(report, false);
+          selectionAnchorRef.current = anchor;
+          selectionRef.current = anchor ? { anchor, focus: anchor } : null;
+          setSelection(selectionRef.current);
+          continue;
+        }
 
         // A left press inside the track starts a drag. Movement is applied
         // relatively, so the content follows the pointer without the thumb
@@ -795,8 +854,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       applyScroll(up >= down ? "up" : "down", Math.max(up, down) * WHEEL_ROWS);
     };
     inputStream.on("data", onData);
-    return () => { inputStream.off("data", onData); if (mouseEnabled) outputStream.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l"); };
-  }, [stdout, mouseEnabled, applyScroll]);
+    return () => { inputStream.off("data", onData); outputStream.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l"); };
+  }, [stdin, stdout, mouseEnabled, applyScroll, config.home]);
   useEffect(() => {
     let cancelled = false;
     void fg(["**/*"], { cwd: config.workspace, onlyFiles: true, dot: false,
@@ -824,7 +883,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // Job status by id, updated synchronously with the events that carry it, so
   // the auto-focus decision does not depend on a render having happened yet.
   const meshStatusRef = useRef(new Map<string, string>());
-  const store = useMemo(() => new SessionStore(config.home), [config.home]);
+  const store = useMemo(() => new SessionStore(config.home, sharedHistory(config.history, config.home)), [config.home]);
   const [initialRunner] = useState(() => new AgentRunner(initialConfig, undefined, mesh));
   const runnerRef = useRef(initialRunner);
   const sessionRef = useRef(store.create(config.project, config.workspace, mode, config.model.id, messages));
@@ -1992,12 +2051,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     if (!dialog && !approval && key.ctrl && character.toLowerCase() === "y") {
       const next = !mouseEnabled;
       setMouseEnabled(next);
-      // With reporting off the terminal stops sending reports, so a literal
-      // `[M` typed from now on is text again, not a swallowed X10 prefix.
-      if (!next) mouseGuardRef.current.reset();
+      selectionAnchorRef.current = null;
+      selectionRef.current = null;
+      setSelection(null);
       setNotice(next
-        ? "Mouse on · 滚轮滚动、拖动右侧滚动条或 PageUp/PageDown 翻阅历史 · Ctrl+Y 释放鼠标以选中复制"
-        : "Mouse off · 现在可直接拖选复制文本 · /copy 复制上次回答 · Ctrl+Y 恢复滚轮");
+        ? "滚动模式 · 滚轮和右侧滚动条可用 · Ctrl+Y 选择输出"
+        : "选择模式 · 在输出区拖选，松开即复制；选中部分会高亮 · Ctrl+Y 返回滚动模式");
       return;
     }
     // Ctrl+C no longer kills the process (render uses exitOnCtrlC: false):
@@ -2144,6 +2203,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const renderedLines = useMemo(() => transcriptLines(streamBlocks, streamTextWidth), [streamBlocks, streamTextWidth]);
   const streamView = listWindow(renderedLines.length, scrollTrackHeight, scrollOffset);
   const visibleLines = renderedLines.slice(streamView.start, streamView.end);
+  selectionRowsRef.current = { rect: screenRect(transcriptNode.current), first: streamView.start,
+    visible: visibleLines.length, lines: renderedLines.map((line) => line.text) };
   const scrolledBack = streamView.offset > 0;
   streamMetricsRef.current = { totalLines: streamView.total, viewport: scrollTrackHeight };
   scrollOffsetRef.current = streamView.offset;
@@ -2220,7 +2281,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {/* Everything the agent produced is one chain: prose, tool calls, edits
             and notes in the order they happened, scrolled as a single list. */}
         {!dialog ? <Box ref={transcriptNode} flexDirection="column" flexGrow={1} flexBasis={0} overflow="hidden" justifyContent="flex-end">
-          {visibleLines.map(line => <Box key={line.id} height={1} flexShrink={0}><TranscriptLineView line={line} /></Box>)}
+          {visibleLines.map((line, index) => <Box key={line.id} height={1} flexShrink={0}>{mouseEnabled
+            ? <TranscriptLineView line={line} />
+            : <SelectableTranscriptLine line={line} span={selectionSpan(line.text, streamView.start + index, selection)} />}</Box>)}
         </Box> : null}
         {!dialog && !showMesh && running && livePhase ? (
           <ThinkingLine
@@ -2314,7 +2377,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             <Text color={theme.dim} wrap="truncate-end">
               {`${config.model.name}  ${usage.input}↑ ${usage.output}↓ · ctx ${contextPct}%`}
               <Text color={theme.text}>  Enter 发送 · Ctrl+J 换行</Text>
-              <Text>  {mouseEnabled ? "Ctrl+Y 释放鼠标复制" : "Ctrl+Y 恢复滚轮"}</Text>
+              <Text>  {mouseEnabled ? "Ctrl+Y 选择输出" : "拖选复制 · Ctrl+Y 滚动"}</Text>
               {pendingCount ? <Text color={theme.accent}>  {pendingCount} pending</Text> : null}
             </Text>
           </Box>

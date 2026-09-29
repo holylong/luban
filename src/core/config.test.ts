@@ -316,4 +316,19 @@ describe("config", () => {
     expect(config.models.map((item) => item.model)).toEqual(["custom"]);
     expect(config.models[0]?.baseUrl).toBe("https://example.test/v1");
   });
+
+  // The mirror writes a database, so an existing install must not start
+  // writing one until the user asks for it.
+  it("keeps the queryable history mirror off unless enabled", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-history-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    expect(loadConfig({ workspace }).history).toEqual({ enabled: false, directory: "", maxMessagesPerSession: 0 });
+
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      history: { enabled: true, directory: join(home, "archive"), max_messages_per_session: 200 },
+    }));
+    expect(loadConfig({ workspace }).history).toEqual({ enabled: true, directory: join(home, "archive"), maxMessagesPerSession: 200 });
+  });
 });
