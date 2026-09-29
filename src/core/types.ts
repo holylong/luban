@@ -35,7 +35,9 @@ export interface ModelRef {
   name: string;
   baseUrl: string;
   apiKey: string;
-  api: "openai" | "anthropic" | "responses";
+  api: "openai" | "anthropic" | "responses" | "codex";
+  /** Codex CLI model_reasoning_effort override; absent uses Codex config.toml. */
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** Extra request headers a provider requires (e.g. OpenCode Go's session id). */
   headers?: Record<string, string>;
   capabilities: ModelCapabilities;

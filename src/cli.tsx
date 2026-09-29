@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import React from "react";
+import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 import { Command } from "commander";
 import { render } from "ink";
 import { AgentRunner, initialMessages } from "./core/agent.js";
-import { loadConfig } from "./core/config.js";
+import { loadConfig, savePreferredModel } from "./core/config.js";
 import { announceHost, directedBroadcasts, MeshRuntime } from "./core/mesh/runtime.js";
 import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
@@ -719,7 +720,20 @@ async function runAcp(argv: string[]): Promise<number> {
 }
 
 const command = process.argv[2];
-const entry = command === "web"
+const entry = command === "login" && process.argv[3] === "codex"
+  ? new Promise<number>((resolve, reject) => {
+      const child = spawn(process.env.LUBAN_CODEX_BIN || "codex", ["login"], { stdio: "inherit" });
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code !== 0) return resolve(code ?? 1);
+        savePreferredModel(process.env.LUBAN_HOME || join(homedir(), ".luban"), "codex/default")
+          .then(() => {
+            process.stdout.write("Codex login complete. Luban will use codex/default.\n");
+            resolve(0);
+          }, reject);
+      });
+    })
+  : command === "web"
   ? runDaemon(process.argv.slice(3), true)
   : command === "serve"
     ? runDaemon(process.argv.slice(3), false)

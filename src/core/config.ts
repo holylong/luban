@@ -63,6 +63,11 @@ function text(...values: unknown[]): string {
   return "";
 }
 
+function codexEffort(value: unknown): ModelRef["reasoningEffort"] {
+  return ["low", "medium", "high", "xhigh", "max", "ultra"].includes(value as string)
+    ? value as ModelRef["reasoningEffort"] : undefined;
+}
+
 function integer(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
@@ -234,15 +239,20 @@ const OPENCODE_GO_MODELS: Record<string, { name: string; api: "openai" | "anthro
 };
 
 /**
- * Providers luban knows without any config file. OpenCode Go is only offered
- * when its credential can be found, so an unconfigured install never shows
- * models that could not authenticate.
+ * Providers luban knows without any config file. Subscription providers are
+ * offered only after login or explicit selection.
  */
-function builtinProviders(): Record<string, JsonObject> {
+function builtinProviders(includeCodex = false): Record<string, JsonObject> {
   const key = text(process.env.OPENCODE_API_KEY, process.env.OPENCODE_GO_API_KEY, opencodeAuthKey());
-  if (!key) return {};
   return {
-    "opencode-go": {
+    ...(includeCodex ? { codex: {
+      api: "codex",
+      models: Object.fromEntries(["default", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].map((id) => [id, {
+        name: id === "default" ? "Codex (CLI default)" : id,
+        capabilities: { vision: false, thinking: true, tools: true },
+      }])),
+    } } : {}),
+    ...(key ? { "opencode-go": {
       api_key_env: "OPENCODE_API_KEY",
       base_url: "https://opencode.ai/zen/go/v1",
       headers: { "x-opencode-session": "luban" },
@@ -255,7 +265,7 @@ function builtinProviders(): Record<string, JsonObject> {
           ...(model.temperature === false ? { temperature: false } : {}),
         },
       }])),
-    },
+    } } : {}),
   };
 }
 
@@ -291,7 +301,7 @@ function collectModels(raw: JsonObject): ModelRef[] {
       const perModel = record((record(provider.models as JsonObject)[model.id] ?? {}) as unknown);
       const caps = record(perModel.capabilities ?? provider.capabilities ?? modelConfig.capabilities);
       const apiRaw = text(perModel.api, perModel.type, providerApi).toLowerCase();
-      const api = apiRaw === "anthropic" ? "anthropic" : apiRaw === "responses" ? "responses" : "openai";
+      const api = apiRaw === "anthropic" ? "anthropic" : apiRaw === "responses" ? "responses" : apiRaw === "codex" ? "codex" : "openai";
       const headers = { ...providerHeaders, ...headerMap(perModel.headers) };
       const modelId = `${providerName}/${model.id}`.toLowerCase();
       const visionDefault = /vision|gpt-4o|gpt-4\.1|claude.*(sonnet|opus)|gemini.*(pro|flash)|qwen.*vl/i.test(`${providerName} ${model.id}`);
@@ -389,12 +399,30 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const hasExplicitProviders = Object.keys(explicitProviders).length > 0;
   const wantsBuiltin = hasExplicitProviders || !singleModel
     || text(mergedModel.active).toLowerCase().startsWith("opencode-go");
-  const builtins = wantsBuiltin ? builtinProviders() : {};
+  const preferences = readJson(join(home, "node-preferences.json"));
+  const requestedModel = text(options.model, process.env.LUBAN_MODEL, preferences.model, mergedModel.active, mergedModel.model);
+  const codexModelId = [options.model, process.env.LUBAN_MODEL, preferences.model, mergedModel.active]
+    .find((value) => typeof value === "string" && value.toLowerCase().startsWith("codex/")) as string | undefined;
+  const codexEnabled = preferences.codexEnabled === true || Boolean(codexModelId);
+  const builtins = wantsBuiltin || codexEnabled ? builtinProviders(codexEnabled) : {};
   // User providers stay first (and win) so defaults and ordering do not shift;
   // built-ins are appended only when the user has not defined that provider.
   const providers: JsonObject = { ...explicitProviders };
   for (const [name, definition] of Object.entries(builtins)) {
     if (!(name in explicitProviders)) providers[name] = definition;
+  }
+  if (codexModelId) {
+    const codex = record(providers.codex);
+    const requestedName = codexModelId.slice("codex/".length);
+    if (text(codex.api) === "codex" && requestedName && !providerModels(codex).some((model) => model.id === requestedName)) {
+      providers.codex = {
+        ...codex,
+        models: { ...Object.fromEntries(providerModels(codex).map((model) => [model.id,
+          Array.isArray(codex.models) ? { name: model.name } : record(codex.models)[model.id]])), [requestedName]: {
+          name: requestedName, capabilities: { vision: false, thinking: true, tools: true },
+        } },
+      };
+    }
   }
   raw.providers = providers;
   raw.model = mergedModel;
@@ -413,10 +441,17 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     ...record(record(projectConfig.lsp).servers), ...record(projectConfig.lspServers ?? projectConfig.lsp_servers),
   };
 
-  const models = collectModels(raw);
   const modelConfig = record(raw.model);
-  const preferences = readJson(join(home, "node-preferences.json"));
-  const requested = text(options.model, process.env.LUBAN_MODEL, preferences.model, modelConfig.active, modelConfig.model);
+  const storedEfforts = record(preferences.codexEfforts);
+  const forcedEffort = codexEffort(process.env.LUBAN_CODEX_EFFORT);
+  const configuredEffort = codexEffort(text(modelConfig.reasoning_effort, modelConfig.reasoningEffort));
+  const models = collectModels(raw).map((model) => {
+    if (model.api !== "codex") return model;
+    const stored = storedEfforts[model.id];
+    const effort = forcedEffort ?? (stored === "" ? undefined : codexEffort(stored) ?? configuredEffort);
+    return effort ? { ...model, reasoningEffort: effort } : model;
+  });
+  const requested = requestedModel;
   const active = models.find((item) => item.id === requested || item.model === requested) ?? models[0]!;
   const nodeConfig = record(raw.node);
   const nodeFrontend = record(raw.node_frontend);
@@ -552,8 +587,14 @@ async function savePreferences(home: string, patch: JsonObject): Promise<void> {
   await rename(temporary, path);
 }
 
-export async function savePreferredModel(home: string, model: string): Promise<void> {
-  await savePreferences(home, { model });
+export async function savePreferredModel(home: string, model: string, effort?: ModelRef["reasoningEffort"] | null): Promise<void> {
+  await savePreferences(home, {
+    model,
+    ...(model.startsWith("codex/") ? { codexEnabled: true } : {}),
+    ...(model.startsWith("codex/") && effort !== undefined ? {
+      codexEfforts: { ...record(readJson(join(home, "node-preferences.json")).codexEfforts), [model]: effort ?? "" },
+    } : {}),
+  });
 }
 
 /** Persists the palette chosen with `/theme`, applied on the next start. */

@@ -37,6 +37,29 @@ afterEach(() => {
 });
 
 describe("config", () => {
+  it("selects a named Codex CLI model without falling back to default", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-codex-model-"));
+    process.env.LUBAN_HOME = home;
+    const chosen = loadConfig({ workspace: home, model: "codex/gpt-6-sol" });
+    expect(chosen.model).toMatchObject({ id: "codex/gpt-6-sol", model: "gpt-6-sol", api: "codex" });
+    expect(chosen.models.some((model) => model.id === "codex/gpt-6-luna")).toBe(true);
+    expect(loadConfig({ workspace: home, model: "codex/custom-model" }).model.model).toBe("custom-model");
+    await savePreferredModel(home, "codex/gpt-6-sol");
+    await savePreferredModel(home, "openai-compatible/gpt-4.1-mini");
+    expect(loadConfig({ workspace: home }).models.some((model) => model.id === "codex/gpt-6-sol")).toBe(true);
+  });
+
+  it("keeps Codex reasoning effort per model and permits the CLI default", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-codex-effort-"));
+    process.env.LUBAN_HOME = home;
+    await savePreferredModel(home, "codex/gpt-6-sol", "high");
+    await savePreferredModel(home, "codex/gpt-6-luna", "low");
+    expect(loadConfig({ workspace: home, model: "codex/gpt-6-sol" }).model.reasoningEffort).toBe("high");
+    expect(loadConfig({ workspace: home }).model.reasoningEffort).toBe("low");
+    await savePreferredModel(home, "codex/gpt-6-sol", null);
+    expect(loadConfig({ workspace: home, model: "codex/gpt-6-sol" }).model.reasoningEffort).toBeUndefined();
+  });
+
   it("uses the output budget supported by the default Qwen service", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-default-config-"));
     const workspace = join(home, "project");
