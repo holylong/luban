@@ -25,12 +25,21 @@ const anthropicText = frame({ type: "content_block_delta", index: 0, delta: { ty
 
 for (const [name, Client, text] of [["openai", OpenAiClient, openText], ["anthropic", AnthropicClient, anthropicText]] as const) {
   describe(name, () => {
-    it("rejects premature EOF without retrying or duplicating streamed text", async () => {
+    it("keeps the partial text when a stream drops without a finish reason", async () => {
       const fixture = await endpoint(text);
       const deltas: string[] = [];
-      await expect(new Client(fixture.config).complete([], [], new AbortController().signal, (text) => deltas.push(text))).rejects.toThrow("stream ended");
+      // A dropped connection is not a broken request: the text that arrived is
+      // real output, so it is kept for the runner to continue from instead of
+      // failing the run and discarding a long answer.
+      const result = await new Client(fixture.config).complete([], [], new AbortController().signal, (text) => deltas.push(text));
+      expect(result).toMatchObject({ content: "partial", truncated: true, streamEnded: true, toolCalls: [] });
       expect(fixture.requests()).toBe(1);
       expect(deltas).toEqual(["partial"]);
+    });
+    it("rejects a stream that ends before producing anything", async () => {
+      const fixture = await endpoint("");
+      await expect(new Client(fixture.config).complete([], [], new AbortController().signal)).rejects.toThrow("stream ended");
+      expect(fixture.requests()).toBe(1);
     });
     it("surfaces provider error events even after partial text", async () => {
       const fixture = await endpoint(text + frame({ type: "error", error: { message: "overloaded" } }));
@@ -64,6 +73,35 @@ it("keeps the text of a truncated response and refuses incomplete tool arguments
   // be trusted, so they are rejected rather than executed half-written.
   const incomplete = await endpoint(frame({ choices: [{ delta: { tool_calls: [{ index: 0, id: "a", function: { name: "write_file", arguments: '{"path":' } }] } }] }) + "data: [DONE]\n\n");
   await expect(new OpenAiClient(incomplete.config).complete([], [], new AbortController().signal)).rejects.toThrow("tool arguments");
+});
+it("passes malformed arguments from a completed tool call to the runner", async () => {
+  const malformed = '{"path":"C:' + String.fromCharCode(92) + 'q"}';
+  const response = await endpoint(
+    frame({ choices: [{ delta: { tool_calls: [{ index: 0, id: "bad", function: { name: "read_file", arguments: malformed } }] } }] })
+    + frame({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })
+    + "data: [DONE]\n\n",
+  );
+  const result = await new OpenAiClient(response.config).complete([], [], new AbortController().signal);
+  expect(result.toolCalls[0]?.function.arguments).toBe(malformed);
+});
+it("recovers DeepSeek XML-style tool calls that arrived as assistant text", async () => {
+  const markup = [
+    "<｜｜DSML｜｜ calls>",
+    '<｜｜DSML｜｜ invoke name="bash">',
+    '<｜｜DSML｜｜ parameter name="command" string="true">ls -la</｜｜DSML｜｜ parameter>',
+    "</｜｜DSML｜｜ invoke>",
+    "</｜｜DSML｜｜ calls>",
+  ].join("\n");
+  const response = await endpoint(
+    frame({ choices: [{ delta: { content: markup } }] })
+    + frame({ choices: [{ delta: {}, finish_reason: "stop" }] })
+    + "data: [DONE]\n\n",
+  );
+  const result = await new OpenAiClient(response.config).complete([], [], new AbortController().signal);
+  expect(result.content).toBe("");
+  expect(result.toolCalls).toHaveLength(1);
+  expect(result.toolCalls[0]?.function.name).toBe("bash");
+  expect(JSON.parse(result.toolCalls[0]!.function.arguments)).toEqual({ command: "ls -la" });
 });
 it("accepts a completed compatible stream without DONE and rejects empty JSON success", async () => {
   const finished = await endpoint(openText + frame({ choices: [{ delta: {}, finish_reason: "stop" }] }));

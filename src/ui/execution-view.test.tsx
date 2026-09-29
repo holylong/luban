@@ -27,7 +27,7 @@ describe("execution presentation", () => {
     expect(renderToString(<DiffLine line="    13 +    const x = 1;" />, { columns: 80 })).toContain("+     const x = 1;");
   });
   it("renders separate tool headers, commands, results, and edits in a narrow terminal", () => {
-    const output = renderToString(<ExecutionTimeline entries={sampleEntries} expanded pageSize={30} />, { columns: 68 });
+    const output = renderToString(<ExecutionTimeline entries={sampleEntries} expanded pageSize={30} width={68} />, { columns: 68 });
     expect(output).toContain("Shell");
     expect(output).toContain("$ npm run typecheck");
     expect(output).toContain("↳ TypeScript check passed");
@@ -35,6 +35,16 @@ describe("execution presentation", () => {
     expect(output).toContain("fetchProfile(userId)");
     expect(output).toContain("执行中");
     expect(executionRows(sampleEntries).filter(row => row.kind === "gap")).toHaveLength(3);
+  });
+  it("splits an edit into left/right cells when the terminal is wide enough", () => {
+    const output = renderToString(<ExecutionTimeline entries={sampleEntries} expanded pageSize={30} width={120} />, { columns: 120 });
+    // The removed call is on the left, its replacement on the right of one row.
+    const line = output.split("\n").find(row => row.includes("fetch(\"/api/user\")"));
+    expect(line).toBeDefined();
+    expect(line).toContain("│");
+    expect(line).toContain("fetchProfile(userId)");
+    expect(executionRows(sampleEntries, true, 120).some(row => row.kind === "edit-pair")).toBe(true);
+    expect(executionRows(sampleEntries, true, 68).some(row => row.kind === "edit-pair")).toBe(false);
   });
 });
 

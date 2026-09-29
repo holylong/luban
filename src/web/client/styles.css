@@ -162,6 +162,20 @@ a { color: var(--blue); }
 .edit-line.remove .sign { color: var(--red); }
 .edit-line .code { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 10px; }
 .edit-meta { padding: 3px 12px; color: var(--dim); }
+/* Side-by-side record: removed lines on the left, added lines on the right. */
+.edit-split { max-height: 340px; overflow: auto; padding: 4px 0; }
+.edit-split-head { padding: 3px 12px; color: var(--dim); font-size: 11px; border-bottom: 1px solid var(--line-soft); }
+.edit-split-row { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; }
+.edit-cell { display: grid; grid-template-columns: 42px 14px 1fr; gap: 0; min-width: 0; }
+.edit-cell.left { border-right: 1px solid var(--line); }
+.edit-cell .ln { text-align: right; padding-right: 8px; color: var(--dim); user-select: none; }
+.edit-cell .sign { color: var(--dim); }
+.edit-cell.add { background: var(--add-bg); }
+.edit-cell.add .sign { color: var(--green); }
+.edit-cell.remove { background: var(--del-bg); }
+.edit-cell.remove .sign { color: var(--red); }
+.edit-cell.empty { background: var(--panel); }
+.edit-cell .code { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 10px; min-width: 0; }
 
 .result { margin: 0 0 18px 36px; padding: 11px 13px; border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: var(--radius); background: var(--panel); }
 .result.failed { border-left-color: var(--red); }

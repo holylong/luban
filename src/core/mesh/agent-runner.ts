@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 import { AgentRunner, initialMessages } from "../agent.js";
 import { SessionStore } from "../session-store.js";
+import { sharedHistory } from "../session-history.js";
 import { summarizeToolArgs } from "../tools.js";
 import type { AgentEvent, LubanConfig, ToolDefinition } from "../types.js";
 import type { JobStreamEvent, MeshRuntime } from "./runtime.js";
@@ -47,7 +48,7 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
   mesh.setJobRunner(async (job, signal, onLog, onEvent) => {
     const settings: LubanConfig = { ...config, workspace: job.workspace,
       project: job.project_id || basename(job.workspace) };
-    const store = new SessionStore(config.home);
+    const store = new SessionStore(config.home, sharedHistory(config.history, config.home));
     let session = job.session_id ? await store.load(job.session_id, settings.project, settings.workspace) : undefined;
     if ((job.resume_count || 0) > 0 && !session) throw new Error("Cannot resume: saved task history is missing; inspect the workspace before starting a new task.");
     if (!session) {

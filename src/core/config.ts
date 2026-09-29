@@ -485,6 +485,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const sandboxBackendRaw = text(sandboxRaw.backend, "none").toLowerCase();
   const toolOutputRaw = record(raw.tool_output ?? raw.toolOutput);
   const mcpRaw = record(raw.mcp);
+  const historyRaw = record(raw.history);
   const codeIntelRaw = record(raw.code_intelligence ?? raw.codeIntel);
   const remoteRaw = record(raw.remote);
   return {
@@ -538,6 +539,11 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     toolOutputMaxBytes: Math.max(1024 * 1024, integer(toolOutputRaw.max_bytes ?? toolOutputRaw.maxBytes, 500 * 1024 * 1024)),
     mcpMaxTools: Math.max(4, Math.min(256, integer(mcpRaw.max_tools ?? mcpRaw.maxTools, 64))),
     mcpLazy: mcpRaw.lazy === true || mcpRaw.lazy === "true",
+    history: {
+      enabled: historyRaw.enabled === true || historyRaw.enabled === "true" || process.env.LUBAN_HISTORY === "1",
+      directory: text(historyRaw.directory, ""),
+      maxMessagesPerSession: Math.max(0, integer(historyRaw.max_messages_per_session ?? historyRaw.maxMessagesPerSession, 0)),
+    },
     mesh: {
       enabled: options.mesh ?? true,
       nodeName: text(options.meshName, process.env.LUBAN_NAME, nodeConfig.name, hostname()),

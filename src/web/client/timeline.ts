@@ -189,8 +189,8 @@ export function isEditRun(run: ToolRun): boolean {
 
 // The record format is owned by the runtime; re-exported here so browser
 // components keep one import site while the parser stays single-sourced.
-export { editRecordStats, editRecordTitle, parseEditRecord } from "../../core/edit-preview";
-export type { EditRecordRow, EditRecordStats } from "../../core/edit-preview";
+export { editDisplayRows, editPairText, editRecordStats, editRecordTitle, parseEditRecord } from "../../core/edit-preview";
+export type { EditCell, EditDisplayRow, EditRecordRow, EditRecordStats } from "../../core/edit-preview";
 
 /** Human label for a tool call, matching the terminal surface. */
 export const TOOL_LABELS: Record<string, string> = {

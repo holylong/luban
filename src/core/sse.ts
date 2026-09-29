@@ -67,9 +67,11 @@ export function validateCompletion(content: string, calls: import("./types.js").
   if (!truncated) {
     for (const call of calls) {
       if (!call?.function?.name || typeof call.function.arguments !== "string") throw new Error("model returned an incomplete tool call");
-      let args: unknown;
-      try { args = JSON.parse(call.function.arguments); } catch { throw new Error("model returned incomplete or invalid tool arguments"); }
-      if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("model tool arguments must be an object");
+      // Completed calls reach AgentRunner, which reports malformed arguments to the model.
+      // Without a completion reason, invalid JSON may be a cut-off call.
+      if (reason == null) {
+        try { JSON.parse(call.function.arguments); } catch { throw new Error("model returned incomplete or invalid tool arguments"); }
+      }
     }
     if (!content.trim() && !calls.length) throw new Error("model returned an empty response");
   }

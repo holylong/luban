@@ -8,6 +8,7 @@ import { render } from "ink";
 import { expect, it } from "vitest";
 import { loadConfig } from "../core/config.js";
 import { SessionStore } from "../core/session-store.js";
+import { osc52CopySequence } from "./clipboard.js";
 import { App } from "./app.js";
 
 it("keeps the composer visible when a terminal reconnects at a smaller size", async () => {
@@ -37,6 +38,57 @@ it("keeps the composer visible when a terminal reconnects at a smaller size", as
     expect(frame).toContain("Message luban");
     stdin.write("restored input");
     await expect.poll(() => frame).toContain("restored input");
+  } finally {
+    app.unmount();
+    app.cleanup();
+    if (oldHome === undefined) delete process.env.LUBAN_HOME;
+    else process.env.LUBAN_HOME = oldHome;
+  }
+}, 10000);
+
+it("copies only the selected text from a dragged output selection", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-select-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const config = loadConfig({ workspace });
+  const store = new SessionStore(home);
+  const session = store.create(config.project, workspace, "auto", config.model.id, [
+    { role: "user", content: "prompt" },
+    { role: "assistant", content: "previous answer" },
+  ]);
+  await store.save(session);
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 80, rows: 24, isTTY: true });
+  let frame = "";
+  let raw = "";
+  stdout.on("data", data => {
+    raw += String(data);
+    const text = stripVTControlCharacters(String(data));
+    if (text.includes("Auto")) frame = text;
+  });
+  const app = render(<App config={config} resume={session.id} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: true, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame).toContain("previous answer");
+    stdin.write("\u0019");
+    await expect.poll(() => frame).toContain("选择模式");
+    const displayed = frame.split("\n");
+    const row = displayed.findIndex(line => line.includes("previous answer")) + 1;
+    const column = displayed[row - 1]!.indexOf("previous answer") + 1;
+    expect(row).toBeGreaterThan(0);
+    const report = (code: number, x: number, end = "M") => `\u001b[<${code};${x};${row}${end}`;
+    stdin.write(report(0, column));
+    stdin.write(report(32, column + 8));
+    stdin.write(report(0, column + 8, "m"));
+    // A drag across "previous answer" from its first column copies exactly the
+    // first eight cells, and the selection survives in the transcript.
+    await expect.poll(() => raw).toContain(osc52CopySequence("previous"));
+    await expect.poll(() => frame).toMatch(/已复制选中内容|已发送 OSC52/u);
+    expect(frame).toContain("previous answer");
   } finally {
     app.unmount();
     app.cleanup();
