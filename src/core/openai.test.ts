@@ -61,6 +61,40 @@ describe("OpenAiClient", () => {
     expect(requestBody?.stream_options).toEqual({ include_usage: true });
   });
 
+  it("sends enable_thinking only for Qwen or an explicit thinking setting", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no test address");
+    const configFor = (id: string, model: string): LubanConfig => {
+      const ref = { id, provider: "p", model, name: model, baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: "" };
+      return { home: ".", workspace: ".", project: "test", model: ref, models: [ref], maxTokens: 100, temperature: 0, timeoutMs: 2_000, maxSteps: 2, backendUrl: "", permissionMode: "allow" };
+    };
+    const run = (config: LubanConfig, thinking = true) =>
+      new OpenAiClient(config).complete([{ role: "user", content: "hi" }], [], new AbortController().signal, undefined, undefined, { enableThinking: thinking });
+
+    // DeepSeek on the same gateway must not be told to think: enable_thinking
+    // there turns on heavy reasoning that can eat the whole output budget.
+    await run(configFor("opencode-go/deepseek-v4.1-flash", "deepseek-v4.1-flash"));
+    await run(configFor("qwen-local/qwen3.8-flash", "qwen3.8-flash"));
+    const forced = configFor("opencode-go/deepseek-v4.1-flash", "deepseek-v4.1-flash");
+    forced.enableThinking = true;
+    await run(forced);
+
+    expect(bodies[0]).not.toHaveProperty("chat_template_kwargs");
+    expect(bodies[1]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+    expect(bodies[2]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+  });
+
   it("retries a transient rate limit response", async () => {
     let requests = 0;
     server = createServer((_request, response) => {

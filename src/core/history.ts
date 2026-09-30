@@ -18,6 +18,11 @@ export function repairToolHistory(messages: ChatMessage[]): void {
       repaired.push(message);
       continue;
     }
+    // A system message can sit between a tool call and its result: `update_plan`
+    // and `record_verification` insert a `[luban …]` record while the batch is
+    // still settling. It must not close the pending calls, or the real results
+    // that follow are dropped and the batch is mislabelled as interrupted.
+    if (message.role === "system") { repaired.push(message); continue; }
     flush();
     repaired.push(message);
     pending = new Map(message.tool_calls?.map((call) => [call.id, call]) ?? []);

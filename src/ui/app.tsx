@@ -475,6 +475,26 @@ export function argumentMatches(input: string): string[] {
   return options.filter((option) => option.startsWith(match[2]!.toLowerCase()));
 }
 
+/**
+ * What a submitted line should become once completions are taken into account.
+ *
+ * Enter accepts the highlighted suggestion the same way Tab does, so typing
+ * `/mod` and pressing Enter runs `/mode` instead of reporting an unknown
+ * command. An exact command or argument, and anything that is not a slash
+ * command, is left untouched.
+ */
+export function resolveCompletion(value: string, index: number): string {
+  if (!value.startsWith("/")) return value;
+  if (!/\s/u.test(value)) {
+    const matches = commandMatches(value);
+    if (!matches.length || matches.some(([name]) => name === value.toLowerCase())) return value;
+    return matches[Math.min(Math.max(0, index), matches.length - 1)]![0];
+  }
+  const options = argumentMatches(value);
+  if (!options.length || options.includes(argumentOf(value).toLowerCase())) return value;
+  return `${commandOf(value)} ${options[Math.min(Math.max(0, index), options.length - 1)]!}`;
+}
+
 function CommandHints({ input, index }: { input: string; index: number }) {
   if (!input.startsWith("/")) return null;
   if (!input.includes(" ")) {
@@ -1402,7 +1422,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   };
 
   const submit = async (raw: string) => {
-    const value = raw.trim();
+    const value = resolveCompletion(raw.trim(), commandIndex);
     if (!value) return;
     const rememberInput = () => {
       setInputHistory((current) => pushInputHistory(current, value));
