@@ -1,9 +1,10 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
-import { finalizeCompletion } from "./openai.js";
+import { finalizeCompletion, MAX_OUTPUT_TOKENS } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler } from "./openai.js";
 import { parseModelEvent, sseData } from "./sse.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
+import { describeModelError } from "./model-errors.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -129,7 +130,7 @@ export class ResponsesClient {
       model: this.config.model.model,
       ...(converted.instructions ? { instructions: converted.instructions } : {}),
       input: converted.input,
-      max_output_tokens: this.config.maxTokens,
+      max_output_tokens: Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS),
       ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
       stream: true,
       store: false,
@@ -143,6 +144,7 @@ export class ResponsesClient {
       const abort = () => controller.abort(signal.reason ?? new Error("aborted"));
       signal.addEventListener("abort", abort, { once: true });
       let response: Response | undefined;
+      let failure: unknown;
       try {
         response = await fetch(responsesEndpoint(this.config.model.baseUrl), {
           method: "POST",
@@ -176,12 +178,13 @@ export class ResponsesClient {
       } catch (error) {
         if (signal.aborted || response?.ok || attempt >= retries) throw error;
         if (error instanceof Error && error.message.startsWith("model HTTP ")) throw error;
+        failure = error;
       } finally {
         clearTimeout(timeout);
         signal.removeEventListener("abort", abort);
       }
       const backoff = Math.min(8_000, 400 * (2 ** attempt)) + Math.floor(Math.random() * 200);
-      onNotice?.(`模型请求失败，${(backoff / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
+      onNotice?.(`模型请求中断（${describeModelError(failure)}），${(backoff / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
       await wait(backoff, signal);
     }
   }

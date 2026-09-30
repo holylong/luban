@@ -13,6 +13,8 @@ export interface ExecutionRow {
   kind: "header" | "argument" | "output" | "edit" | "edit-pair" | "gap";
   text: string;
   entry: ExecutionEntry;
+  /** Position among this entry's output rows; only the first gets the ↳ marker. */
+  outputIndex?: number;
   /** Cells for an `edit-pair` row: removed/context on the left, added on the right. */
   left?: EditCell;
   right?: EditCell;
@@ -50,8 +52,8 @@ export function executionRows(entries: ExecutionEntry[], expanded = true, width 
     ...(entry.editPreview
       ? editRows(entry.editPreview, entry, width)
       : (entry.preview || "").split("\n").filter(Boolean).flatMap((text, index) =>
-        expanded || index < 2 ? [{ kind: "output" as const, text, entry }]
-          : index === 2 ? [{ kind: "output" as const, text: "… /details 展开更多输出", entry }] : [])),
+        expanded || index < 2 ? [{ kind: "output" as const, text, entry, outputIndex: index }]
+          : index === 2 ? [{ kind: "output" as const, text: "… /details 展开更多输出", entry, outputIndex: index }] : [])),
   ]);
 }
 
@@ -95,6 +97,26 @@ export function DiffLine({ line }: { line: string }) {
 }
 
 const labels: Record<string, string> = { bash: "Shell", read_file: "Read", edit_file: "Edit", write_file: "Write", apply_patch: "Patch", grep_files: "Search", glob_files: "Glob", list_dir: "List" };
+
+/** `    12 | code` — the line-numbered shape read_file returns. */
+const NUMBERED_LINE = /^\s*(\d+) \| (.*)$/u;
+
+/**
+ * One result line. A read_file row keeps its number in a dim gutter and the
+ * code is syntax-highlighted, so file content reads like code instead of a
+ * single-colour block; other output stays plain and aligned under the marker.
+ */
+function OutputLine({ text, marker, failed }: { text: string; marker: string; failed: boolean }) {
+  const numbered = NUMBERED_LINE.exec(text);
+  if (numbered) return <Box flexShrink={0} overflow="hidden">
+    <Text color={theme.dim}>{marker}</Text>
+    <Text color={theme.muted}>{numbered[1]!.padStart(5)} </Text>
+    <Text color={theme.dim}>│ </Text>
+    <Box flexGrow={1} overflow="hidden"><HighlightedCodeLine line={numbered[2]!} /></Box>
+  </Box>;
+  return <Text wrap="truncate-end"><Text color={theme.dim}>{marker}</Text><Text color={failed ? theme.red : theme.muted}>{text}</Text></Text>;
+}
+
 export function ExecutionRowView({ row }: { row: ExecutionRow }) {
   const { entry, text, kind } = row;
   if (kind === "gap") return <Text> </Text>;
@@ -106,7 +128,9 @@ export function ExecutionRowView({ row }: { row: ExecutionRow }) {
     return <Text wrap="truncate-end"><Text color={color}>{entry.status === "failed" ? "✗" : entry.status === "running" ? "●" : "✓"} </Text><Text color={toolColor} bold>{labels[entry.name] || entry.name}</Text><Text color={theme.muted}> · {entry.status === "running" ? "执行中" : entry.status === "failed" ? "失败" : "完成"}{entry.elapsedMs === undefined ? "" : " · " + (entry.elapsedMs / 1000).toFixed(1) + "s"}</Text></Text>;
   }
   if (kind === "argument") return <Box overflow="hidden"><Text color={theme.yellow}>  {entry.name === "bash" ? "$" : "›"} </Text><HighlightedCodeLine line={text} /></Box>;
-  return <Text wrap="truncate-end"><Text color={theme.dim}>  ↳ </Text><Text color={entry.status === "failed" ? theme.red : theme.muted}>{text}</Text></Text>;
+  // One marker per result, not per line: a wall of arrows down the left edge is
+  // noise, and it is copied along with the text. Continuations stay aligned.
+  return <OutputLine text={text} marker={row.outputIndex === 0 ? "  ↳ " : "    "} failed={entry.status === "failed"} />;
 }
 
 export function ExecutionTimeline({ entries, expanded, offset = 0, pageSize = 14, width = 80 }: { entries: ExecutionEntry[]; expanded: boolean; offset?: number; pageSize?: number; width?: number }) {

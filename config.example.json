@@ -13,11 +13,13 @@
     ]
   },
   "model": {
-    "max_tokens": 128000,
+    "max_tokens": 32768,
     "temperature": 0.2,
     "top_p": 1,
     "top_k": 0,
-    "timeout": 120,
+    "timeout": 300,
+    "thinking_timeout": 600,
+    "max_retries": 5,
     "context_window": 262144,
     "max_history_messages": 120,
     "active": "codex/gpt-6-sol",
@@ -110,9 +112,17 @@
     "token": "",
     "workspace": ""
   },
-  "max_workers": 2,
+  "max_workers": 12,
   "max_steps": 1000,
   "permission": {
     "mode": "edits"
+  },
+  "remote": {
+    "enabled": false,
+    "relay_url": "https://relay.example.com",
+    "node_token_env": "LUBAN_RELAY_NODE_TOKEN",
+    "node_token_file": "/home/demo/.config/luban/relay.env",
+    "host": "127.0.0.1",
+    "port": 0
   }
 }

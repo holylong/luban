@@ -52,12 +52,12 @@ export function transcriptLines(blocks: TranscriptBlock[], width: number): Trans
   return lines;
 }
 
-export function TranscriptLineView({ line }: { line: TranscriptLine }) {
+export function TranscriptLineView({ line, selected = false }: { line: TranscriptLine; selected?: boolean }) {
   if (line.execution) return <ExecutionRowView row={line.execution} />;
-  if (line.kind === "code") return <HighlightedCodeLine line={line.text || " "} backgroundColor={theme.codeBackground} />;
+  if (line.kind === "code") return <HighlightedCodeLine line={line.text || " "} backgroundColor={selected ? theme.selected : theme.codeBackground} />;
   const color = line.kind === "heading" ? theme.accent
     : line.kind === "note" ? (line.tone && line.tone in theme ? theme[line.tone as keyof typeof theme] : theme.dim)
       : theme.text;
   return <Text wrap="truncate-end" color={color} bold={line.kind === "heading"}
-    backgroundColor={line.kind === "user" ? theme.panel : undefined}>{line.text || " "}</Text>;
+    backgroundColor={selected ? theme.selected : line.kind === "user" ? theme.panel : undefined}>{line.text || " "}</Text>;
 }
