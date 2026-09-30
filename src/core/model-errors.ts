@@ -17,3 +17,22 @@ export function retryableModelError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return /model HTTP (408|409|425|429|5\d\d)|timed out|idle timeout|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed/i.test(text);
 }
+
+/**
+ * A short, user-facing description of a transport failure.
+ *
+ * Node's `fetch` collapses every network problem into `TypeError: fetch failed`;
+ * the actionable part — `ECONNRESET`, `UND_ERR_CONNECT_TIMEOUT`, a TLS error —
+ * lives in `error.cause`. The retry notice should name it, so a provider that is
+ * down (connection refused) is not confused with one that is merely slow.
+ */
+export function describeModelError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message && cause.message !== error.message) {
+    const code = (cause as { code?: unknown }).code;
+    const suffix = typeof code === "string" && code && !cause.message.includes(code) ? ` (${code})` : "";
+    return `${error.message}: ${cause.message}${suffix}`;
+  }
+  return error.message;
+}

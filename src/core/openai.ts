@@ -2,6 +2,14 @@ import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
 import { parseModelEvent, sseData, validateCompletion, type CompletionCheck } from "./sse.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
+import { describeModelError } from "./model-errors.js";
+
+/**
+ * Ceiling for one response's output, matching OpenCode's default. A larger cap
+ * lets a reasoning model think longer and makes a gateway reserve more KV cache
+ * for the request, both of which slow every turn down.
+ */
+export const MAX_OUTPUT_TOKENS = 32_000;
 
 export interface CompletionResult {
   content: string;
@@ -145,7 +153,7 @@ export class OpenAiClient {
     const body = JSON.stringify({
       model: this.config.model.model,
       messages: await openAiWireMessages(messages, this.config.workspace),
-      max_tokens: options?.maxTokens ?? this.config.maxTokens,
+      max_tokens: Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS),
       ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
       stream: true,
       // OpenAI-compatible servers (e.g. vLLM) omit usage from the stream
@@ -196,7 +204,7 @@ export class OpenAiClient {
         if (error instanceof Error && error.message.startsWith("model HTTP ")) throw error;
         // Reached for transport failures and idle timeouts — the two cases where
         // the user would otherwise watch a silent spinner for minutes.
-        onNotice?.(`模型请求中断（${error instanceof Error ? error.message : String(error)}），即将重试（第 ${attempt + 2}/${retries + 1} 次）`);
+        onNotice?.(`模型请求中断（${describeModelError(error)}），即将重试（第 ${attempt + 2}/${retries + 1} 次）`);
       } finally {
         clearTimeout(timeout);
         signal.removeEventListener("abort", abort);
@@ -285,7 +293,9 @@ export class OpenAiClient {
         && /model stream error|model returned malformed|model returned invalid|model SSE event exceeds/u.test(failure.message);
       if (declared) throw failure;
       if (content || reasoning || calls.length) {
-        onNotice?.("模型连接在输出中途中断，已保留已收到的内容并继续");
+        onNotice?.(failure
+          ? `模型连接在输出中途中断（${describeModelError(failure)}），已保留已收到的内容并继续`
+          : "模型连接在输出中途中断，已保留已收到的内容并继续");
         return { content, reasoning, toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };
       }
       throw failure ?? new Error("model stream ended before completion; partial response was not accepted");

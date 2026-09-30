@@ -498,7 +498,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     models,
     maxTokens,
     temperature: Number(modelConfig.temperature ?? 0.2),
-    timeoutMs: Number(modelConfig.timeout || 120) * 1000,
+    timeoutMs: Number(modelConfig.timeout || 300) * 1000,
     thinkingTimeoutMs: Number(modelConfig.thinking_timeout ?? modelConfig.thinkingTimeout ?? 600) * 1000,
     // An absent setting (or "auto") lets the runner choose per user request.
     enableThinking: typeof thinkingSetting === "boolean" ? thinkingSetting : undefined,
