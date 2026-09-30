@@ -2,7 +2,7 @@ import React from "react";
 import { renderToString } from "ink";
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
-import { argumentMatches, commandMatches, SelectDialog } from "./app.js";
+import { argumentMatches, commandMatches, resolveCompletion, SelectDialog } from "./app.js";
 
 describe("slash command suggestions", () => {
   it("keeps all matching commands available and puts prefix matches first", () => {
@@ -18,6 +18,19 @@ describe("slash command suggestions", () => {
     expect(argumentMatches("/THEME nord")).toEqual(["nord"]);
     expect(argumentMatches("/sync p")).toEqual(["push", "pull"]);
     expect(argumentMatches("/sessions ")).toEqual([]);
+  });
+
+  it("accepts the highlighted suggestion when Enter is pressed", () => {
+    // `/mod` completes to the highlighted command; an exact or unknown command
+    // and a plain message are left untouched.
+    expect(resolveCompletion("/mod", 0)).toBe("/models");
+    expect(resolveCompletion("/mod", 1)).toBe("/mode");
+    expect(resolveCompletion("/mode", 0)).toBe("/mode");
+    expect(resolveCompletion("/mode agent", 0)).toBe("/mode agent");
+    expect(resolveCompletion("/mode a", 0)).toBe("/mode auto");
+    expect(resolveCompletion("/mode a", 1)).toBe("/mode agent");
+    expect(resolveCompletion("/x", 0)).toBe("/x");
+    expect(resolveCompletion("hello", 0)).toBe("hello");
   });
 });
 

@@ -888,7 +888,7 @@ ASK 只允许标记为只读的内置工具；AUTO 不会因为任务描述未�
 
 复杂任务默认最多执行 200 个 Agent/AUTO 工具轮次；可在 `~/.luban/config.json` 设置 `max_steps`，范围为 1–2000。Agent 会在预算用尽时生成总结并暂停，只有明确完成或发生错误才会正常结束，不能安全地无限运行。
 
-Qwen/OpenAI 兼容服务可在 `model` 中设置 `"thinking": true`、`false` 或 `"auto"`（默认），请求会发送 `chat_template_kwargs.enable_thinking`。长会话默认在 80 条消息前主动压缩，可通过 `max_history_messages` 调整；Qwen 的默认 `context_window` 为 262144，也可按服务端实际容量显式覆盖。`max_tokens` 是单次输出上限，应小于总上下文窗口并为输入历史保留空间。
+`chat_template_kwargs.enable_thinking` 是 Qwen 的开关，默认**只对 Qwen 模型发送**：同一个网关上的 DeepSeek/GLM/Kimi 收到它会开启大量推理，可能把整个输出预算耗在推理上、一条正文都没有（表现为“推理占满输出上限”后暂停）。要显式控制，可在 `model` 里设 `"thinking": true`/`false`（此时对当前模型一律发送该参数），或 `"auto"`（默认，仅 Qwen 自动判断）。长会话默认在 80 条消息前主动压缩，可通过 `max_history_messages` 调整；Qwen 的默认 `context_window` 为 262144，也可按服务端实际容量显式覆盖。`max_tokens` 是单次输出上限，应小于总上下文窗口并为输入历史保留空间。
 
 ## 插件与编辑器接入
 

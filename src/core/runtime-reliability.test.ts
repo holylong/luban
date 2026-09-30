@@ -30,6 +30,8 @@ function expectPaired(messages: ChatMessage[]) {
     if (message.role === "tool") {
       expect(pending.has(message.tool_call_id!)).toBe(true);
       pending.delete(message.tool_call_id!);
+    } else if (message.role === "system") {
+      // Plan/verification records are inserted mid-batch; they do not end it.
     } else {
       expect(pending.size).toBe(0);
       pending = new Set(message.tool_calls?.map((call) => call.id));
@@ -79,6 +81,21 @@ describe("long-running agent reliability", () => {
     const before = JSON.stringify(messages);
     repairToolHistory(messages);
     expect(JSON.stringify(messages)).toBe(before);
+  });
+
+  it("keeps a tool result that a plan/verification system record sits in front of", () => {
+    // update_plan/record_verification insert a [luban …] system message while the
+    // batch is still settling, so it lands between the call and its result. That
+    // record must not be mistaken for the end of the batch.
+    const messages: ChatMessage[] = [
+      { role: "assistant", content: "", tool_calls: [call("a", "record_verification", '{"command":"npm test","status":"passed"}')] },
+      { role: "system", content: "[luban verification]\n{}" },
+      { role: "tool", tool_call_id: "a", name: "record_verification", content: "recorded" },
+    ];
+    repairToolHistory(messages);
+    expectPaired(messages);
+    expect(messages.some((message) => message.role === "tool" && message.tool_call_id === "a" && message.content === "recorded")).toBe(true);
+    expect(messages.some((message) => String(message.content).includes("interrupted before"))).toBe(false);
   });
 
   it("blocks writes in ASK even with allow-all and hides effectful tool schemas", async () => {
