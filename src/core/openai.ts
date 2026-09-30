@@ -84,7 +84,14 @@ function mergeToolCall(slots: Map<number, ToolCall>, fragment: Record<string, un
 }
 
 function retryableStatus(status: number): boolean {
-  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+  return status === 408 || status === 409 || status === 425 || status === 429 || status === 529 || status >= 500;
+}
+
+/** Gateways often report overload as HTTP 400 with a retryable phrase in the body. */
+function retryableBody(status: number, body: string): boolean {
+  if (retryableStatus(status)) return true;
+  if (status !== 400 && status !== 403 && status !== 413) return false;
+  return /overloaded|rate[ -]?limit|try again|temporarily unavailable|service unavailable/i.test(body);
 }
 
 /** Merge internal system records at the transport boundary for strict
@@ -116,11 +123,11 @@ function retryDelay(response: Response | undefined, attempt: number): number {
   const header = response?.headers.get("retry-after");
   if (header) {
     const seconds = Number(header);
-    if (Number.isFinite(seconds)) return Math.min(30_000, Math.max(0, seconds * 1_000));
+    if (Number.isFinite(seconds)) return Math.min(60_000, Math.max(0, seconds * 1_000));
     const date = Date.parse(header);
-    if (Number.isFinite(date)) return Math.min(30_000, Math.max(0, date - Date.now()));
+    if (Number.isFinite(date)) return Math.min(60_000, Math.max(0, date - Date.now()));
   }
-  return Math.min(8_000, 400 * (2 ** attempt)) + Math.floor(Math.random() * 200);
+  return Math.min(10_000, 500 * (2 ** attempt)) + Math.floor(Math.random() * 250);
 }
 
 async function wait(ms: number, signal: AbortSignal): Promise<void> {
@@ -193,7 +200,7 @@ export class OpenAiClient {
         if (!response.ok) {
           const responseBody = await response.text();
           const error = new Error(`model HTTP ${response.status}: ${responseBody.slice(0, 4000)}`);
-          if (!retryableStatus(response.status) || attempt >= retries) throw error;
+          if (!retryableBody(response.status, responseBody) || attempt >= retries) throw error;
           onNotice?.(`模型返回 HTTP ${response.status}，${(retryDelay(response, attempt) / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
         } else {
           const type = response.headers.get("content-type") || "";

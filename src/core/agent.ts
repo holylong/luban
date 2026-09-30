@@ -99,19 +99,19 @@ Work rules:
 3a. When the user explicitly asks to commit and push code to the configured Git remote, call git_publish directly with a concise commit message. It checks the repository, commits changes if needed, and pushes in one tool call. Do not create a plan or split this routine request into separate status/add/commit/push calls. If the user asked for additional code changes or checks, complete those first.`;
 
 const PLANNING_RULES: Record<PlanningMode, string> = {
-  always: `4. For every non-trivial task, make update_plan your first tool call before inspecting or changing files. Break the work into concrete steps, keep the plan current, and include a verification step. Simple questions that need no tools do not need a plan. Verify changes with focused tests or commands before claiming success. A completed plan is not proof that tests passed.
+  always: `4. For every non-trivial task, make update_plan your first tool call before inspecting or changing files. Break the work into concrete steps, keep the plan current, and include a verification step. Batch every plan sync with real work in the SAME tool-call block; never spend a standalone round trip just to sync the plan. Simple questions that need no tools do not need a plan. Verify changes with focused tests or commands before claiming success. A completed plan is not proof that tests passed.
 5. Record every test/check with record_verification (command, passed/failed, key output). If verification failed or is missing, say so explicitly; never claim unverified success.`,
   // The plan call is one full model round-trip. Ask for it only when the work
   // really is multi-step, and say outright that a single-step task must not
   // call it just to satisfy the rule.
-  auto: `4. Plan only when the work genuinely spans several steps: then call update_plan once before you start, keep it current, and include a verification step. For a single-step task or a question, skip the plan and go straight to the work - do not call update_plan just to satisfy this rule. Verify changes with focused tests or commands before claiming success. A completed plan is not proof that tests passed.
+  auto: `4. Plan when the work spans several steps: then call update_plan once BEFORE any file write/edit/bash, keep it current, and include a verification step. Mandatory triggers (do not skip): the request lists 3+ numbered requirements, names 3+ files to create/modify, or asks for code + tests + verification run. Batch every plan sync with real work in the SAME tool-call block (e.g. update_plan + bash test together); never spend a standalone round trip just to sync the plan. The final plan state and the record_verification call ride along with your last test/result turn. For a single-step task or a question, skip the plan and go straight to the work - do not call update_plan just to satisfy this rule. Verify changes with focused tests or commands before claiming success. A completed plan is not proof that tests passed.
 5. When you run a test or check, record it with record_verification (command, passed/failed, key output) in the same turn. If verification failed or is missing, say so explicitly; never claim unverified success.`,
   off: `4. Go straight to the work; do not call update_plan. Verify changes with focused tests or commands before claiming success.
 5. State the command and result of any check you run in your final answer. If verification failed or is missing, say so explicitly; never claim unverified success.`,
 };
 
 const PROMPT_FOOTER = `6. If a tool fails, diagnose it and change strategy. Do not repeat identical calls indefinitely. A bash result ending in [exit code: N] is not a tool failure: many commands exit non-zero by design (grep with no match, git diff --quiet, test -f, command -v). Read the code and the output, and only treat it as an error when the command was supposed to succeed. Builds, test suites and installs often exceed the bash timeout: give them a larger timeout when you know they are slow, or start them with background: true and poll with get_background_task instead of retrying a killed command.
-7. End with a concise outcome: what changed, verification, and any real blocker.
+7. End with a concise outcome: what changed, verification, and any real blocker. Hard cap 8 lines, no code blocks; details live in files, not chat.
 8. Paths are workspace-relative. Do not attempt to escape the workspace. The bash tool is soft-sandboxed: destructive host commands, writes outside the workspace, and denied patterns are rejected before execution. This is not an OS container; do not run untrusted payloads to probe it. Screenshots arrive as native vision parts when the user @-attaches them; describe what you see and cite the file name.
 9. Never expose chain-of-thought, policy analysis, system reminders, or other internal reasoning in assistant content. Return only the user-facing result. Use a separate reasoning channel when the runtime supports one.
 10. Create a checkpoint before broad or risky multi-file edits when the workspace is a Git repository.
@@ -217,10 +217,11 @@ interface ModelClient {
 
 /**
  * How many times one run asks the model to continue past a provider's output cap
- * or a dropped connection before reporting it. Three covers a long answer split
- * by a small cap without letting a model that only reasons loop forever.
+ * or a dropped connection before reporting it. Five covers a long answer split
+ * by a small cap (SOTA reasoning models) without letting a model that only
+ * reasons loop forever.
  */
-const MAX_TRUNCATION_CONTINUES = 3;
+const MAX_TRUNCATION_CONTINUES = 5;
 /** Marks the nudge that asks for the rest of an answer cut short mid-stream. */
 const TRUNCATION_MARKER = "output-limit";
 
@@ -475,10 +476,24 @@ export class AgentRunner {
       onEvent({ type: "model-call", index: modelCalls });
       const mainRequest = callMessages === messages;
       const automatic = this.config.enableThinking === undefined;
-      const thinking = automatic ? shouldThink(lastUserQuestion(messages)) || currentTurnHasToolError(messages) : this.config.enableThinking;
+      // SOTA pattern (opencode parity): think once to plan the turn, then run
+      // the following execution calls fast. A complex request used to think on
+      // EVERY call because lastUserQuestion never changes mid-task; now only
+      // the first call after user input thinks, later calls think again only
+      // when a tool just failed and diagnosis is needed.
+      let firstCallThisTurn = true;
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const m = messages[i]!;
+        if (m.role === "user" && m.name !== TRUNCATION_MARKER) break;
+        if (m.role === "assistant") { firstCallThisTurn = false; break; }
+      }
+      const thinking = automatic
+        ? (mainRequest && !firstCallThisTurn ? currentTurnHasToolError(messages)
+          : shouldThink(lastUserQuestion(messages)) || currentTurnHasToolError(messages))
+        : this.config.enableThinking;
       const options: ModelRequestOptions | undefined = mainRequest
         ? { enableThinking: thinking, ...(automatic && !thinking ? {
-          maxTokens: Math.min(this.config.maxTokens, 16_384),
+          maxTokens: Math.min(this.config.maxTokens, 8_192),
           timeoutMs: Math.min(this.config.timeoutMs, 45_000),
           thinkingTimeoutMs: Math.min(this.config.thinkingTimeoutMs ?? 600_000, 45_000),
           maxRetries: Math.min(this.config.maxRetries ?? 3, 1),

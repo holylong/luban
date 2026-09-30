@@ -13,14 +13,14 @@ function validatePlan(args: Record<string, unknown>): TaskPlan {
   const plan = args.plan.map((item: unknown): PlanStep => {
     if (!item || typeof item !== "object") throw new Error("invalid plan step");
     const { step, status } = item as Record<string, unknown>;
-    if (typeof step !== "string" || !step.trim() || step.length > 500) throw new Error("step must be 1-500 characters");
+    if (typeof step !== "string" || !step.trim() || step.length > 120) throw new Error("step must be 1-120 characters");
     if (status !== "pending" && status !== "in_progress" && status !== "completed") throw new Error("invalid plan status");
     return { step: step.trim(), status };
   });
   if (plan.filter((item) => item.status === "in_progress").length > 1) throw new Error("at most one step may be in_progress");
   if (new Set(plan.map((item) => item.step)).size !== plan.length) throw new Error("plan steps must be unique");
-  if (args.explanation !== undefined && (typeof args.explanation !== "string" || args.explanation.length > 2000)) {
-    throw new Error("explanation must be a string of at most 2000 characters");
+  if (args.explanation !== undefined && (typeof args.explanation !== "string" || args.explanation.length > 200)) {
+    throw new Error("explanation must be a string of at most 200 characters");
   }
   return { explanation: args.explanation as string || "", plan };
 }
@@ -68,15 +68,15 @@ export function planVerificationStatus(messages: ChatMessage[]): { plan?: TaskPl
 export function planTools(messages: ChatMessage[]): ToolDefinition[] {
   return [{
     name: "update_plan",
-    description: "Create or replace the task plan for multi-step work. Keep at most one step in progress. Include verification; mark completed only with evidence. State survives session saving and context compaction.",
+    description: "Create or replace the task plan for multi-step work. Steps are short phrases (<=15 words each). Keep at most one step in progress. Include verification; mark completed only with evidence. State survives session saving and context compaction.",
     risk: "read",
     parameters: {
       type: "object", additionalProperties: false, required: ["plan"],
       properties: {
-        explanation: { type: "string", maxLength: 2000 },
+        explanation: { type: "string", maxLength: 200 },
         plan: { type: "array", minItems: 1, maxItems: 20, items: {
           type: "object", additionalProperties: false, required: ["step", "status"],
-          properties: { step: { type: "string", minLength: 1, maxLength: 500 }, status: { type: "string", enum: ["pending", "in_progress", "completed"] } },
+          properties: { step: { type: "string", minLength: 1, maxLength: 120 }, status: { type: "string", enum: ["pending", "in_progress", "completed"] } },
         } },
       },
     },
@@ -104,14 +104,14 @@ export function planTools(messages: ChatMessage[]): ToolDefinition[] {
       properties: {
         command: { type: "string", minLength: 1, maxLength: 500 },
         status: { type: "string", enum: ["passed", "failed"] },
-        output: { type: "string", maxLength: 8000 },
+        output: { type: "string", maxLength: 2000 },
       },
     },
     async execute(args) {
       const command = typeof args.command === "string" ? args.command.trim() : "";
       if (!command) throw new Error("command is required");
       if (args.status !== "passed" && args.status !== "failed") throw new Error("status must be passed or failed");
-      const output = typeof args.output === "string" ? args.output.slice(0, 8000) : "";
+      const output = typeof args.output === "string" ? args.output.slice(0, 2000) : "";
       const record: VerificationRecord = { id: randomUUID(), command, status: args.status, output, createdAt: new Date().toISOString() };
       messages.push({ role: "system", content: `${VERIFICATION_MARKER}\n${JSON.stringify(record)}` });
       const status = planVerificationStatus(messages);

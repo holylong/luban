@@ -54,7 +54,14 @@ async function anthropicMessages(messages: ChatMessage[], workspace: string): Pr
 }
 
 function transient(status: number): boolean {
-  return status === 408 || status === 409 || status === 429 || status >= 500;
+  return status === 408 || status === 409 || status === 425 || status === 429 || status === 529 || status >= 500;
+}
+
+/** Anthropic gateways also surface overload as 400/403 with a retryable phrase. */
+function retryableAnthropicBody(status: number, body: string): boolean {
+  if (transient(status)) return true;
+  if (status !== 400 && status !== 403 && status !== 413) return false;
+  return /overloaded|rate[ -]?limit|try again|temporarily unavailable|service unavailable/i.test(body);
 }
 
 async function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -104,9 +111,10 @@ export class AnthropicClient {
         });
         if (!response.ok) {
           const body = await response.text();
-          if (transient(response.status) && attempt < retries) {
-            onNotice?.(`模型返回 HTTP ${response.status}，${(Math.min(8_000, 400 * (2 ** attempt)) / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
-            await delay(Math.min(8_000, 400 * (2 ** attempt)), signal);
+          if (retryableAnthropicBody(response.status, body) && attempt < retries) {
+            const backoff = Math.min(10_000, 500 * (2 ** attempt)) + Math.floor(Math.random() * 250);
+            onNotice?.(`模型返回 HTTP ${response.status}，${(backoff / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
+            await delay(backoff, signal);
             continue;
           }
           throw new Error(`model HTTP ${response.status}: ${body.slice(0, 600)}`);

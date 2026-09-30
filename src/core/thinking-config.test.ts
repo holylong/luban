@@ -83,7 +83,7 @@ describe("self-hosted model output controls", () => {
       } finally { runner.close(); }
       expect(options).toHaveLength(1);
       expect(options[0]?.enableThinking).toBe(item.thinking);
-      expect(options[0]?.maxTokens === 16_384).toBe(item.fast);
+      expect(options[0]?.maxTokens === 8_192).toBe(item.fast);
     }
     expect(shouldThink("把 README.md 中的标题改成 新标题")).toBe(false);
     expect(shouldThink("如何证明这个算法的正确性？")).toBe(true);

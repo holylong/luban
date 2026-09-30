@@ -509,7 +509,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     contextReserve: Math.max(1_024, integer(modelConfig.context_reserve ?? modelConfig.contextReserve, 16_384)),
     semanticCompaction: modelConfig.semantic_compaction !== false && modelConfig.semanticCompaction !== false,
     maxHistoryMessages: Math.max(20, Math.min(500, integer(modelConfig.max_history_messages ?? modelConfig.maxHistoryMessages, 80))),
-    maxRetries: Math.max(0, Math.min(10, integer(modelConfig.max_retries ?? modelConfig.maxRetries, 3))),
+    maxRetries: Math.max(0, Math.min(10, integer(modelConfig.max_retries ?? modelConfig.maxRetries, 5))),
     mcpServers: mcpServers(raw.mcpServers),
     codeIntelWorker: codeIntelRaw.worker === true || codeIntelRaw.isolated === true,
     lspServers: lspServers(raw.lspServers),
