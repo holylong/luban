@@ -36,6 +36,13 @@ describe("execution presentation", () => {
     expect(output).toContain("执行中");
     expect(executionRows(sampleEntries).filter(row => row.kind === "gap")).toHaveLength(3);
   });
+  it("renders read_file output with a line-number gutter and highlighted code", () => {
+    const entries: ExecutionEntry[] = [{ name: "read_file", detail: "src/a.ts", status: "done",
+      preview: "    1 | const answer = 42;\n    2 | return answer;" }];
+    const output = renderToString(<ExecutionTimeline entries={entries} expanded pageSize={30} width={120} />, { columns: 120 });
+    expect(output).toContain("1 │ const answer = 42;");
+    expect(output).toContain("2 │ return answer;");
+  });
   it("splits an edit into left/right cells when the terminal is wide enough", () => {
     const output = renderToString(<ExecutionTimeline entries={sampleEntries} expanded pageSize={30} width={120} />, { columns: 120 });
     // The removed call is on the left, its replacement on the right of one row.

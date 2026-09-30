@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { extname, isAbsolute, join, resolve } from "node:path";
 import { editRecordStats, editRecordTitle, parseEditRecord } from "../core/edit-preview.js";
+import { summarizeToolArgs } from "../core/tools.js";
 import type { ChatMessage, PendingInput, VerificationRecord } from "../core/types.js";
 
 /** Session state that lives beside the transcript and used to be dropped on export. */
@@ -124,6 +125,40 @@ function failedToolNote(content: string): string | null {
   return `> ⚠️ ${first}${rest.length ? `\n> ${rest.slice(0, 10).join("\n> ")}` : ""}${omitted}`;
 }
 
+function callArguments(raw: string | undefined): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(raw || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Render the calls an assistant turn made, including what they were asked to do.
+ *
+ * Only the tool name used to be exported, so a reader could see that `bash` ran
+ * but not the command, or that `write_file` ran but not the path. A shell
+ * command keeps its full text in a fenced block; other tools show the same
+ * one-line argument summary the TUI uses, so the export is a complete record.
+ */
+function renderToolCalls(calls: NonNullable<ChatMessage["tool_calls"]>): string[] {
+  const out = ["**调用工具**", ""];
+  for (const call of calls) {
+    const name = call.function.name || "?";
+    const args = callArguments(call.function.arguments);
+    if (name === "bash" && typeof args.command === "string" && args.command.trim()) {
+      out.push("- `bash`", "", "  ```sh", ...args.command.replace(/\n$/u, "").split("\n").map(line => `  ${line}`), "  ```", "");
+      continue;
+    }
+    const detail = summarizeToolArgs(name, args);
+    const shown = detail === "{}" ? "" : detail;
+    out.push(`- \`${name}\`${shown ? ` · ${shown}` : ""}`);
+  }
+  out.push("");
+  return out;
+}
+
 /** Render the current session as readable Markdown (Python `luban chat /export` style). */
 export function buildSessionMarkdown(
   messages: ChatMessage[],
@@ -226,10 +261,11 @@ export function buildSessionMarkdown(
     } else if (message.role === "assistant") {
       const content = String(message.content ?? "").trim();
       const calls = message.tool_calls ?? [];
-      const toolLine = calls.length
-        ? `\n> 🔧 调用工具: ${calls.map((call) => call.function.name || "?").join(", ")}\n`
-        : "";
-      if (content || toolLine) lines.push(`## 🤖 luban\n\n${content}${toolLine}\n`);
+      if (content || calls.length) {
+        lines.push("## 🤖 luban", "");
+        if (content) lines.push(`${content}`, "");
+        if (calls.length) lines.push(...renderToolCalls(calls));
+      }
     } else if (message.role === "tool") {
       // The mutation itself belongs next to the call that produced it: the
       // summary table is a directory, this is the evidence.

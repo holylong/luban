@@ -21,10 +21,27 @@ describe("session export", () => {
     );
     expect(markdown).toContain("# luban 会话记录 — myapp");
     expect(markdown).toContain("## 👤 用户\n\nfix it");
-    expect(markdown).toContain("> 🔧 调用工具: read_file");
+    expect(markdown).toContain("- `read_file`");
     expect(markdown).toContain("## 🤖 luban\n\nFixed and tested.");
     expect(markdown).not.toContain("You are luban");
     expect(markdown).not.toContain("contents");
+  });
+
+  it("includes the tool call arguments, including the full shell command", () => {
+    const markdown = buildSessionMarkdown(
+      [
+        { role: "user", content: "run it" },
+        { role: "assistant", content: "", tool_calls: [
+          { id: "b1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "npm test\nnpm run build" }) } },
+          { id: "r1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "src/a.ts" }) } },
+        ] },
+      ],
+      { project: "p", workspace: "/w", nodeName: "n", modelId: "m", mode: "auto", running: false },
+    );
+    expect(markdown).toContain("- `bash`");
+    expect(markdown).toContain("npm test");
+    expect(markdown).toContain("npm run build");
+    expect(markdown).toContain("- `read_file` · path=src/a.ts");
   });
 
   it("keeps compaction summaries and pending steering", () => {

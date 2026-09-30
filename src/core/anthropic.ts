@@ -1,6 +1,6 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
-import { finalizeCompletion } from "./openai.js";
+import { finalizeCompletion, MAX_OUTPUT_TOKENS } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler } from "./openai.js";
 
 import { parseModelEvent, sseData, validateCompletion } from "./sse.js";
@@ -95,7 +95,7 @@ export class AnthropicClient {
             model: this.config.model.model,
             system: converted.system,
             messages: converted.messages,
-            max_tokens: this.config.maxTokens,
+            max_tokens: Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS),
             ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
             stream: true,
             ...(anthropicTools.length ? { tools: anthropicTools } : {}),

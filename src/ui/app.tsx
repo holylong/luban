@@ -34,8 +34,9 @@ import { sessionColor } from "./session-color.js";
 import { toolLabel } from "./tool-labels.js";
 import { Spinner, ThinkingLine, type LivePhase } from "./thinking-line.js";
 import { currentStreamLine } from "./transcript.js";
-import { layoutInput } from "./input-layout.js";
+import { displayWidth, layoutInput } from "./input-layout.js";
 import { transcriptLines, TranscriptLineView } from "./transcript-lines.js";
+import { selectedTranscriptText, selectionSpan, type SelectionPoint, type TranscriptSelection } from "./transcript-selection.js";
 import { TextArea } from "./text-area.js";
 import { DiffLine as CodeDiffLine } from "./execution-view.js";
 import { listWindow, scrollPercent, scrollbarThumb } from "./scroll.js";
@@ -51,6 +52,7 @@ import {
   parseMouseReports,
   screenRect,
   stripMouseReports,
+  type MouseReport,
   type ScreenRect,
 } from "./mouse-input.js";
 import { buildTranscript, estimateLines } from "./transcript-blocks.js";
@@ -425,7 +427,7 @@ function HelpPanel() {
       <Text color={theme.accent} bold>快捷键与命令</Text>
       <Text color={theme.muted}>Shift+Tab 模式 · Ctrl+P 模型 · Ctrl+O 会话 · Esc 取消</Text>
       <Text color={theme.muted}>↑↓ 历史 · PgUp/PgDn 翻页 · Ctrl+J 换行 · @ 文件补全</Text>
-      <Text color={theme.muted}>Ctrl+Y 复制上次回答 · Shift+拖选复制任意输出 · /copy 复制回答与工具记录</Text>
+      <Text color={theme.muted}>Ctrl+Y 复制上次回答 · 输出区拖选即复制（Shift+拖选走终端原生）· /copy 复制回答与工具记录</Text>
       <Text color={theme.muted}>Ctrl+C 运行中中断任务 / 空闲复制回答 · Ctrl+D 保存并退出 · /exit 退出</Text>
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /usage /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
@@ -691,6 +693,13 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const namedSessionsRef = useRef(new Set<string>());
   const titleAbortRef = useRef<AbortController | null>(null);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  // In-app selection, always available: a drag in the transcript paints a
+  // highlight and copies on release, the way OpenCode does it. Shift+drag still
+  // falls through to the terminal's own selection.
+  const [selection, setSelection] = useState<TranscriptSelection | null>(null);
+  const selectionRef = useRef<TranscriptSelection | null>(null);
+  const selectionAnchorRef = useRef<SelectionPoint | null>(null);
+  const selectionRowsRef = useRef<{ rect: ScreenRect | null; first: number; visible: number; lines: string[] }>({ rect: null, first: 0, visible: 0, lines: [] });
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
@@ -725,10 +734,40 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   useEffect(() => {
     const inputStream = stdin;
     const outputStream = stdout;
-    // Mouse reporting stays on for wheel scrolling and the scrollbar drag.
-    // Text selection is left to the terminal: Shift+drag bypasses reporting
-    // and selects natively, and /copy or Ctrl+C copy the last answer.
+    // Mouse reporting stays on for wheel scrolling, the scrollbar drag and the
+    // in-app selection. A plain drag in the transcript paints a highlight and
+    // copies on release; Shift+drag still falls through to the terminal.
     outputStream.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+    const selectionPoint = (report: MouseReport, clamp: boolean): SelectionPoint | null => {
+      const { rect, first, visible, lines } = selectionRowsRef.current;
+      if (!rect || !visible) return null;
+      const adjusted = clamp ? {
+        ...report,
+        x: Math.min(Math.max(report.x, rect.left + 1), rect.left + rect.width),
+        y: Math.min(Math.max(report.y, rect.top + 1), rect.top + rect.height),
+      } : report;
+      const cell = cellIn(rect, adjusted);
+      if (!cell) return null;
+      const rowInPane = cell.row - Math.max(0, rect.height - visible);
+      if (rowInPane < 0 && !clamp) return null;
+      const row = first + Math.min(visible - 1, Math.max(0, rowInPane));
+      return { row, column: Math.min(Math.max(0, cell.column), displayWidth(lines[row] ?? "")) };
+    };
+    const copySelection = (selected: TranscriptSelection | null): void => {
+      const text = selected ? selectedTranscriptText(selectionRowsRef.current.lines, selected) : "";
+      if (!text) return;
+      void (async () => {
+        try { outputStream.write(osc52CopySequence(text)); } catch { /* native helper below */ }
+        if (await writeSystemClipboard(text)) {
+          setNotice("已复制选中内容 · Ctrl+V 粘贴");
+        } else {
+          const path = join(config.home, "last-selection.txt");
+          await mkdir(config.home, { recursive: true });
+          await writeFile(path, text, "utf8");
+          setNotice(`已发送 OSC52；终端若未复制，可从 ${path} 读取选中内容`);
+        }
+      })().catch((error) => setNotice(`选区复制失败：${error instanceof Error ? error.message : String(error)}`));
+    };
     const onData = (chunk: Buffer) => {
       let up = 0;
       let down = 0;
@@ -745,6 +784,15 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
 
         const { x, y } = report;
         if (isMotion(report)) { // bit 5 is set while a button is held
+          if (selectionAnchorRef.current) {
+            const focus = selectionPoint(report, true);
+            if (focus) {
+              const next = { anchor: selectionAnchorRef.current, focus };
+              selectionRef.current = next;
+              setSelection(next);
+            }
+            continue;
+          }
           const drag = dragRef.current;
           if (!drag) continue;
           const { totalLines, viewport } = streamMetricsRef.current;
@@ -756,7 +804,16 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           continue;
         }
 
-        if (report.released) { // a click that never moved pages toward the click
+        if (report.released) { // a drag copied its selection; a click pages toward it
+          if (selectionAnchorRef.current) {
+            const focus = selectionPoint(report, true);
+            const selected = focus ? { anchor: selectionAnchorRef.current, focus } : selectionRef.current;
+            selectionAnchorRef.current = null;
+            selectionRef.current = selected;
+            setSelection(selected);
+            copySelection(selected);
+            continue;
+          }
           const drag = dragRef.current;
           dragRef.current = null;
           if (!drag || drag.moved) continue;
@@ -773,9 +830,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
 
         if (!isLeftPress(report)) continue;
 
-        // A left press inside the track starts a drag. Movement is applied
-        // relatively, so the content follows the pointer without the thumb
-        // jumping to wherever the press landed.
+        // A left press inside the track starts a scrollbar drag. Movement is
+        // applied relatively, so the content follows the pointer without the
+        // thumb jumping to wherever the press landed.
         const geometry = barGeometryRef.current;
         const { totalLines, viewport } = streamMetricsRef.current;
         const inTrack = Math.abs(x - geometry.x) <= 1 && y >= geometry.top + 1 && y <= geometry.top + viewport;
@@ -784,10 +841,15 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           continue;
         }
 
-        // Anywhere else, a press inside the composer puts the caret where the
-        // pointer is. Clicking outside it does nothing at all: never text.
+        // A press inside the composer puts the caret where the pointer is.
         const cell = cellIn(inputGeometryRef.current, report);
-        if (cell) setCaretRequest({ ...cell, nonce: (caretNonceRef.current += 1) });
+        if (cell) { setCaretRequest({ ...cell, nonce: (caretNonceRef.current += 1) }); continue; }
+
+        // Anywhere else in the transcript starts a selection.
+        const anchor = selectionPoint(report, false);
+        selectionAnchorRef.current = anchor;
+        selectionRef.current = anchor ? { anchor, focus: anchor } : null;
+        setSelection(selectionRef.current);
       }
       if (!up && !down) return;
       setShowDetails(true);
@@ -797,7 +859,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     };
     inputStream.on("data", onData);
     return () => { inputStream.off("data", onData); outputStream.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l"); };
-  }, [stdin, stdout, applyScroll]);
+  }, [stdin, stdout, applyScroll, config.home]);
   useEffect(() => {
     let cancelled = false;
     void fg(["**/*"], { cwd: config.workspace, onlyFiles: true, dot: false,
@@ -1158,6 +1220,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     setRunOutcome(null);
     setScrollOffset(0);
     setShowDetails(false);
+    selectionAnchorRef.current = null;
+    selectionRef.current = null;
+    setSelection(null);
     thinkingStartedRef.current = Date.now();
     resetThinking();
     thinkingFragmentsRef.current = 0;
@@ -2141,6 +2206,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const renderedLines = useMemo(() => transcriptLines(streamBlocks, streamTextWidth), [streamBlocks, streamTextWidth]);
   const streamView = listWindow(renderedLines.length, scrollTrackHeight, scrollOffset);
   const visibleLines = renderedLines.slice(streamView.start, streamView.end);
+  // Snapshot for the mouse handler: which physical rows are on screen, so a
+  // drag can be mapped back to line/column offsets.
+  selectionRowsRef.current = { rect: screenRect(transcriptNode.current), first: streamView.start,
+    visible: visibleLines.length, lines: renderedLines.map((line) => line.text) };
   const scrolledBack = streamView.offset > 0;
   streamMetricsRef.current = { totalLines: streamView.total, viewport: scrollTrackHeight };
   scrollOffsetRef.current = streamView.offset;
@@ -2217,7 +2286,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {/* Everything the agent produced is one chain: prose, tool calls, edits
             and notes in the order they happened, scrolled as a single list. */}
         {!dialog ? <Box ref={transcriptNode} flexDirection="column" flexGrow={1} flexBasis={0} overflow="hidden" justifyContent="flex-end">
-          {visibleLines.map(line => <Box key={line.id} height={1} flexShrink={0}><TranscriptLineView line={line} /></Box>)}
+          {visibleLines.map((line, index) => {
+            const span = selectionSpan(line.text, streamView.start + index, selection);
+            return <Box key={line.id} height={1} flexShrink={0} backgroundColor={span ? theme.selected : undefined}>
+              <TranscriptLineView line={line} selected={Boolean(span)} />
+            </Box>;
+          })}
         </Box> : null}
         {!dialog && !showMesh && running && livePhase ? (
           <ThinkingLine
@@ -2311,7 +2385,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             <Text color={theme.dim} wrap="truncate-end">
               {`${config.model.name}  ${usage.input}↑ ${usage.output}↓ · ctx ${contextPct}%`}
               <Text color={theme.text}>  Enter 发送 · Ctrl+J 换行</Text>
-              <Text>  Ctrl+Y 复制回答 · Shift+拖选复制</Text>
+              <Text>  Ctrl+Y 复制回答 · 拖选即复制</Text>
               {pendingCount ? <Text color={theme.accent}>  {pendingCount} pending</Text> : null}
             </Text>
           </Box>
