@@ -15,7 +15,7 @@ export function isTruncationError(error: unknown): boolean {
 export function retryableModelError(error: unknown): boolean {
   if (isContextOverflowError(error)) return false;
   const text = error instanceof Error ? error.message : String(error);
-  return /model HTTP (408|409|425|429|5\d\d)|timed out|idle timeout|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed/i.test(text);
+  return /model HTTP (408|409|425|429|529|5\d\d)|timed out|idle timeout|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|overloaded|rate[ -]?limit|temporarily unavailable|try again|service unavailable|bad gateway|gateway timeout/i.test(text);
 }
 
 /**

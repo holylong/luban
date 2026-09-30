@@ -62,7 +62,14 @@ export function responsesTools(tools: Array<Record<string, unknown>>): JsonObjec
 }
 
 function retryableStatus(status: number): boolean {
-  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+  return status === 408 || status === 409 || status === 425 || status === 429 || status === 529 || status >= 500;
+}
+
+/** Gateways often report overload as HTTP 400 with a retryable phrase in the body. */
+function retryableBody(status: number, body: string): boolean {
+  if (retryableStatus(status)) return true;
+  if (status !== 400 && status !== 403 && status !== 413) return false;
+  return /overloaded|rate[ -]?limit|try again|temporarily unavailable|service unavailable/i.test(body);
 }
 
 async function wait(ms: number, signal: AbortSignal): Promise<void> {
@@ -163,7 +170,7 @@ export class ResponsesClient {
             throw new Error(`model HTTP 404: this gateway has no Responses endpoint (${responsesEndpoint(this.config.model.baseUrl)}). Use api "openai" for Chat Completions. ${responseBody.slice(0, 500)}`);
           }
           const error = new Error(`model HTTP ${response.status}: ${responseBody.slice(0, 4000)}`);
-          if (!retryableStatus(response.status) || attempt >= retries) throw error;
+          if (!retryableBody(response.status, responseBody) || attempt >= retries) throw error;
         } else {
           const type = response.headers.get("content-type") || "";
           if (!type.includes("text/event-stream")) {
@@ -183,7 +190,7 @@ export class ResponsesClient {
         clearTimeout(timeout);
         signal.removeEventListener("abort", abort);
       }
-      const backoff = Math.min(8_000, 400 * (2 ** attempt)) + Math.floor(Math.random() * 200);
+      const backoff = Math.min(10_000, 500 * (2 ** attempt)) + Math.floor(Math.random() * 250);
       onNotice?.(`模型请求中断（${describeModelError(failure)}），${(backoff / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
       await wait(backoff, signal);
     }
