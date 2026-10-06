@@ -19,8 +19,8 @@ const MAX_OUTPUT = 120_000;
 /**
  * Keep the agent responsive when a command is actually a server, watcher, or
  * other long-lived process. This mirrors the short blocking budget used by
- * the other terminal agents; explicit timeout values at or below the budget
- * retain their normal foreground timeout semantics.
+ * the other terminal agents; an explicit timeout keeps a finite command in the
+ * foreground until it finishes or reaches that timeout.
  */
 const AUTO_BACKGROUND_MS = 15_000;
 
@@ -241,7 +241,7 @@ async function fetchText(url: string, signal: AbortSignal, timeoutSeconds: numbe
 }
 
 
-async function runShell(workspace: string, command: string, signal: AbortSignal, timeoutSeconds: number, config: LubanConfig | undefined, usePty = false, background?: BackgroundTasks): Promise<string> {
+async function runShell(workspace: string, command: string, signal: AbortSignal, timeoutSeconds: number, config: LubanConfig | undefined, usePty = false, background?: BackgroundTasks, autoBackground = true): Promise<string> {
   signal.throwIfAborted();
   if (config) {
     const blocked = assessShellCommand(command, workspace, config.sandbox ?? defaultSandboxSettings());
@@ -303,7 +303,7 @@ async function runShell(workspace: string, command: string, signal: AbortSignal,
       terminate();
       finish(new Error(`command timed out after ${timeoutSeconds}s and was terminated; if it legitimately needs longer, pass a larger timeout or start it with background: true and poll with get_background_task`));
     }, Math.max(1, timeoutSeconds) * 1000);
-    const autoBackgroundTimer = background && timeoutSeconds * 1000 > AUTO_BACKGROUND_MS && !isAutoBackgroundExcluded(command)
+    const autoBackgroundTimer = autoBackground && background && timeoutSeconds * 1000 > AUTO_BACKGROUND_MS && !isAutoBackgroundExcluded(command)
       ? setTimeout(() => {
         if (settled) return;
         adopted = true;
@@ -523,7 +523,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
     {
       name: "bash",
       close: () => background.close(),
-      description: "Run a shell command in the workspace and return combined output. Long-lived foreground commands are automatically moved to the background after 15 seconds; use background: true to detach immediately.",
+      description: "Run a shell command in the workspace. Git works from a nested workspace; do not cd to the repo parent. Omit timeout to detach after 15s; set timeout to wait for a finite build/test; background: true detaches now.",
       risk: "execute",
       parameters: schema({
         command: { type: "string" },
@@ -537,7 +537,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
           const id = background.start(workspace, stringArg(args, "command"), signal, config);
           return Promise.resolve(`background task ${id} started`);
         }
-        return runShell(workspace, stringArg(args, "command"), signal, Math.min(600, numberArg(args, "timeout", 120)), config, args.pty === true, background);
+        return runShell(workspace, stringArg(args, "command"), signal, Math.min(600, numberArg(args, "timeout", 120)), config, args.pty === true, background, args.timeout === undefined);
       },
     },
     {
