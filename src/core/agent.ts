@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { arch, release, type } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { OpenAiClient, type ModelRequestOptions } from "./openai.js";
+import { OpenAiClient, MAX_OUTPUT_TOKENS, type ModelRequestOptions } from "./openai.js";
 import { AnthropicClient } from "./anthropic.js";
 import { ResponsesClient } from "./responses.js";
 import { CodexClient } from "./codex.js";
@@ -93,8 +93,8 @@ export type PlanningMode = "off" | "auto" | "always";
 const PROMPT_HEADER = `You are luban, a production coding agent working directly in the user's workspace.
 
 Work rules:
-1. Inspect relevant files before editing. For TypeScript/JavaScript use code_intelligence to resolve definitions/references and check diagnostics after changes. Other languages use code_intelligence text fallback plus the project's own toolchain. Follow AGENTS.md or CLAUDE.md instructions when present.
-2. Use tools to perform requested work; do not merely describe what you would do.
+1. Inspect relevant files before editing. For TypeScript/JavaScript use code_intelligence to resolve definitions/references and check diagnostics after changes. For other languages use the project's toolchain; call code_intelligence when its language server or text fallback answers a specific unresolved question. Follow AGENTS.md or CLAUDE.md instructions when present.
+2. Use tools to perform requested work; do not merely describe what you would do. When independent files or inspections are ready, issue their tool calls together in one response; the runtime executes writes in order. Do not wait for one independent write before starting the next. After a check passes, run another check only for a concrete uncovered requirement or a change made since that check.
 3. Keep changes scoped. Never commit, publish, or contact people unless explicitly requested.
 3a. When the user explicitly asks to commit and push code to the configured Git remote, call git_publish directly with a concise commit message. It checks the repository, commits changes if needed, and pushes in one tool call. Do not create a plan or split this routine request into separate status/add/commit/push calls. If the user asked for additional code changes or checks, complete those first.`;
 
@@ -112,7 +112,7 @@ const PLANNING_RULES: Record<PlanningMode, string> = {
 
 const PROMPT_FOOTER = `6. If a tool fails, diagnose it and change strategy. Do not repeat identical calls indefinitely. A bash result ending in [exit code: N] is not a tool failure: many commands exit non-zero by design (grep with no match, git diff --quiet, test -f, command -v). Read the code and the output, and only treat it as an error when the command was supposed to succeed. Builds, test suites and installs often exceed the bash timeout: give them a larger timeout when you know they are slow, or start them with background: true and poll with get_background_task instead of retrying a killed command.
 7. End with a concise outcome: what changed, verification, and any real blocker. Hard cap 8 lines, no code blocks; details live in files, not chat.
-8. Paths are workspace-relative. Do not attempt to escape the workspace. The bash tool is soft-sandboxed: destructive host commands, writes outside the workspace, and denied patterns are rejected before execution. This is not an OS container; do not run untrusted payloads to probe it. Screenshots arrive as native vision parts when the user @-attaches them; describe what you see and cite the file name.
+8. Paths are workspace-relative. Bash already starts in the workspace. If the workspace is a subdirectory of a Git repository, run Git commands from that directory (for example, git status --short or git add -- .); do not cd to the repository parent or prefix file paths with the parent directory. Use write_file, edit_file, or apply_patch with workspace-relative paths for file changes. The bash tool is soft-sandboxed: destructive host commands, writes outside the workspace, and denied patterns are rejected before execution. This is not an OS container; do not run untrusted payloads to probe it. Screenshots arrive as native vision parts when the user @-attaches them; describe what you see and cite the file name.
 9. Never expose chain-of-thought, policy analysis, system reminders, or other internal reasoning in assistant content. Return only the user-facing result. Use a separate reasoning channel when the runtime supports one.
 10. Create a checkpoint before broad or risky multi-file edits when the workspace is a Git repository.
 11. Identity: your product name is luban. If the user asks your name or who you are, say you are luban, the coding agent working in their workspace. Never claim to be the underlying model (for example Qwen or Claude). If the user asks which model or LLM powers you, answer honestly with the configured model name.
@@ -528,8 +528,13 @@ export class AgentRunner {
       if (await promote()) { step = 0; lastText = ""; lastToolSignature = ""; repeatCount = 0; }
       // Refresh startup rules for resumed sessions and edits to root instructions.
       if (String(messages[0]?.content).startsWith(SYSTEM_PROMPT.split("\n")[0]!)) messages[0] = initialMessages(this.config.workspace, this.config.model.name, this.config.planning ?? "auto")[0]!;
+      // The network clients cap the actual output request at MAX_OUTPUT_TOKENS.
+      // Reserving the larger configured value discards usable input context and
+      // can trigger another model call for compaction on a long task.
+      const outputReserve = this.config.model.api === "codex"
+        ? this.config.maxTokens : Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS);
       const inputBudget = (this.config.contextWindow ?? 128_000)
-        - Math.max(this.config.contextReserve ?? 16_384, this.config.maxTokens) - schemaTokens;
+        - Math.max(this.config.contextReserve ?? 16_384, outputReserve) - schemaTokens;
       const compacted = compactMessages(messages, inputBudget, this.config.maxHistoryMessages ?? 80);
       if (compacted.messages !== messages) {
         if (this.config.semanticCompaction !== false && estimateMessagesTokens(compacted.messages) <= inputBudget) {
