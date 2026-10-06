@@ -130,6 +130,15 @@ describe("workspace tools", () => {
     expect(status.status).toBe("running");
     await expect(tools.get("stop_background_task")!.execute({ task_id: id }, signal)).resolves.toContain("stopping");
   }, 20_000);
+
+  it("waits for a finite command when the caller sets an explicit timeout", async () => {
+    const { tools, signal } = await setup();
+    const result = await tools.get("bash")!.execute({
+      command: "node -e 'setTimeout(() => process.stdout.write(\"finished\"), 16000)'",
+      timeout: 18,
+    }, signal);
+    expect(result).toBe("finished");
+  }, 20_000);
 });
 
 describe("shell exit codes", () => {

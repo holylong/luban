@@ -57,6 +57,35 @@ const liveLabels = (events: AgentEvent[]): string[] =>
   events.flatMap((event) => event.type === "status" && event.progress ? [event.text] : []);
 
 describe("compaction notices", () => {
+  it("uses the provider output cap when reserving context for a long task", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-output-reserve-"));
+    const runnerConfig = config(workspace);
+    runnerConfig.maxTokens = 64_000;
+    runnerConfig.contextWindow = 128_000;
+    runnerConfig.contextReserve = 16_384;
+    runnerConfig.maxHistoryMessages = 500;
+    runnerConfig.semanticCompaction = true;
+    let calls = 0;
+    const runner = new AgentRunner(runnerConfig, {
+      async complete(messages: ChatMessage[]) {
+        calls += 1;
+        expect(messages.some((message) => String(message.content).startsWith("old " + "x".repeat(100)))).toBe(true);
+        return { content: "done", toolCalls: [], usage: { input: 1, output: 1 } };
+      },
+    });
+    try {
+      const result = await runner.run([
+        ...initialMessages(workspace),
+        { role: "user", content: "old " + "x".repeat(250_000) },
+        { role: "assistant", content: "prior result" },
+        { role: "user", content: "continue" },
+      ], "agent", new AbortController().signal, () => undefined, async () => "once");
+      expect(result.ok).toBe(true);
+      expect(calls).toBe(1);
+      expect(result.modelCalls).toBe(1);
+    } finally { runner.close(); }
+  });
+
   it("announces a run's first drop once and keeps later totals on the working line", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-compaction-"));
     const source = readingClient();
