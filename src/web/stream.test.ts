@@ -7,6 +7,7 @@ import { MeshRuntime } from "../core/mesh/runtime.js";
 import { configureRemoteJobs } from "../core/mesh/agent-runner.js";
 import type { LubanConfig, ToolDefinition } from "../core/types.js";
 import { ApprovalBroker } from "./approval.js";
+import { QuestionBroker } from "./question.js";
 import { LubanWebServer } from "./server.js";
 
 function testConfig(root: string): LubanConfig {
@@ -90,6 +91,46 @@ describe("unattended jobs", () => {
 });
 
 describe("job stream and approvals", () => {
+  it("exposes pending model questions and delivers a browser answer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-question-"));
+    const config = testConfig(root);
+    await mkdir(config.workspace, { recursive: true });
+    const mesh = new MeshRuntime(config);
+    const questions = new QuestionBroker();
+    mesh.setJobRunner(async (job, signal) => {
+      const answer = await questions.request(job.id, { question: "Which database?", options: [{ label: "SQLite" }, { label: "Postgres" }] }, signal);
+      return { ok: true, text: `Using ${answer}` };
+    });
+    const web = new LubanWebServer(config, mesh, { port: 0, approvals: new ApprovalBroker(), questions });
+    await mesh.start();
+    const base = await web.start();
+    try {
+      const submitted = await jsonRequest(`${base}api/jobs`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ instruction: "choose database", interaction: "on" }),
+      });
+      const id = String(submitted.body.job_id);
+      let pending: { id: string; question: string }[] = [];
+      for (let i = 0; i < 100 && !pending.length; i++) {
+        pending = (await jsonRequest(`${base}api/questions?job=${id}`)).body;
+        if (!pending.length) await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(pending[0]?.question).toBe("Which database?");
+      const detail = await jsonRequest(`${base}api/jobs/${id}`);
+      expect(detail.body.questions).toHaveLength(1);
+      const answered = await jsonRequest(`${base}api/questions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: pending[0]!.id, answer: "Postgres" }),
+      });
+      expect(answered.body.ok).toBe(true);
+      expect((await waitForJob(base, id, "done")).result).toBe("Using Postgres");
+      expect((await jsonRequest(`${base}api/questions?job=${id}`)).body).toEqual([]);
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
   it("buffers structured job events with monotonic sequence numbers for replay", async () => {
     const root = await mkdtemp(join(tmpdir(), "luban-web-stream-"));
     const config = testConfig(root);

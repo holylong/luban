@@ -49,6 +49,7 @@ export interface MeshJob {
   event_next?: number;
   interactive?: boolean;
   approvals?: ApprovalView[];
+  questions?: QuestionView[];
 }
 
 export interface ApprovalView {
@@ -58,6 +59,14 @@ export interface ApprovalView {
   description: string;
   risk: string;
   args: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface QuestionView {
+  id: string;
+  job_id: string;
+  question: string;
+  options: Array<{ label: string; description?: string }>;
   created_at: number;
 }
 

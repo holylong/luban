@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setNodeScope } from "./api";
-import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, ToolRun } from "./types";
+import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, ToolRun } from "./types";
 import {
   deriveTimeline, editRecordStats, formatDuration, liveProgress, parseEditRecord,
   relativeTime, STATUS_LABELS, toolLabel, withOutcome,
@@ -124,6 +124,8 @@ export function MobileApp(): React.ReactElement {
   const [job, setJob] = useState<MeshJob | undefined>();
   const [events, setEvents] = useState<JobStreamRecord[]>([]);
   const [approvals, setApprovals] = useState<ApprovalView[]>([]);
+  const [questions, setQuestions] = useState<QuestionView[]>([]);
+  const [questionDrafts, setQuestionDrafts] = useState<Record<string, string>>({});
   const [project, setProject] = useState("");
   const [mode, setMode] = useState<TaskMode>("edits");
   const [busy, setBusy] = useState(false);
@@ -188,7 +190,11 @@ export function MobileApp(): React.ReactElement {
   }, []);
 
   const refreshApprovals = useCallback(async () => {
-    try { setApprovals(await api.approvals()); }
+    try {
+      const [pendingApprovals, pendingQuestions] = await Promise.all([api.approvals(), api.questions()]);
+      setApprovals(pendingApprovals);
+      setQuestions(pendingQuestions);
+    }
     catch { /* transient */ }
   }, []);
 
@@ -275,6 +281,13 @@ export function MobileApp(): React.ReactElement {
 
   const progress = useMemo(() => (running ? liveProgress(events, clock) : null), [running, events, clock]);
   const pendingApprovals = approvals;
+  const pendingQuestions = questions;
+  const answerQuestion = async (id: string, answer: string): Promise<void> => {
+    try {
+      await api.answerQuestion(id, answer);
+      setQuestions(current => current.filter(item => item.id !== id));
+    } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
+  };
   const items = useMemo(() => (job ? withOutcome(deriveTimeline(job, events), job) : []), [job, events]);
 
   // A finished task is the one thing a phone should notice without watching.
@@ -392,9 +405,9 @@ export function MobileApp(): React.ReactElement {
 
         {tab === "live" && (
           <>
-            {pendingApprovals.length > 0 && (
+            {pendingApprovals.length + pendingQuestions.length > 0 && (
               <div className="m-banner">
-                ⚠️ 有 {pendingApprovals.length} 个操作等待批准
+                ⚠️ 有 {pendingApprovals.length + pendingQuestions.length} 个问题或操作等待回应
                 <div className="m-banner-actions">
                   <button className="m-btn primary" onClick={() => setTab("approvals")}>去处理</button>
                 </div>
@@ -481,7 +494,24 @@ export function MobileApp(): React.ReactElement {
 
         {tab === "approvals" && (
           <>
-            {pendingApprovals.length === 0 && <div className="m-empty"><h2>没有待批准的请求</h2><p>Agent 需要写入、执行命令或联网时会在这里询问。</p></div>}
+            {pendingApprovals.length + pendingQuestions.length === 0 && <div className="m-empty"><h2>没有待回答的请求</h2><p>Agent 需要你的决定时会在这里询问。</p></div>}
+            {pendingQuestions.map(item => <div className="m-approval" key={item.id}>
+              <h3>{item.question}</h3>
+              <div className="risk">任务 {item.job_id}</div>
+              <div className="m-approval-actions">
+                {item.options.map(option => <button className="m-btn" key={option.label}
+                  title={option.description} onClick={() => void answerQuestion(item.id, option.label)}>
+                  {option.label}{option.description ? ` · ${option.description}` : ""}
+                </button>)}
+              </div>
+              <div className="m-approval-actions">
+                <input className="m-input" aria-label="自定义回答" placeholder="或输入自己的答案"
+                  value={questionDrafts[item.id] ?? ""}
+                  onChange={event => setQuestionDrafts(current => ({ ...current, [item.id]: event.target.value }))} />
+                <button className="m-btn primary" disabled={!(questionDrafts[item.id] ?? "").trim()}
+                  onClick={() => void answerQuestion(item.id, questionDrafts[item.id] ?? "")}>发送</button>
+              </div>
+            </div>)}
             {pendingApprovals.map(item => (
               <div className="m-approval" key={item.id}>
                 <h3>{toolLabel(item.tool)}</h3>
@@ -577,8 +607,8 @@ export function MobileApp(): React.ReactElement {
           {activeJobs > 0 && <span className="m-badge">{activeJobs}</span>}
         </button>
         <button className={`m-tab ${tab === "approvals" ? "active" : ""}`} onClick={() => setTab("approvals")}>
-          <span className="icon">⚠</span><span>审批</span>
-          {pendingApprovals.length > 0 && <span className="m-badge">{pendingApprovals.length}</span>}
+          <span className="icon">⚠</span><span>交互</span>
+          {pendingApprovals.length + pendingQuestions.length > 0 && <span className="m-badge">{pendingApprovals.length + pendingQuestions.length}</span>}
         </button>
         <button className={`m-tab ${tab === "settings" ? "active" : ""}`} onClick={() => setTab("settings")}>
           <span className="icon">⚙</span><span>设置</span>

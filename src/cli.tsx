@@ -18,6 +18,7 @@ import { App } from "./ui/app.js";
 import { applyTheme, resolveThemeId, themeIds } from "./ui/theme.js";
 import { LubanWebServer } from "./web/server.js";
 import { ApprovalBroker } from "./web/approval.js";
+import { QuestionBroker } from "./web/question.js";
 import { AcpServer } from "./core/acp.js";
 import { LubanRelayServer } from "./web/relay.js";
 import { TunnelClient, normalizeRelayUrl } from "./web/tunnel.js";
@@ -120,7 +121,7 @@ function sessionStore(config: LubanConfig): SessionStore {
 async function runHeadless(config: LubanConfig, prompt: string, mesh?: MeshRuntime): Promise<number> {
   process.stderr.write(`luban v${VERSION}\n`);
   const store = sessionStore(config);
-  const messages: ChatMessage[] = [...initialMessages(config.workspace, config.model.name, config.planning), { role: "user", content: prompt }];
+  const messages: ChatMessage[] = [...initialMessages(config.workspace, config.model.name, config.planning, config.kev?.mode), { role: "user", content: prompt }];
   const session = store.create(config.project, config.workspace, "agent", config.model.id, messages);
   const runner = new AgentRunner(config, undefined, mesh);
   const controller = new AbortController();
@@ -209,8 +210,10 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
   // One broker serves both callers: the HTTP layer answers prompts for
   // browser-driven jobs, while daemon jobs keep their always-allow default.
   const approvals = new ApprovalBroker();
+  const questions = new QuestionBroker();
   configureRemoteJobs(mesh, config, undefined, {
     approve: (tool, args, jobId) => approvals.request(jobId, tool, args),
+    askUser: (jobId, question, signal) => questions.request(jobId, question, signal),
     isInteractive: jobId => Boolean(web?.isInteractiveJob(jobId)),
     modeFor: jobId => web?.jobMode(jobId) ?? "edits",
   });
@@ -282,7 +285,7 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
       // printed with the link that carries it.
       const exposed = !LOOPBACK.has(options.host);
       const token = options.token?.trim() || process.env.LUBAN_WEB_TOKEN?.trim() || (exposed ? generateToken() : undefined);
-      web = new LubanWebServer(config, mesh, { host: options.host, port: options.port, approvals, token });
+      web = new LubanWebServer(config, mesh, { host: options.host, port: options.port, approvals, questions, token });
       const url = await web.start();
       process.stdout.write(`luban web ${url}\n`);
       process.stdout.write(`workspace ${config.workspace}\nmesh ${config.mesh.enabled ? `${config.mesh.nodeName}:${config.mesh.port}` : "disabled"}\n`);
@@ -571,6 +574,7 @@ async function main(): Promise<number> {
   // The TUI keeps its own broker: approvals requested by a browser tab are
   // answered there, while in-terminal jobs keep prompting in the TUI itself.
   const approvals = new ApprovalBroker();
+  const questions = new QuestionBroker();
   try {
     if (config.mesh.enabled || options.webPort !== undefined || (config.remote.enabled && !prompt)) {
       const runtimeConfig = config.remote.enabled && !prompt
@@ -579,6 +583,7 @@ async function main(): Promise<number> {
       const candidate = new MeshRuntime(runtimeConfig);
       const remoteJobOptions = {
         approve: (tool: ToolDefinition, args: Record<string, unknown>, jobId: string) => approvals.request(jobId, tool, args),
+        askUser: (jobId: string, question: import("./core/question.js").UserQuestion, signal: AbortSignal) => questions.request(jobId, question, signal),
         isInteractive: (jobId: string) => Boolean(web?.isInteractiveJob(jobId) || remoteWeb?.isInteractiveJob(jobId)),
         modeFor: (jobId: string) => web?.jobMode(jobId) ?? remoteWeb?.jobMode(jobId) ?? "edits" as const,
       };
@@ -604,7 +609,7 @@ async function main(): Promise<number> {
     }
     if (options.webPort !== undefined) {
       if (mesh) {
-        web = new LubanWebServer(config, mesh, { host: options.webHost, port: options.webPort, approvals });
+        web = new LubanWebServer(config, mesh, { host: options.webHost, port: options.webPort, approvals, questions });
         const url = await web.start();
         process.stderr.write(`web workspace: ${url}\n`);
       } else {
@@ -633,6 +638,7 @@ async function main(): Promise<number> {
           host: config.remote.host,
           port: config.remote.port,
           approvals,
+          questions,
           token: localToken,
         });
         await remoteWeb.start();
@@ -712,7 +718,7 @@ async function runAcp(argv: string[]): Promise<number> {
     let state = runners.get(sessionId);
     if (!state) {
       const runner = new AgentRunner({ ...config, workspace: sessionWorkspace });
-      state = { runner, messages: initialMessages(sessionWorkspace, config.model.name) };
+      state = { runner, messages: initialMessages(sessionWorkspace, config.model.name, config.planning, config.kev?.mode) };
       runners.set(sessionId, state);
     }
     state.messages.push({ role: "user", content: text });

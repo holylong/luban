@@ -71,6 +71,8 @@ export const api = {
   resume: (id: string) => post<{ ok: boolean; job_id: string; status: JobStatus }>(`/api/jobs/${encodeURIComponent(id)}/resume`, {}),
   approvals: (job?: string) => request<ApprovalView[]>(`/api/approvals${query({ job })}`),
   decide: (id: string, decision: "once" | "tool" | "always" | "deny") => post<{ ok: boolean }>("/api/approvals", { id, decision }),
+  questions: (job?: string) => request<import("./types").QuestionView[]>(`/api/questions${query({ job })}`),
+  answerQuestion: (id: string, answer: string) => post<{ ok: boolean }>("/api/questions", { id, answer }),
   workspace: (project: string, sub = "") => request<{ project: string; root: string; tree: FileEntry[] }>(`/api/workspace${query({ project, sub })}`),
   file: (project: string, path: string) => request<FileContent>(`/api/file${query({ project, path })}`),
   fileVersions: (project: string, path: string) => request<FileVersions>(`/api/file-versions${query({ project, path })}`),
