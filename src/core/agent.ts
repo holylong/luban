@@ -433,6 +433,9 @@ export class AgentRunner {
     askUser?: AskUser,
   ): Promise<RunResult> {
     if (this.running) throw new Error("AgentRunner already has an active run");
+    if (this.config.model.provider === "opencode-zen" && !this.config.model.apiKey) {
+      throw new Error("OpenCode Zen 尚未连接：设置 OPENCODE_ZEN_API_KEY，或先在 OpenCode 中连接 Zen，然后重启 luban。");
+    }
     this.running = true;
     this.inbox = inbox;
     if (askUser) this.tools.set("ask_user", {

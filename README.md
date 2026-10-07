@@ -320,6 +320,19 @@ GPT Luna 这类推理模型不接受显式 `temperature`，内置定义用
 自己配置时照 `config.example.json` 写上即可。要退回自己的 key，直接在 `providers`
 里定义同名 `opencode-go`，它会覆盖内置定义。
 
+### OpenCode Zen 免费模型
+
+luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或先在 OpenCode 中连接
+OpenCode Zen（luban 会读取 `$XDG_DATA_HOME/opencode/auth.json` 中 `opencode` 的 key）。
+luban 既有的 `OPENCODE_API_KEY` 仍对应 Go；单独使用 Zen 时请设
+`OPENCODE_ZEN_API_KEY`。免费模型始终会出现在 `/models` / `Ctrl+P` 列表中；
+未连接时会标注所需凭据，运行前也会提示设置方法。连接后选择
+`opencode-zen/ling-3.1-flash-free`、`opencode-zen/nemotron-3-ultra-free` 等免费模型；
+`muse-spark-1.3-contributor-free` 自动走 Responses，其余内置免费聊天模型走 Chat Completions。
+Zen 与 Go 的本地凭据分别读取，不会把 Go 登录误当作 Zen 登录。免费模型名单和可用期限
+会变化，以 [Zen 官方列表](https://opencode.ai/docs/zen) 为准；Jev 免费版使用独立的
+System One 决策接口，不能在聊天模型选择器中使用。显式配置同名 provider 可覆盖内置模型表。
+
 ## 日常交互
 
 | 操作 | 作用 |
