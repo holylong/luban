@@ -113,6 +113,13 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 - `web`/`serve` 守护模式，或让 TUI 通过 `--web-port` 同进程提供 Web 服务。
 - 手机远控：同一局域网可直连电脑，异地可通过公网中继与节点拨出隧道；Android APK 或浏览器 `/m/` 控制台都能下发指令、看实时状态、审批与取消。
 
+### Kev 决策模型（房谋杜断）
+
+- 聊天大模型负责“谋”（提想法、写代码），本地 [Kev](https://github.com/jaredpalmer/kev) 决策模型负责“断”（在给定证据上做选择）。Kev 不是聊天模型，只暴露 `POST /v1/systemone`：传入 `state` 与若干 `noul`（是/否）/ `choice`（多选一）/ `score`（有序分级）问题，返回校准过的概率与置信度。
+- 因此它按**工具**接入而不是模型后端：`kev.mode` 是决策引擎开关——默认 `"model"` 由原版大模型自己决策，提示词与工具表完全不变；设为 `"kev"` 且配好 `kev.url` 后才注册 `kev_decide` 并追加一条提示，模型可在有风险的取舍前请它做第二意见。若 `mode` 为 `"kev"` 但 `url` 为空，会回退到 `"model"` 并在 stderr 说明。
+- 本地起服务（需要 GPU，约 10 GB 显存）：`uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8008`（首次会从 Hugging Face 下载适配器与底座，国内可设 `HF_ENDPOINT=https://hf-mirror.com`）。
+- 配置：`"kev": { "mode": "kev", "url": "http://127.0.0.1:8008", "model": "kev-latest" }`，也支持 `LUBAN_KEV_MODE` / `LUBAN_KEV_URL` / `LUBAN_KEV_MODEL`；服务用 `KEV_API_KEY` 启动时再填 `apiKey`。`mode` 也可写作 `decision_engine`，值 `"jev"` 与 `"kev"` 等价；无法识别的值按 `"model"` 处理，不会报错。
+
 ### 集成（MCP / 编辑器 / 兼容）
 
 - 工作区/用户级 `SKILL.md` 技能，以及标准输入输出型 MCP Server 桥接；仓库自带[股票持仓监控场景插件](plugins/stock-monitor/README.md)。

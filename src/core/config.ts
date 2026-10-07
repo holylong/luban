@@ -485,6 +485,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const sandboxBackendRaw = text(sandboxRaw.backend, "none").toLowerCase();
   const toolOutputRaw = record(raw.tool_output ?? raw.toolOutput);
   const mcpRaw = record(raw.mcp);
+  const kevRaw = record(raw.kev);
   const historyRaw = record(raw.history);
   const codeIntelRaw = record(raw.code_intelligence ?? raw.codeIntel);
   const remoteRaw = record(raw.remote);
@@ -527,6 +528,27 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
       allow: stringList(permissionConfig.allow),
       deny: stringList(permissionConfig.deny),
     },
+    // A local Kev/System One decision server is opt-in: `mode` picks the
+    // engine ("model" keeps the original chat model deciding), and with no URL
+    // the kev_decide tool is not registered at all, so the prompt is unchanged.
+    kev: (() => {
+      const mode = text(kevRaw.mode, kevRaw.decision_engine, kevRaw.decisionEngine, process.env.LUBAN_KEV_MODE).toLowerCase();
+      const url = text(kevRaw.url, kevRaw.base_url, kevRaw.baseUrl, process.env.LUBAN_KEV_URL);
+      // "kev" without a server URL would silently do nothing; fall back to the
+      // model engine and say so instead of pretending the advisor is active.
+      const requested = mode === "kev" || mode === "jev" ? "kev" : "model";
+      const effective = requested === "kev" && !url.trim() ? "model" : requested;
+      if (requested === "kev" && !url.trim()) {
+        process.stderr.write("luban: kev.mode is \"kev\" but kev.url is empty; falling back to the model decision engine\n");
+      }
+      return {
+        mode: effective,
+        url,
+        apiKey: text(kevRaw.api_key, kevRaw.apiKey, process.env.LUBAN_KEV_API_KEY, process.env.KEV_API_KEY),
+        model: text(kevRaw.model, process.env.LUBAN_KEV_MODEL, "kev-latest"),
+        timeoutSeconds: Math.max(1, Math.min(3600, integer(kevRaw.timeout ?? kevRaw.timeout_seconds ?? kevRaw.timeoutSeconds, 120))),
+      };
+    })(),
     sandbox: {
       mode: sandboxModeRaw === "strict" ? "strict" : sandboxModeRaw === "off" ? "off" : "soft",
       allowNetwork: sandboxRaw.allow_network !== false && sandboxRaw.allowNetwork !== false,

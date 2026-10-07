@@ -112,6 +112,13 @@
     "token": "",
     "workspace": ""
   },
+  "kev": {
+    "mode": "model",
+    "url": "",
+    "apiKey": "",
+    "model": "kev-latest",
+    "timeout_seconds": 120
+  },
   "max_workers": 12,
   "max_steps": 1000,
   "permission": {

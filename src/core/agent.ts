@@ -1,4 +1,5 @@
 import { AgentInbox } from "./inbox.js";
+import { parseUserQuestion, type AskUser } from "./question.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { arch, release, type } from "node:os";
@@ -90,6 +91,14 @@ function permissionRuleMatches(rule: string, tool: ToolDefinition, args: Record<
  */
 export type PlanningMode = "off" | "auto" | "always";
 
+/**
+ * Which engine settles decisions. `model` is the original behaviour: the chat
+ * model decides unaided. `kev` adds a rule that points consequential calls at
+ * the local Kev/System One advisor, so the two halves of 房谋杜断 are explicit
+ * in the prompt instead of relying on the model to discover the tool.
+ */
+export type DecisionEngine = "model" | "kev";
+
 const PROMPT_HEADER = `You are luban, a production coding agent working directly in the user's workspace.
 
 Work rules:
@@ -111,6 +120,7 @@ const PLANNING_RULES: Record<PlanningMode, string> = {
 };
 
 const PROMPT_FOOTER = `6. If a tool fails, diagnose it and change strategy. Do not repeat identical calls indefinitely. A bash result ending in [exit code: N] is not a tool failure: many commands exit non-zero by design (grep with no match, git diff --quiet, test -f, command -v). Read the code and the output, and only treat it as an error when the command was supposed to succeed. Builds, test suites and installs often exceed the bash timeout: give them a larger timeout when you know they are slow, or start them with background: true and poll with get_background_task instead of retrying a killed command.
+6a. When a consequential choice or missing requirement cannot be inferred from the user's instructions or workspace, call ask_user with 2–4 concrete options, then continue with the answer. Do not interrupt for routine implementation choices; resolve those yourself. If ask_user is unavailable, state the unresolved choice in your final answer.
 7. End with a concise outcome: what changed, verification, and any real blocker. Hard cap 8 lines, no code blocks; details live in files, not chat.
 8. Paths are workspace-relative. Bash already starts in the workspace. If the workspace is a subdirectory of a Git repository, run Git commands from that directory (for example, git status --short or git add -- .); do not cd to the repository parent or prefix file paths with the parent directory. Use write_file, edit_file, or apply_patch with workspace-relative paths for file changes. The bash tool is soft-sandboxed: destructive host commands, writes outside the workspace, and denied patterns are rejected before execution. This is not an OS container; do not run untrusted payloads to probe it. Screenshots arrive as native vision parts when the user @-attaches them; describe what you see and cite the file name.
 9. Never expose chain-of-thought, policy analysis, system reminders, or other internal reasoning in assistant content. Return only the user-facing result. Use a separate reasoning channel when the runtime supports one.
@@ -119,9 +129,16 @@ const PROMPT_FOOTER = `6. If a tool fails, diagnose it and change strategy. Do n
 
  The user can choose ASK for conversational help, AGENT for autonomous execution, or AUTO to let the app decide.`;
 
-/** The full system prompt for a planning mode. */
-export function systemPrompt(planning: PlanningMode = "auto"): string {
-  return `${PROMPT_HEADER}\n${PLANNING_RULES[planning]}\n${PROMPT_FOOTER}`;
+// Only the Kev engine adds a rule; `model` keeps the historical prompt byte
+// for byte so an upgrade with default config behaves exactly as before.
+const DECISION_RULES: Record<DecisionEngine, string> = {
+  model: "",
+  kev: `\nDecision engine: Jev/Kev. The chat model proposes, the local Kev decision model decides. Before a consequential, hard-to-reverse or genuinely ambiguous call, call kev_decide with the relevant state and typed noul (yes/no), choice (pick one) or score (ordered level) questions, then act on the calibrated answer. Skip it for routine or obvious steps; Kev cannot use tools and reads only the state you pass it.`,
+};
+
+/** The full system prompt for a planning mode and decision engine. */
+export function systemPrompt(planning: PlanningMode = "auto", decision: DecisionEngine = "model"): string {
+  return `${PROMPT_HEADER}\n${PLANNING_RULES[planning]}\n${PROMPT_FOOTER}${DECISION_RULES[decision]}`;
 }
 
 /** Default prompt, kept for callers that only need the stable first line. */
@@ -158,11 +175,11 @@ function platformContext(): string {
   return `Platform: ${process.platform} (${type()} ${release()}, ${arch()})\nShell: ${shell}`;
 }
 
-export function initialMessages(workspace: string, modelName?: string, planning: PlanningMode = "auto"): ChatMessage[] {
+export function initialMessages(workspace: string, modelName?: string, planning: PlanningMode = "auto", decision: DecisionEngine = "model"): ChatMessage[] {
   const instructions = workspaceInstructions(workspace);
   return [{
     role: "system",
-    content: `${systemPrompt(planning)}\n\nWorkspace: ${workspace}\n${platformContext()}${modelName ? `\nModel: ${modelName}` : ""}${instructions ? `\n\n${instructions}` : ""}`,
+    content: `${systemPrompt(planning, decision)}\n\nWorkspace: ${workspace}\n${platformContext()}${modelName ? `\nModel: ${modelName}` : ""}${instructions ? `\n\n${instructions}` : ""}`,
   }];
 }
 
@@ -279,7 +296,7 @@ export class AgentRunner {
           }
           const child = new AgentRunner(childConfig, undefined, mesh, depth + 1);
           const childMessages: ChatMessage[] = [
-            ...initialMessages(childConfig.workspace, config.model.name, childConfig.planning),
+            ...initialMessages(childConfig.workspace, config.model.name, childConfig.planning, childConfig.kev?.mode ?? "model"),
             { role: "user", content: `Work as a focused subagent. Return a concise report to the parent agent.\n\n${instruction}` },
           ];
           try {
@@ -413,10 +430,30 @@ export class AgentRunner {
     approve: ApproveTool,
     persist: () => Promise<void> = async () => undefined,
     inbox?: AgentInbox,
+    askUser?: AskUser,
   ): Promise<RunResult> {
     if (this.running) throw new Error("AgentRunner already has an active run");
     this.running = true;
     this.inbox = inbox;
+    if (askUser) this.tools.set("ask_user", {
+      name: "ask_user",
+      description: "Ask the user to choose among concrete options when a consequential decision is unresolved. The run pauses until they answer. Free text is also accepted.",
+      risk: "read",
+      parameters: { type: "object", properties: {
+        question: { type: "string", description: "A concise question stating the decision needed" },
+        options: { type: "array", minItems: 2, maxItems: 4, items: { type: "object", properties: {
+          label: { type: "string" }, description: { type: "string" },
+        }, required: ["label"] } },
+      }, required: ["question", "options"] },
+      execute: async (args, toolSignal) => {
+        const question = parseUserQuestion(args);
+        const answer = await askUser(question, toolSignal);
+        toolSignal.throwIfAborted();
+        if (!answer.trim()) throw new Error("the user did not answer this question");
+        return JSON.stringify({ question: question.question, answer: answer.trim() });
+      },
+    });
+    else this.tools.delete("ask_user");
     const controller = new AbortController();
     this.activeController = controller;
     const abort = () => controller.abort(signal.reason ?? new Error("aborted"));
@@ -436,6 +473,7 @@ export class AgentRunner {
         this.activeController = undefined;
         this.running = false;
         this.inbox = undefined;
+        this.tools.delete("ask_user");
       }
     }
   }
@@ -527,7 +565,7 @@ export class AgentRunner {
       if (signal.aborted) throw signal.reason ?? new Error("aborted");
       if (await promote()) { step = 0; lastText = ""; lastToolSignature = ""; repeatCount = 0; }
       // Refresh startup rules for resumed sessions and edits to root instructions.
-      if (String(messages[0]?.content).startsWith(SYSTEM_PROMPT.split("\n")[0]!)) messages[0] = initialMessages(this.config.workspace, this.config.model.name, this.config.planning ?? "auto")[0]!;
+      if (String(messages[0]?.content).startsWith(SYSTEM_PROMPT.split("\n")[0]!)) messages[0] = initialMessages(this.config.workspace, this.config.model.name, this.config.planning ?? "auto", this.config.kev?.mode ?? "model")[0]!;
       // The network clients cap the actual output request at MAX_OUTPUT_TOKENS.
       // Reserving the larger configured value discards usable input context and
       // can trigger another model call for compaction on a long task.
@@ -560,13 +598,19 @@ export class AgentRunner {
         // step. The first drop is the notice - it tells the reader history is
         // being summarized. Later drops only move the working line, which is
         // what a figure that grows every step is for.
-        compactedMessages += compacted.removed;
-        onEvent({
-          type: "status",
-          text: `Compacted ${compactedMessages} older messages`,
-          ...(compactionAnnounced ? { progress: true } : {}),
-        });
-        compactionAnnounced = true;
+        // `messages !== compacted.messages` also holds when the pass only
+        // clipped a long tool result without dropping a single exchange.
+        // Announcing "Compacted 0 older messages" there is noise, so the
+        // notice waits until history was actually dropped.
+        if (compacted.removed > 0) {
+          compactedMessages += compacted.removed;
+          onEvent({
+            type: "status",
+            text: `Compacted ${compactedMessages} older messages`,
+            ...(compactionAnnounced ? { progress: true } : {}),
+          });
+          compactionAnnounced = true;
+        }
       }
       if (estimateMessagesTokens(messages) > inputBudget) {
         const text = "Context budget exceeded by instructions, current request, plan, or tool schemas. Use a larger context_window, reduce enabled MCP tools, or shorten the request/instructions.";

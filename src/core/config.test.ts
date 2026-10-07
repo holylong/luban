@@ -331,4 +331,46 @@ describe("config", () => {
     }));
     expect(loadConfig({ workspace }).history).toEqual({ enabled: true, directory: join(home, "archive"), maxMessagesPerSession: 200 });
   });
+
+  // The decision engine is a config switch: the original chat model by default,
+  // or the local Jev/Kev advisor once the user opts in.
+  it("defaults the decision engine to the model and honours kev.mode", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-kev-mode-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+
+    // No kev block at all: unchanged behaviour, no tool, no prompt rule.
+    expect(loadConfig({ workspace }).kev).toMatchObject({ mode: "model", url: "", model: "kev-latest" });
+
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      kev: { mode: "kev", url: "http://127.0.0.1:8008", timeout_seconds: 30 },
+    }));
+    expect(loadConfig({ workspace }).kev).toMatchObject({
+      mode: "kev", url: "http://127.0.0.1:8008", model: "kev-latest", timeoutSeconds: 30,
+    });
+
+    // "kev" with no URL cannot do anything, so it degrades to the model engine.
+    await writeFile(join(home, "config.json"), JSON.stringify({ kev: { mode: "kev" } }));
+    expect(loadConfig({ workspace }).kev.mode).toBe("model");
+
+    // An explicit "model" wins even when a server is configured.
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      kev: { mode: "model", url: "http://127.0.0.1:8008" },
+    }));
+    expect(loadConfig({ workspace }).kev.mode).toBe("model");
+
+    // The env var can flip the switch without editing the config file, and
+    // "jev" is accepted as the friendlier spelling of the same engine.
+    await writeFile(join(home, "config.json"), JSON.stringify({ kev: { url: "http://127.0.0.1:8008" } }));
+    process.env.LUBAN_KEV_MODE = "jev";
+    try {
+      expect(loadConfig({ workspace }).kev.mode).toBe("kev");
+    } finally {
+      delete process.env.LUBAN_KEV_MODE;
+    }
+    // An unrecognised value is not a crash: it degrades to the model engine.
+    await writeFile(join(home, "config.json"), JSON.stringify({ kev: { mode: "nonsense", url: "http://127.0.0.1:8008" } }));
+    expect(loadConfig({ workspace }).kev.mode).toBe("model");
+  });
 });
