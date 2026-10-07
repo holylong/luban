@@ -14,6 +14,54 @@ function config(workspace: string): LubanConfig {
 }
 
 describe("AgentRunner", () => {
+  it("retries a silent stream timeout without surfacing intermediate timeout notices", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-silent-timeout-"));
+    let calls = 0;
+    const settings = config(workspace);
+    settings.maxRetries = 2;
+    const runner = new AgentRunner(settings, {
+      async complete(_messages: ChatMessage[], _tools: unknown[], _signal: AbortSignal, _onDelta: unknown, onNotice?: (text: string) => void) {
+        calls += 1;
+        if (calls < 3) {
+          onNotice?.("模型已 1s 没有任何输出，已中断本次请求");
+          throw new Error("model stream idle timeout after 1s");
+        }
+        return { content: "已完成", toolCalls: [], usage: { input: 1, output: 1 } };
+      },
+    });
+    const events: Array<{ type: string; text?: string; index?: number }> = [];
+    try {
+      const result = await runner.run(
+        [...initialMessages(workspace), { role: "user", content: "完成任务" }],
+        "agent", new AbortController().signal,
+        (event) => events.push(event as { type: string; text?: string; index?: number }), async () => "once",
+      );
+      expect(result.ok).toBe(true);
+      expect(result.modelCalls).toBe(3);
+      expect(calls).toBe(3);
+      expect(events.filter((event) => event.type === "model-call").map((event) => event.index)).toEqual([1, 2, 3]);
+      expect(events.some((event) => event.type === "status" && /超时|没有任何输出|timeout/u.test(event.text ?? ""))).toBe(false);
+    } finally { runner.close(); }
+  });
+
+  it("does not retry a timeout after streamed output has begun", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-partial-timeout-"));
+    let calls = 0;
+    const runner = new AgentRunner(config(workspace), {
+      async complete(_messages: ChatMessage[], _tools: unknown[], _signal: AbortSignal, onDelta?: (text: string, kind: "content" | "reasoning") => void) {
+        calls += 1;
+        onDelta?.("partial", "content");
+        throw new Error("model stream idle timeout after 1s");
+      },
+    });
+    try {
+      await expect(runner.run([...initialMessages(workspace), { role: "user", content: "write" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once"))
+        .rejects.toThrow("idle timeout");
+      expect(calls).toBe(1);
+    } finally { runner.close(); }
+  });
+
   it("explains how to connect Zen before an uncredentialed model request", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-zen-unconnected-"));
     const settings = config(workspace);
@@ -287,7 +335,7 @@ describe("AgentRunner", () => {
     expect(result.ok).toBe(true);
     expect(calls).toBe(2);
     expect(result.text).toBe("连接中断前的半截答案，续写完成。");
-    expect(events.some((event) => event.type === "status" && event.text?.includes("中断"))).toBe(true);
+    expect(events.some((event) => event.type === "status" && event.text?.includes("中断"))).toBe(false);
   });
 
   it("gives up with network advice after repeated dropped streams", async () => {

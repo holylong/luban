@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeModelError, isContextOverflowError, retryableModelError } from "./model-errors.js";
+import { describeModelError, isContextOverflowError, isModelTimeoutError, retryableModelError } from "./model-errors.js";
 
 describe("model error classification", () => {
   it("detects context overflow without marking it retryable", () => {
@@ -29,5 +29,14 @@ describe("describeModelError", () => {
   it("falls back to the message when there is no cause", () => {
     expect(describeModelError(new Error("model timed out after 120s"))).toBe("model timed out after 120s");
     expect(describeModelError("plain string")).toBe("plain string");
+  });
+});
+
+describe("isModelTimeoutError", () => {
+  it("recognizes idle and transport timeouts without treating other failures as timeouts", () => {
+    expect(isModelTimeoutError(new Error("model stream idle timeout after 30s"))).toBe(true);
+    expect(isModelTimeoutError(new TypeError("fetch failed", { cause: new Error("connect ETIMEDOUT") }))).toBe(true);
+    expect(isModelTimeoutError("模型已 30s 没有任何输出")).toBe(true);
+    expect(isModelTimeoutError(new Error("model HTTP 401"))).toBe(false);
   });
 });
