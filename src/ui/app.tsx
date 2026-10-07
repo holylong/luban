@@ -1147,17 +1147,18 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setNotice(`已接收补充指令: ${event.text.slice(0, 80)}`);
     }
     if (event.type === "status") {
-      setStatus(event.text);
       // Progress labels feed the working line only. Recording them made a
       // 56-step run stack 55 identical "Reviewing tool results" notes, and the
       // 60-entry window they filled is the one that has to hold the retry,
       // compaction and outcome notes a reader actually needs.
-      if (!event.progress) addActivity({ id: `status-${Date.now()}`, text: event.text, tone: "accent" });
+      if (event.progress) setStatus(event.text);
+      else addActivity({ id: `status-${Date.now()}`, text: event.text, tone: "accent" });
     }
     if (event.type === "model-call") {
       // A new round trip: reasoning from the previous one is stale, and the
       // silence counter restarts from the moment the request went out.
       resetThinking();
+      setStatus("");
       lastOutputRef.current = Date.now();
       setCallIndex(event.index);
       setLivePhase({ kind: "waiting", detail: "", since: lastOutputRef.current });
@@ -1189,7 +1190,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     }
     if (event.type === "usage") setUsage((current) => ({ input: current.input + event.input, output: current.output + event.output }));
     if (event.type === "error") {
-      setNotice(event.text);
+      setStatus("");
       addActivity({ id: `error-${Date.now()}`, text: event.text, tone: "red" });
     }
     if (event.type === "tool-start") {
@@ -1307,7 +1308,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       });
       setNotice(result.ok
         ? `Completed in ${result.steps} step${result.steps === 1 ? "" : "s"}`
-        : paused ? `已暂停（${result.steps} 步），发送“继续”恢复\n${result.text}` : result.text);
+        : paused ? `已暂停（${result.steps} 步），发送“继续”恢复` : "Describe a goal, ask a question, or type / for commands.");
       addActivity({ id: `complete-${Date.now()}`, text: result.ok ? `完成 · ${result.steps} steps` : paused ? `已暂停 · ${result.steps} steps` : "任务结束", tone: result.ok ? "green" : paused ? "accent" : "red" });
       await save(result.messages);
       // The opening exchange now exists, so this is the first moment a name can
@@ -1315,7 +1316,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       nameSession();
     } catch (error) {
       const message = controller.signal.aborted ? "Run cancelled" : (error instanceof Error ? error.message : String(error));
-      setNotice(message);
+      setNotice("Describe a goal, ask a question, or type / for commands.");
       setRunOutcome({ status: controller.signal.aborted ? "cancelled" : "failed", text: message });
       setMessages([...nextMessages]);
       resetDraft();
