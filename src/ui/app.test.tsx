@@ -238,6 +238,43 @@ it("accepts a clicked model question option without inserting mouse bytes", asyn
   }
 }, 10000);
 
+it("shows a saved, actionable conclusion when a model run still times out", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-timeout-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const config = loadConfig({ workspace });
+  const run = vi.spyOn(AgentRunner.prototype, "run").mockRejectedValue(new Error("model stream idle timeout after 1s"));
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 30, isTTY: true });
+  let frame = "";
+  stdout.on("data", data => {
+    const text = stripVTControlCharacters(String(data));
+    if (text.includes("Auto")) frame = text;
+  });
+  const app = render(<App config={config} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: false, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame, { timeout: 5000 }).toContain("Message luban");
+    stdin.write("do work");
+    await expect.poll(() => frame).toContain("do work");
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("任务执行失败");
+    expect(frame).toContain("模型请求重试后仍超时");
+    expect(frame).toContain("当前执行记录已保留");
+    expect(frame).toContain("继续");
+  } finally {
+    app.unmount();
+    app.cleanup();
+    run.mockRestore();
+    if (oldHome === undefined) delete process.env.LUBAN_HOME;
+    else process.env.LUBAN_HOME = oldHome;
+  }
+}, 10000);
+
 it("copies the last answer with Ctrl+Y", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-copy-ui-"));
   const workspace = join(home, "workspace");

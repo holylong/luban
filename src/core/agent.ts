@@ -10,7 +10,7 @@ import { ResponsesClient } from "./responses.js";
 import { CodexClient } from "./codex.js";
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactMessages, estimateMessagesTokens } from "./context.js";
-import { isContextOverflowError } from "./model-errors.js";
+import { isContextOverflowError, isModelTimeoutError } from "./model-errors.js";
 import { parseToolArguments } from "./json-args.js";
 import { repairToolHistory } from "./history.js";
 import { cleanTitle, hasNameableContent, titlePrompt } from "./session-title.js";
@@ -509,12 +509,7 @@ export class AgentRunner {
     // the user waits for just the same.
     const runStartedAt = Date.now();
     let modelCalls = 0;
-    const callModel: typeof this.client.complete = (callMessages, callTools, callSignal, onDelta) => {
-      modelCalls += 1;
-      // Announce the round trip before it starts, and relay retry/idle-timeout
-      // notices while it runs: a provider that never answers is otherwise
-      // indistinguishable from one that is merely slow.
-      onEvent({ type: "model-call", index: modelCalls });
+    const callModel: typeof this.client.complete = async (callMessages, callTools, callSignal, onDelta) => {
       const mainRequest = callMessages === messages;
       const automatic = this.config.enableThinking === undefined;
       // SOTA pattern (opencode parity): think once to plan the turn, then run
@@ -540,7 +535,27 @@ export class AgentRunner {
           maxRetries: Math.min(this.config.maxRetries ?? 3, 1),
         } : {}) }
         : undefined;
-      return this.client.complete(callMessages, callTools, callSignal, onDelta, (text) => onEvent({ type: "status", text }), options);
+      // Clients retry connection failures before a stream starts. A stream that
+      // opens but produces no output can still time out: retry that model call
+      // here, where no tool has run and there is no partial answer to duplicate.
+      const silentRetries = Math.min(2, Math.max(0, this.config.maxRetries ?? 3));
+      for (let attempt = 0; ; attempt += 1) {
+        modelCalls += 1;
+        onEvent({ type: "model-call", index: modelCalls });
+        let receivedOutput = false;
+        try {
+          return await this.client.complete(callMessages, callTools, callSignal, (text, kind) => {
+            if (text) receivedOutput = true;
+            onDelta?.(text, kind);
+          }, (text) => {
+            if (!isModelTimeoutError(text) && !text.startsWith("模型连接在输出中途中断")) {
+              onEvent({ type: "status", text });
+            }
+          }, options);
+        } catch (error) {
+          if (callSignal.aborted || receivedOutput || !isModelTimeoutError(error) || attempt >= silentRetries) throw error;
+        }
+      }
     };
     const promote = async (idle = false) => {
       const inputs = await this.inbox?.promote(messages, idle) ?? [];
@@ -590,7 +605,7 @@ export class AgentRunner {
               if (semantic.content.trim()) summary.content = `[luban context summary]\n${clipContextText(semantic.content.trim(), Math.max(0, String(summary.content).length - 25))}`;
             } catch (error) {
               if (signal.aborted) throw signal.reason ?? error;
-              onEvent({ type: "status", text: `Semantic compaction unavailable; using local summary (${error instanceof Error ? error.message : String(error)})` });
+              if (!isModelTimeoutError(error)) onEvent({ type: "status", text: `Semantic compaction unavailable; using local summary (${error instanceof Error ? error.message : String(error)})` });
             }
           }
         }
@@ -684,9 +699,7 @@ export class AgentRunner {
           lastText = truncatedText;
           await persist();
         }
-        onEvent({ type: "status", text: dropped
-          ? (partial ? `模型连接在输出中途中断，已保留 ${partial.length} 字并继续` : "模型连接在输出中途中断，正在重试")
-          : `模型输出被输出上限截断（${consumed}），已保留并继续` });
+        if (!dropped) onEvent({ type: "status", text: `模型输出被输出上限截断（${consumed}），已保留并继续` });
         continue;
       }
       signal.throwIfAborted();
@@ -939,7 +952,7 @@ export class AgentRunner {
       }
     } catch (error) {
       if (signal.aborted) throw signal.reason ?? error;
-      onEvent({ type: "status", text: `Could not prepare continuation summary: ${error instanceof Error ? error.message : String(error)}` });
+      if (!isModelTimeoutError(error)) onEvent({ type: "status", text: `Could not prepare continuation summary: ${error instanceof Error ? error.message : String(error)}` });
     }
     messages.push({ role: "assistant", content: text });
     await persist();
