@@ -46,6 +46,49 @@ it("keeps the composer visible when a terminal reconnects at a smaller size", as
   }
 }, 10000);
 
+it("never erases the whole screen while repainting frames", async () => {
+  // Ink treats a frame that fills the terminal as fullscreen and prefixes every
+  // repaint with ESC[2J/ESC[3J. That erase-per-keystroke is what users see as
+  // flicker, so the root frame must stay one row short of the terminal height.
+  const home = await mkdtemp(join(tmpdir(), "luban-flicker-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const config = loadConfig({ workspace });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 24, isTTY: true });
+  let raw = "";
+  let frame = "";
+  stdout.on("data", data => {
+    raw += String(data);
+    const text = stripVTControlCharacters(String(data));
+    if (text.includes("Auto")) frame = text;
+  });
+  // debug:false is required here: Ink's debug mode writes the raw frame and
+  // returns before the fullscreen detection runs, which would make this pass
+  // even with the bug present.
+  const app = render(<App config={config} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: false, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame, { timeout: 5000 }).toContain("Message luban");
+    for (const ch of "abcdefghij") {
+      stdin.write(ch);
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    expect(raw).not.toContain("\u001b[2J");
+    expect(raw).not.toContain("\u001b[3J");
+    expect(raw).toContain("abcdefghij");
+  } finally {
+    app.unmount();
+    app.cleanup();
+    if (oldHome === undefined) delete process.env.LUBAN_HOME;
+    else process.env.LUBAN_HOME = oldHome;
+  }
+}, 10000);
+
 it("copies the last answer with Ctrl+Y", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-copy-ui-"));
   const workspace = join(home, "workspace");

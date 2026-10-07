@@ -2310,7 +2310,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const inputWidth = Math.max(1, terminalSize.columns - 4 - inputIndent - (inputLines > 1 ? String(inputLines).length + 7 : 1));
 
   return (
-    <Box flexDirection="column" height={rows} backgroundColor={theme.background}>
+    // One row is reserved for the cursor line. A frame exactly `rows` tall makes
+    // Ink treat the output as fullscreen and emit ESC[2J/ESC[3J before every
+    // repaint, which erases the screen on each keystroke and shows up as flicker.
+    <Box flexDirection="column" height={Math.max(1, rows - 1)} backgroundColor={theme.background}>
       <Header config={config} mode={activeMode} sessionTitle={sessionRef.current.title} mesh={mesh} />
       <Box height={1} flexShrink={0} paddingX={2} overflow="hidden">
         <Text color={showMesh ? theme.accent : theme.muted} wrap="truncate-end">
