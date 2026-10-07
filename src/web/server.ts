@@ -11,6 +11,7 @@ import type { LubanConfig, SyncMode } from "../core/types.js";
 import { VERSION } from "../version.js";
 import { DASHBOARD_HTML, DOCS_HTML, webAssetPath, WEB_CONTENT_TYPES } from "./assets.js";
 import { ApprovalBroker, type ApprovalDecision } from "./approval.js";
+import { QuestionBroker } from "./question.js";
 import { AuthGate, clearCookie, rejectAuth, tokenCookie } from "./auth.js";
 
 const MAX_BODY = 1024 * 1024;
@@ -152,6 +153,7 @@ export interface LubanWebServerOptions {
   port?: number;
   /** Installed by the CLI so browser clients can answer tool approval prompts. */
   approvals?: ApprovalBroker;
+  questions?: QuestionBroker;
   /**
    * Access token for browser clients. Required as soon as the server listens
    * beyond loopback, because every route can start an agent that runs shell
@@ -170,12 +172,14 @@ export class LubanWebServer {
   host: string;
   port: number;
   readonly approvals?: ApprovalBroker;
+  readonly questions?: QuestionBroker;
   readonly auth?: AuthGate;
 
   constructor(readonly config: LubanConfig, readonly mesh: MeshRuntime, options: LubanWebServerOptions = {}) {
     this.host = options.host || "127.0.0.1";
     this.port = options.port ?? 0;
     if (options.approvals) this.approvals = options.approvals;
+    if (options.questions) this.questions = options.questions;
     if (options.token) this.auth = new AuthGate(options.token);
   }
 
@@ -374,12 +378,17 @@ export class LubanWebServer {
         event_next: stream.next,
         interactive: this.interactiveJobs.has(id),
         approvals: this.approvals?.pending(id) ?? [],
+        questions: this.questions?.pending(id) ?? [],
       });
     }
     if (url.pathname === "/api/approvals") {
       if (!this.approvals) return json(res, []);
       const job = url.searchParams.get("job") || undefined;
       return json(res, this.approvals.pending(job));
+    }
+    if (url.pathname === "/api/questions") {
+      if (!this.questions) return json(res, []);
+      return json(res, this.questions.pending(url.searchParams.get("job") || undefined));
     }
     if (url.pathname === "/api/workspace") {
       const project = url.searchParams.get("project") || this.config.project;
@@ -506,6 +515,7 @@ export class LubanWebServer {
       const id = decodeURIComponent(cancelMatch[1]!);
       if (!await this.mesh.store.get(id)) throw new HttpError(404, "unknown job");
       this.approvals?.denyAll(id);
+      this.questions?.cancelAll(id);
       if (!await this.mesh.cancelLocalJob(id, "cancelled from Node web workspace")) throw new HttpError(409, "job is already finished");
       return json(res, { ok: true, job_id: id, status: "cancelled" });
     }
@@ -517,6 +527,14 @@ export class LubanWebServer {
       if (!["once", "tool", "always", "deny"].includes(decision)) throw new HttpError(400, "decision must be once|tool|always|deny");
       if (!broker.decide(id, decision)) throw new HttpError(404, "unknown or already settled approval request");
       return json(res, { ok: true, id, decision });
+    }
+    if (url.pathname === "/api/questions") {
+      if (!this.questions) throw new HttpError(409, "interactive questions are not enabled on this server");
+      const id = String(body.id || "");
+      const answer = String(body.answer || "").trim();
+      if (!answer || answer.length > 2000) throw new HttpError(400, "answer must be 1–2000 characters");
+      if (!this.questions.answer(id, answer)) throw new HttpError(404, "unknown or already answered question");
+      return json(res, { ok: true, id });
     }
     if (url.pathname === "/api/sync") {
       const peer = String(body.peer || "").trim();

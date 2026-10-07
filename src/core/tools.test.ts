@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createTools } from "./tools.js";
 import type { LubanConfig } from "./types.js";
 
-async function setup() {
+async function setup(overrides: Partial<LubanConfig> = {}) {
   const workspace = await mkdtemp(join(tmpdir(), "luban-tools-"));
   await mkdir(join(workspace, "src"));
   await writeFile(join(workspace, "src", "a.ts"), "export const answer = 41;\n");
@@ -13,8 +13,9 @@ async function setup() {
   const config: LubanConfig = {
     home: workspace, workspace, project: "test", model, models: [model], maxTokens: 1000,
     temperature: 0, timeoutMs: 1000, maxSteps: 10, backendUrl: "", permissionMode: "allow",
+    ...overrides,
   };
-  return { workspace, tools: createTools(config), signal: new AbortController().signal };
+  return { workspace, config, tools: createTools(config), signal: new AbortController().signal };
 }
 
 describe("workspace tools", () => {
@@ -30,6 +31,19 @@ describe("workspace tools", () => {
   it("rejects paths outside the workspace", async () => {
     const { tools, signal } = await setup();
     await expect(tools.get("read_file")!.execute({ path: "../secret" }, signal)).rejects.toThrow("escapes workspace");
+  });
+
+  // The decision-engine switch: the advisor tool exists only in kev mode, so
+  // the default tool list (and therefore the prompt) is unchanged.
+  it("registers kev_decide only when the decision engine is kev", async () => {
+    const kev = { mode: "kev" as const, url: "http://127.0.0.1:8008", apiKey: "", model: "kev-latest", timeoutSeconds: 30 };
+    const off = await setup({ kev: { ...kev, mode: "model" } });
+    expect(off.tools.has("kev_decide")).toBe(false);
+    const on = await setup({ kev });
+    expect(on.tools.has("kev_decide")).toBe(true);
+    // kev mode without a server URL is inert, matching the config fallback.
+    const urlLess = await setup({ kev: { ...kev, url: "" } });
+    expect(urlLess.tools.has("kev_decide")).toBe(false);
   });
 
   // Non-zero exits are reported as data rather than failing the tool. The

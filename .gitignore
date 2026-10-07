@@ -30,6 +30,9 @@ config.exp.json
 # personal scratch output (e.g. screenshot base64 dump)
 *.b64
 
+# local Kev decision-server scratch (launch script, logs, config backup with keys)
+.kev/
+
 # OS junk
 .DS_Store
 Thumbs.db

@@ -60,6 +60,30 @@ export function Approvals({ store }: { store: WorkbenchStore }): React.ReactElem
   );
 }
 
+function Questions({ store }: { store: WorkbenchStore }): React.ReactElement | null {
+  const [custom, setCustom] = useState<Record<string, string>>({});
+  if (!store.questions.length) return null;
+  return <div className="block">
+    <h2>等待你的选择 <span className="spacer" /><span className="chip">{store.questions.length}</span></h2>
+    {store.questions.map(item => <div className="approval" key={item.id}>
+      <div className="title">{item.question}</div>
+      <div className="grid">
+        {item.options.map(option => <button className="action wide" key={option.label}
+          title={option.description} onClick={() => void store.answerQuestion(item.id, option.label)}>
+          {option.label}{option.description ? ` · ${option.description}` : ""}
+        </button>)}
+      </div>
+      <div className="row">
+        <input className="field wide" aria-label="自定义回答" placeholder="或输入自己的答案"
+          value={custom[item.id] ?? ""} onChange={event => setCustom(current => ({ ...current, [item.id]: event.target.value }))}
+          onKeyDown={event => { if (event.key === "Enter" && (custom[item.id] ?? "").trim()) void store.answerQuestion(item.id, custom[item.id]!); }} />
+        <button className="action" disabled={!(custom[item.id] ?? "").trim()}
+          onClick={() => void store.answerQuestion(item.id, custom[item.id] ?? "")}>发送</button>
+      </div>
+    </div>)}
+  </div>;
+}
+
 export function Inspector({ store }: { store: WorkbenchStore }): React.ReactElement {
   const [peer, setPeer] = useState("");
   const [text, setText] = useState("");
@@ -72,6 +96,7 @@ export function Inspector({ store }: { store: WorkbenchStore }): React.ReactElem
         <Preview store={store} />
       </div>
       <div className="inspect-scroll">
+        <Questions store={store} />
         <Approvals store={store} />
         <div className="block">
           <h2>Workspace <span className="spacer" />{store.file?.path && <button className="action" style={{ padding: "2px 7px" }} onClick={() => void store.refreshDiff()}>查看变更</button>}</h2>

@@ -136,6 +136,8 @@ export interface LubanConfig {
   /** Optional per-TUI phone bridge, configured in config.json. */
   remote: RemoteControlSettings;
   sandbox: SandboxSettings;
+  /** Optional local Kev/System One decision server; the kev_decide tool is absent when `url` is empty. */
+  kev: KevSettings;
   toolOutputRetentionDays: number;
   toolOutputMaxBytes: number;
   mcpMaxTools: number;
@@ -198,6 +200,31 @@ export interface SandboxSettings {
   backend: "auto" | "bwrap" | "docker" | "none";
   dockerImage: string;
   denyPatterns: string[];
+}
+
+/**
+ * Kev (github.com/jaredpalmer/kev) is a local Jev-style *decision* model: it
+ * answers typed noul/choice/score questions against a state instead of
+ * generating prose. luban uses it as an advisor ("房谋杜断": the chat model
+ * proposes, Kev decides) through the `kev_decide` tool, not as a chat backend.
+ * `mode` picks the engine: the default `model` leaves the original chat model
+ * in charge, `kev` turns the advisor on for consequential calls.
+ */
+export interface KevSettings {
+  /**
+   * Which engine settles a decision: `model` keeps the original behaviour and
+   * lets the chat model decide unaided, `kev` registers the `kev_decide`
+   * advisor tool and asks the model to consult it before consequential calls.
+   */
+  mode: "model" | "kev";
+  /** Base URL of a running `kev.serve`; empty disables the tool. */
+  url: string;
+  /** Sent as `Authorization: Bearer` when the server was started with KEV_API_KEY. */
+  apiKey: string;
+  /** Model name in the request body; the server serves this checkpoint under any accepted name. */
+  model: string;
+  /** Per-request timeout in seconds. */
+  timeoutSeconds: number;
 }
 
 export interface VerificationRecord {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api";
 import type {
   ApprovalView, DiffPayload, FileContent, FileEntry, InboxMessage, JobStreamRecord, MeshJob,
-  NodeInfo, PeerView, SessionDetail, SessionSummary,
+  NodeInfo, PeerView, QuestionView, SessionDetail, SessionSummary,
 } from "./types";
 
 export type TaskMode = "edits" | "agent" | "read";
@@ -30,6 +30,7 @@ export interface WorkbenchStore {
   job?: MeshJob;
   events: JobStreamRecord[];
   approvals: ApprovalView[];
+  questions: QuestionView[];
   toasts: Toast[];
   project: string;
   mode: TaskMode;
@@ -50,6 +51,7 @@ export interface WorkbenchStore {
   cancel: () => Promise<void>;
   resume: () => Promise<void>;
   decide: (id: string, decision: "once" | "tool" | "always" | "deny") => Promise<void>;
+  answerQuestion: (id: string, answer: string) => Promise<void>;
   setProject: (project: string) => void;
   setMode: (mode: TaskMode) => void;
   setSideTab: (tab: SideTab) => void;
@@ -76,6 +78,7 @@ export function useWorkbench(): WorkbenchStore {
   const [job, setJob] = useState<MeshJob>();
   const [events, setEvents] = useState<JobStreamRecord[]>([]);
   const [approvals, setApprovals] = useState<ApprovalView[]>([]);
+  const [questions, setQuestions] = useState<QuestionView[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [project, setProjectState] = useState("");
   const [mode, setMode] = useState<TaskMode>("edits");
@@ -104,6 +107,7 @@ export function useWorkbench(): WorkbenchStore {
     setJob(detail);
     setEvents(current => (selectedRef.current === id ? mergeEvents(current, detail.events ?? []) : (detail.events ?? [])));
     setApprovals(detail.approvals ?? []);
+    setQuestions(detail.questions ?? []);
     return detail;
   }, []);
 
@@ -210,6 +214,13 @@ export function useWorkbench(): WorkbenchStore {
     try {
       await api.decide(id, decision);
       setApprovals(current => current.filter(item => item.id !== id));
+    } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
+  }, [notify]);
+
+  const answerQuestion = useCallback(async (id: string, answer: string) => {
+    try {
+      await api.answerQuestion(id, answer);
+      setQuestions(current => current.filter(item => item.id !== id));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
   }, [notify]);
 
@@ -326,12 +337,12 @@ export function useWorkbench(): WorkbenchStore {
 
   // Approval prompts refresh alongside the stream, since they arrive out of band.
   useEffect(() => {
-    if (!selectedId) { setApprovals([]); return; }
+    if (!selectedId) { setApprovals([]); setQuestions([]); return; }
     let active = true;
     const tick = async (): Promise<void> => {
       try {
-        const list = await api.approvals(selectedId);
-        if (active) setApprovals(list);
+        const [list, pendingQuestions] = await Promise.all([api.approvals(selectedId), api.questions(selectedId)]);
+        if (active) { setApprovals(list); setQuestions(pendingQuestions); }
       } catch { /* transient */ }
     };
     void tick();
@@ -340,15 +351,15 @@ export function useWorkbench(): WorkbenchStore {
   }, [selectedId]);
 
   return useMemo<WorkbenchStore>(() => ({
-    node, connected, live, jobs, peers, inbox, sessions, selectedId, job, events, approvals, toasts,
+    node, connected, live, jobs, peers, inbox, sessions, selectedId, job, events, approvals, questions, toasts,
     project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy,
-    notify, dismiss, selectJob, startNew, submit, cancel, resume, decide,
+    notify, dismiss, selectJob, startNew, submit, cancel, resume, decide, answerQuestion,
     setProject, setMode, setSideTab, setPreviewTab, browse, openFile, openSession,
     refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   }), [
-    node, connected, live, jobs, peers, inbox, sessions, selectedId, job, events, approvals, toasts,
+    node, connected, live, jobs, peers, inbox, sessions, selectedId, job, events, approvals, questions, toasts,
     project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy,
-    notify, dismiss, selectJob, startNew, submit, cancel, resume, decide,
+    notify, dismiss, selectJob, startNew, submit, cancel, resume, decide, answerQuestion,
     setProject, browse, openFile, openSession, refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   ]);
 }

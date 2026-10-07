@@ -11,6 +11,7 @@ import { resolveInside } from "./paths.js";
 import { LubanBackend } from "./backend.js";
 import { callMcpTool, listMcpTools, searchMcpTools } from "./mcp.js";
 import { CheckpointStore } from "./checkpoint.js";
+import { createKevTool } from "./kev.js";
 import { editPreview } from "./edit-preview.js";
 import type { MeshRuntime } from "./mesh/runtime.js";
 import type { LubanConfig, ToolDefinition } from "./types.js";
@@ -742,6 +743,9 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       },
     },
   ];
+
+  // Kev is opt-in: the advisor tool only exists in "kev" mode with a server URL.
+  if (config.kev?.mode === "kev" && config.kev.url?.trim()) tools.push(createKevTool(config.kev));
 
   if (mesh) {
     tools.push(

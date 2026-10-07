@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { AgentRunner, initialMessages } from "../agent.js";
+import type { AskUser } from "../question.js";
 import { SessionStore } from "../session-store.js";
 import { sharedHistory } from "../session-history.js";
 import { summarizeToolArgs } from "../tools.js";
@@ -32,6 +33,7 @@ export function toJobStreamEvent(event: AgentEvent): JobStreamEvent | null {
 export interface RemoteJobOptions {
   /** Resolve interactive approval for a web-driven job. Omitting it keeps always-allow. */
   approve?: (tool: ToolDefinition, args: Record<string, unknown>, jobId: string) => Promise<"once" | "tool" | "always" | "deny">;
+  askUser?: (jobId: string, question: Parameters<AskUser>[0], signal: AbortSignal) => Promise<string>;
   /**
    * Whether a live client is waiting to answer prompts for this job. When it
    * returns false the job runs unattended and never blocks on approval.
@@ -53,7 +55,7 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
     if ((job.resume_count || 0) > 0 && !session) throw new Error("Cannot resume: saved task history is missing; inspect the workspace before starting a new task.");
     if (!session) {
       session = store.create(settings.project, settings.workspace, "agent", settings.model.id,
-        [...initialMessages(settings.workspace, settings.model.name, settings.planning), { role: "user", content: job.instruction }]);
+        [...initialMessages(settings.workspace, settings.model.name, settings.planning, settings.kev?.mode), { role: "user", content: job.instruction }]);
       await store.save(session);
       await mesh.store.update(job.id, { session_id: session.id });
     }
@@ -93,7 +95,8 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
       }, async (tool, args) => {
         if (!options.approve) return "always";
         return options.approve(tool, args, job.id);
-      }, () => store.save(session));
+      }, () => store.save(session), undefined,
+      interactive && options.askUser ? (question, questionSignal) => options.askUser!(job.id, question, questionSignal) : undefined);
       return { ok: result.ok, text: result.text, stopReason: result.stopReason };
     } finally { runner.close(); }
   });

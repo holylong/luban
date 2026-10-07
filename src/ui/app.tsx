@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { AgentInbox } from "../core/inbox.js";
+import type { UserQuestion } from "../core/question.js";
 import { planVerificationStatus, readPlan, readVerifications } from "../core/plan.js";
 import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
 import { estimateMessagesTokens } from "../core/context.js";
@@ -179,6 +180,12 @@ interface ApprovalRequest {
   tool: ToolDefinition;
   args: Record<string, unknown>;
   resolve(value: Approval): void;
+}
+
+interface QuestionRequest {
+  question: UserQuestion;
+  resolve(value: string): void;
+  reject(error: Error): void;
 }
 
 interface DialogState {
@@ -599,7 +606,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   }, [stdout]);
   const [config, setConfig] = useState(initialConfig);
   const [mode, setMode] = useState<AgentMode>("auto");
-  const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages(initialConfig.workspace, initialConfig.model.name, initialConfig.planning));
+  const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages(initialConfig.workspace, initialConfig.model.name, initialConfig.planning, initialConfig.kev?.mode));
   const [input, setInput] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
   const [running, setRunning] = useState(false);
@@ -691,6 +698,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const [notice, setNotice] = useState("Describe a goal, ask a question, or type / for commands.");
   const [runOutcome, setRunOutcome] = useState<RunOutcome | null>(null);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
+  const [questionRequest, setQuestionRequest] = useState<QuestionRequest | null>(null);
+  const [questionDraft, setQuestionDraft] = useState("");
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [dialogQuery, setDialogQuery] = useState("");
   /** Counts palette swaps: the colors live outside React, so a change needs a frame. */
@@ -1023,7 +1032,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     setScrollOffset(0);
     runnerRef.current.close();
     runnerRef.current = new AgentRunner(config, undefined, mesh);
-    const nextMessages = initialMessages(config.workspace, config.model.name, config.planning);
+    const nextMessages = initialMessages(config.workspace, config.model.name, config.planning, config.kev?.mode);
     setMessages(nextMessages);
         setExecutionLog([]);
     resetDraft();
@@ -1228,6 +1237,25 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     setApproval({ tool, args, resolve: resolveApproval });
   });
 
+  const askUser = (question: UserQuestion, signal: AbortSignal): Promise<string> => new Promise((resolveQuestion, rejectQuestion) => {
+    if (signal.aborted) { rejectQuestion(new Error("question aborted")); return; }
+    setShowDetails(true);
+    setQuestionDraft("");
+    const abort = () => { setQuestionRequest(null); rejectQuestion(new Error("question aborted")); };
+    const finish = (answer: string) => {
+      signal.removeEventListener("abort", abort);
+      setQuestionRequest(null);
+      resolveQuestion(answer);
+    };
+    const reject = (error: Error) => {
+      signal.removeEventListener("abort", abort);
+      setQuestionRequest(null);
+      rejectQuestion(error);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    setQuestionRequest({ question, resolve: finish, reject });
+  });
+
   const runPrompt = async (text: string, images: Array<{ path: string; mime: string }> = []) => {
     setShowMesh(false);
     const user: ChatMessage = { role: "user", content: text, ...(images.length ? { images } : {}) };
@@ -1259,7 +1287,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       await save(nextMessages);
       const inbox = new AgentInbox(sessionRef.current, () => save(nextMessages));
       inboxRef.current = inbox;
-      const result = await runnerRef.current.run(nextMessages, runMode, controller.signal, handleEvent, approveTool, () => save(nextMessages), inbox);
+      const result = await runnerRef.current.run(nextMessages, runMode, controller.signal, handleEvent, approveTool, () => save(nextMessages), inbox, askUser);
       setMessages([...result.messages]);
       setExecutionLog((current) => toolHistory(result.messages, sessionRef.current.edits).map((entry) => ({
         ...entry,
@@ -1917,6 +1945,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   }, [mesh]);
 
   useInput((character, key) => {
+    if (questionRequest) {
+      if (key.escape) { questionRequest.reject(new Error("question dismissed by user")); return; }
+      const index = Number(character) - 1;
+      if (character.length === 1 && Number.isInteger(index) && index >= 0 && index < questionRequest.question.options.length) {
+        questionRequest.resolve(questionRequest.question.options[index]!.label);
+      }
+      return;
+    }
     if (showHelp && key.escape) {
       setShowHelp(false);
       return;
@@ -2379,6 +2415,19 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           </Text>
         </Box>
       ) : null}
+      {questionRequest ? (
+        <Box flexDirection="column" backgroundColor={theme.panel} paddingX={2} paddingY={1} flexShrink={0}>
+          <Text color={theme.primary} bold>luban 需要你的选择</Text>
+          <Text>{questionRequest.question.question}</Text>
+          {questionRequest.question.options.map((option, index) => (
+            <Text key={option.label}><Text color={theme.accent}>{index + 1}. {option.label}</Text><Text color={theme.muted}>{option.description ? ` — ${option.description}` : ""}</Text></Text>
+          ))}
+          <Text color={theme.dim}>按数字选择，或输入自己的答案并回车；Esc 跳过</Text>
+          <TextArea value={questionDraft} onChange={setQuestionDraft}
+            onSubmit={(value) => { if (value.trim()) questionRequest.resolve(value.trim()); }}
+            focus width={inputWidth} maxRows={3} placeholder="其他答案…" />
+        </Box>
+      ) : null}
       {!dialog && showHelp ? <HelpPanel /> : null}
       {!dialog && !approval && !showHelp ? <CommandHints input={input} index={commandIndex} /> : null}
       {!dialog ? <AtHints input={input} files={workspaceFiles} /> : null}
@@ -2390,7 +2439,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             value={input}
             onChange={(value) => { setInput(stripMouseReports(value)); setHistoryIndex(null); setCommandIndex(0); }}
             onSubmit={(value) => { void submit(value); }}
-            focus={!dialog && !approval && !showHelp}
+            focus={!dialog && !approval && !questionRequest && !showHelp}
             placeholder={running ? "补充指令 / /queue 排队 / 只读命令即时执行（/status /models…）· Esc 中断" : "Message luban…（Ctrl+J 换行 · @ 文件 · / 命令）"}
             width={inputWidth}
             maxRows={inputMaxRows}
