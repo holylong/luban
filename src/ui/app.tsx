@@ -700,6 +700,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [questionRequest, setQuestionRequest] = useState<QuestionRequest | null>(null);
   const [questionDraft, setQuestionDraft] = useState("");
+  const questionRequestRef = useRef(questionRequest);
+  questionRequestRef.current = questionRequest;
+  const questionOptionNodesRef = useRef<Array<LayoutNode | null>>([]);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [dialogQuery, setDialogQuery] = useState("");
   /** Counts palette swaps: the colors live outside React, so a change needs a frame. */
@@ -858,6 +861,15 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         }
 
         if (!isLeftPress(report)) continue;
+
+        const request = questionRequestRef.current;
+        if (request) {
+          const optionIndex = questionOptionNodesRef.current.findIndex((node) => cellIn(screenRect(node), report) !== null);
+          if (optionIndex >= 0 && optionIndex < request.question.options.length) {
+            request.resolve(request.question.options[optionIndex]!.label);
+            continue;
+          }
+        }
 
         // A left press inside the track starts a scrollbar drag. Movement is
         // applied relatively, so the content follows the pointer without the
@@ -2425,12 +2437,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           <Text color={theme.primary} bold>luban 需要你的选择</Text>
           <Text>{questionRequest.question.question}</Text>
           {questionRequest.question.options.map((option, index) => (
-            <Text key={option.label}><Text color={theme.accent}>{index + 1}. {option.label}</Text><Text color={theme.muted}>{option.description ? ` — ${option.description}` : ""}</Text></Text>
+            <Box key={option.label} ref={(node) => { questionOptionNodesRef.current[index] = node as LayoutNode | null; }} width="100%">
+              <Text><Text color={theme.accent}>{index + 1}. {option.label}</Text><Text color={theme.muted}>{option.description ? ` — ${option.description}` : ""}</Text></Text>
+            </Box>
           ))}
-          <Text color={theme.dim}>按数字选择，或输入自己的答案并回车；Esc 跳过</Text>
+          <Text color={theme.dim}>点击选项或按数字选择，也可输入自己的答案并回车；Esc 跳过</Text>
           <TextArea value={questionDraft} onChange={setQuestionDraft}
             onSubmit={(value) => { if (value.trim()) questionRequest.resolve(value.trim()); }}
-            focus width={inputWidth} maxRows={3} placeholder="其他答案…" />
+            focus width={inputWidth} maxRows={3} placeholder="其他答案…" mouseGuard={mouseGuardRef.current} />
         </Box>
       ) : null}
       {!dialog && showHelp ? <HelpPanel /> : null}

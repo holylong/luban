@@ -5,8 +5,9 @@ import { mkdtemp, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { render } from "ink";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { loadConfig } from "../core/config.js";
+import { AgentRunner } from "../core/agent.js";
 import { SessionStore } from "../core/session-store.js";
 import { osc52CopySequence } from "./clipboard.js";
 import { App } from "./app.js";
@@ -179,6 +180,63 @@ it("starts the TUI with the drift-free renderer", async () => {
   expect(cli).toContain("incrementalRendering: false");
   expect(cli).not.toContain("incrementalRendering: true");
 });
+
+it("accepts a clicked model question option without inserting mouse bytes", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-question-mouse-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const config = loadConfig({ workspace });
+  let answer = "";
+  const run = vi.spyOn(AgentRunner.prototype, "run").mockImplementation(async (messages, _mode, signal, _onEvent, _approve, _persist, _inbox, askUser) => {
+    answer = await askUser!({ question: "Choose a database", options: [{ label: "SQLite" }, { label: "Postgres" }] }, signal);
+    messages.push({ role: "assistant", content: `Selected ${answer}` });
+    return { ok: true, text: `Selected ${answer}`, steps: 1, modelCalls: 1, elapsedMs: 1, messages };
+  });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 30, isTTY: true });
+  let frame = "";
+  stdout.on("data", data => {
+    const text = stripVTControlCharacters(String(data));
+    if (text.includes("Auto")) frame = text;
+  });
+  const app = render(<App config={config} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: false, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame, { timeout: 5000 }).toContain("Message luban");
+    stdin.write("choose");
+    await expect.poll(() => frame).toContain("choose");
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("Choose a database");
+    const lines = frame.split("\n");
+    const draftRow = lines.findIndex(line => line.includes("其他答案…")) + 1;
+    const optionRow = lines.findIndex(line => line.includes("2. Postgres")) + 1;
+    expect(draftRow).toBeGreaterThan(0);
+    expect(optionRow).toBeGreaterThan(0);
+    // A mouse report in the free-text field must not become part of the answer.
+    stdin.write(`\u001b[<0;10;${draftRow}M`);
+    stdin.write(`\u001b[<0;10;${draftRow}m`);
+    stdin.write(`\u001b[32;10;${draftRow}M`);
+    stdin.write(Buffer.from([0x1b, 0x5b, 0x4d, 32, 42, draftRow + 32]));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(frame).toContain("其他答案…");
+    expect(frame).not.toContain("[<0;");
+    expect(frame).not.toContain("[32;");
+    // Clicking the option row resolves the model's question.
+    stdin.write(`\u001b[<0;10;${optionRow}M`);
+    await expect.poll(() => answer).toBe("Postgres");
+    await expect.poll(() => frame).toContain("Selected Postgres");
+  } finally {
+    app.unmount();
+    app.cleanup();
+    run.mockRestore();
+    if (oldHome === undefined) delete process.env.LUBAN_HOME;
+    else process.env.LUBAN_HOME = oldHome;
+  }
+}, 10000);
 
 it("copies the last answer with Ctrl+Y", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-copy-ui-"));
