@@ -94,6 +94,11 @@ it("keeps repeated step progress out of the finished transcript but keeps real n
     expect(frame).not.toContain("Reviewing tool results");
     // The retry notice is not progress, so it still has to be in the record.
     expect(frame).toContain("429");
+    // A past retry is part of the scrolled transcript, never a pinned row in
+    // the composer below the current answer.
+    const composer = frame.lastIndexOf("Auto ❯");
+    expect(composer).toBeGreaterThan(0);
+    expect(frame.slice(composer)).not.toContain("429");
     // The run really did work through several steps.
     expect(frame.match(/note-\d\.txt/g)?.length ?? 0).toBeGreaterThan(1);
   } finally {
