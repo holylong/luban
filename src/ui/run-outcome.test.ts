@@ -17,4 +17,11 @@ describe("run outcome line", () => {
   it("omits the step count when the run did not report one", () => {
     expect(outcomeNote({ status: "completed", text: "" }).text).toBe("✓ 任务已完成");
   });
+
+  it("keeps a failed run's reason and next action in the transcript", () => {
+    const note = outcomeNote({ status: "failed", text: "timeout", detail: "原因：模型请求重试后仍超时\n当前执行记录已保留；发送“继续”接着处理。" });
+    expect(note.text).toContain("原因：模型请求重试后仍超时");
+    expect(note.text).toContain("发送“继续”");
+    expect(note.lines).toBe(3);
+  });
 });

@@ -11,6 +11,11 @@ export function isTruncationError(error: unknown): boolean {
   return /truncated by output token limit|response truncated/i.test(text);
 }
 
+/** A stalled model request can be retried without repeating any tool effect. */
+export function isModelTimeoutError(error: unknown): boolean {
+  return /timed out|timeout|ETIMEDOUT|超时|没有任何输出/i.test(describeModelError(error));
+}
+
 /** Tool effects already happened once; only model-transport calls may retry, never tool.execute. */
 export function retryableModelError(error: unknown): boolean {
   if (isContextOverflowError(error)) return false;

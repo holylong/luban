@@ -9,6 +9,7 @@ import { AgentInbox } from "../core/inbox.js";
 import type { UserQuestion } from "../core/question.js";
 import { planVerificationStatus, readPlan, readVerifications } from "../core/plan.js";
 import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
+import { isModelTimeoutError } from "../core/model-errors.js";
 import { estimateMessagesTokens } from "../core/context.js";
 import { savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
 import { consumeCodexReset, formatCodexRateLimits, formatCodexUsage, readCodexRateLimits, readCodexUsage } from "../core/codex-account.js";
@@ -1314,6 +1315,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setRunOutcome({
         status: result.ok ? "completed" : paused ? "paused" : "failed",
         text: result.text,
+        ...(!result.ok && !paused ? { detail: `原因：${oneLine(result.stopReason === "loop" ? "检测到重复工具调用" : result.text, 180)}\n当前执行记录已保留；请检查原因后发送“继续”接着处理。` } : {}),
         steps: result.steps,
         modelCalls: result.modelCalls,
         elapsedMs: result.elapsedMs,
@@ -1328,12 +1330,18 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       nameSession();
     } catch (error) {
       const message = controller.signal.aborted ? "Run cancelled" : (error instanceof Error ? error.message : String(error));
+      let saved = true;
+      try { await save(nextMessages); } catch { saved = false; }
       setNotice("Describe a goal, ask a question, or type / for commands.");
-      setRunOutcome({ status: controller.signal.aborted ? "cancelled" : "failed", text: message });
+      setRunOutcome({
+        status: controller.signal.aborted ? "cancelled" : "failed",
+        text: message,
+        ...(!controller.signal.aborted ? { detail: `原因：${isModelTimeoutError(error) ? "模型请求重试后仍超时" : oneLine(message, 180)}\n${saved ? "当前执行记录已保留" : "当前执行记录未能保存"}；请检查原因后发送“继续”接着处理。` } : {}),
+      });
       setMessages([...nextMessages]);
       resetDraft();
       setThinkingDraft("");
-      addActivity({ id: `cancel-${Date.now()}`, text: message, tone: "red" });
+      if (controller.signal.aborted) addActivity({ id: `cancel-${Date.now()}`, text: message, tone: "muted" });
     } finally {
       abortRef.current = null;
       inboxRef.current = null;
