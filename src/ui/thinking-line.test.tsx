@@ -71,4 +71,30 @@ describe("working line", () => {
     expect(responding({ reasoning: "先看 config.ts 的默认值" })).toContain("先看 config.ts 的默认值");
     expect(responding({})).toContain("正在生成回复…");
   });
+
+  it("stays on one row when the reasoning line is longer than the terminal", () => {
+    // A wrapped row changes the frame height mid-stream, which shifts the whole
+    // transcript up and down and reads as flicker. The detail column must be
+    // allowed to shrink below its content width so the metrics stay on the row.
+    const long = "检查 sandbox 的路径解析顺序".repeat(12);
+    for (const columns of [30, 40, 60, 80, 120]) {
+      const output = renderToString(
+        <ThinkingLine
+          phase={{ kind: "reasoning", detail: "", since: now - 12_000 }}
+          callIndex={3}
+          reasoning={long}
+          responding=""
+          status=""
+          startedAt={startedAt}
+          lastOutputAt={now}
+          characters={4_300}
+        />,
+        { columns },
+      );
+      expect(output.split("\n").filter((line) => line.trim()).length, `columns=${columns}`).toBe(1);
+      // The metrics are the reason the row must not wrap: they stay on the row and
+      // clip only when the terminal is too narrow for them at all.
+      if (columns >= 60) expect(output, `columns=${columns}`).toContain("4.3k 字");
+    }
+  });
 });
