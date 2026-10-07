@@ -675,10 +675,19 @@ async function main(): Promise<number> {
     const resume = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
     // exitOnCtrlC off: Ctrl+C belongs to the app (interrupt a run / copy the
     // last answer), not to the process. Exit is Ctrl+D or /exit.
-    // incrementalRendering rewrites only the lines that changed; without it Ink
-    // erases and redraws the whole terminal on every streamed token, which
-    // flickers on a full-height TUI.
-    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { exitOnCtrlC: false, incrementalRendering: true });
+    //
+    // incrementalRendering must stay off. Ink's incremental renderer only keeps
+    // its cursor bookkeeping straight in fullscreen mode (frame height >=
+    // terminal rows), where it writes the frame without a trailing newline. Our
+    // frame is deliberately one row short so Ink never takes the fullscreen
+    // clear path (see the root Box in app.tsx), which means Ink appends '\n' and
+    // leaves the cursor one row below the last line. The incremental diff then
+    // assumes the cursor sits on the last line and rewrites every changed row one
+    // row too low, so each keystroke stamps the composer onto a fresh line and
+    // the box grows by a row per key. The standard renderer erases with
+    // ansiEscapes.eraseLines(previousLineCount), whose count includes that
+    // trailing newline, so it redraws in place without flicker.
+    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { exitOnCtrlC: false, incrementalRendering: false });
     await instance.waitUntilExit();
     return 0;
   } catch (error) {
