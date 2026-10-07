@@ -2215,7 +2215,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     turns: record.messages.filter((message) => message.role === "user").length,
     detail: `${record.project} · ${record.updatedAt.slice(0, 16).replace("T", " ")}`,
   })));
-  const modelRows = filterDialogRows(config.models.map((model) => ({ key: model.id, title: model.name, detail: `${model.id}${model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}` })));
+  const modelRows = filterDialogRows(config.models.map((model) => ({ key: model.id, title: model.name,
+    detail: `${model.id}${model.provider === "opencode-zen" && !model.apiKey ? " · 需连接 Zen / 设置 OPENCODE_ZEN_API_KEY" : ""}${model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}` })));
   const rows = terminalSize.rows;
   const narrow = terminalSize.columns < 110;
   // Each view has one ordered stream for its conversation and execution rows.

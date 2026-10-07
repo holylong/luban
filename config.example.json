@@ -69,6 +69,14 @@
         "qwen3.8-flash": { "name": "Qwen3.8 Flash", "api": "anthropic" },
         "gpt-6-luna": { "name": "GPT-6 Luna", "api": "responses" }
       }
+    },
+    "opencode-zen": {
+      "api_key_env": "OPENCODE_ZEN_API_KEY",
+      "base_url": "https://opencode.ai/zen/v1",
+      "models": {
+        "ling-3.1-flash-free": { "name": "Ling 3.1 Flash Free", "api": "openai" },
+        "muse-spark-1.3-contributor-free": { "name": "Muse Spark 1.3 Contributor Free", "api": "responses", "capabilities": { "temperature": false } }
+      }
     }
   },
   "contacts": [
