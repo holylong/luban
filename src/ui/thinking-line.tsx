@@ -86,7 +86,13 @@ export function ThinkingLine({ phase, callIndex, prefix = "", reasoning, respond
       {prefix ? <Text color={theme.accent} bold>{` ${prefix}`}</Text> : null}
       <Text color={stalled ? theme.yellow : theme.accent} bold> {PHASE_LABELS[phase.kind]}</Text>
       {callIndex > 0 ? <Text color={theme.muted}>{` #${callIndex}`}</Text> : null}
-      <Box marginLeft={1} flexGrow={1} flexShrink={1} overflow="hidden">
+      {/* flexBasis={0} is load-bearing: with only flexGrow/flexShrink the detail
+          column keeps its content width as an implicit minimum (Yoga's
+          minWidth:auto), so a long reasoning line pushes the metrics text off the
+          edge and the row wraps to a second terminal row. The row then flips
+          between one and two rows as reasoning streams, which shoves the whole
+          frame up and down and reads as flicker. */}
+      <Box marginLeft={1} flexGrow={1} flexShrink={1} flexBasis={0} overflow="hidden">
         <Text color={stalled ? theme.yellow : theme.dim} wrap="truncate-end">{detail}</Text>
       </Box>
       <Text color={stalled ? theme.yellow : theme.dim}>{metrics}</Text>
