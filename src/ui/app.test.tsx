@@ -89,6 +89,97 @@ it("never erases the whole screen while repainting frames", async () => {
   }
 }, 10000);
 
+// Replays just enough of the escape stream to know which terminal row each
+// write landed on: cursor moves (A/B/E/F), line feeds and the literal marker.
+// SGR, cursor-show/hide and sync markers carry no position, so they are skipped.
+const markerRows = (raw: string, marker: string): number[] => {
+  let y = 0;
+  const rows: number[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "\u001b") {
+      const match = /^\u001b\[([0-9;?]*)([A-Za-z])/.exec(raw.slice(i));
+      if (!match) continue;
+      const count = match[1]!.includes("?") || match[1]!.split(";")[0] === "" ? 1 : Number(match[1]!.split(";")[0]);
+      if (match[2] === "A" || match[2] === "F") y -= count;
+      else if (match[2] === "B" || match[2] === "E") y += count;
+      i += match[0].length - 1;
+      continue;
+    }
+    if (raw[i] === "\n") y += 1;
+    else if (raw.startsWith(marker, i)) rows.push(y);
+  }
+  return rows;
+};
+
+it("keeps the composer on one row while typing", async () => {
+  // Regression: with incrementalRendering on, Ink assumes a fullscreen frame
+  // (cursor resting on the last line) and rewrites each changed row one row too
+  // low, so every keystroke stamped the composer onto a new line. The frame is
+  // deliberately one row short, so the standard renderer must be used. The test
+  // drives both renderers: the incremental one must show the drift, which proves
+  // the row tracker detects the bug rather than passing vacuously.
+  const home = await mkdtemp(join(tmpdir(), "luban-composer-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const config = loadConfig({ workspace });
+
+  const composerRows = async (incrementalRendering: boolean): Promise<number[]> => {
+    const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+    // Wide enough that no frame line wraps, so a row change means a real drift.
+    const stdout = Object.assign(new PassThrough(), { columns: 200, rows: 24, isTTY: true });
+    let raw = "";
+    let frame = "";
+    stdout.on("data", data => {
+      raw += String(data);
+      const text = stripVTControlCharacters(String(data));
+      if (text.includes("Auto")) frame = text;
+    });
+    const app = render(<App config={config} />, {
+      stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+      debug: false, patchConsole: false, exitOnCtrlC: false, incrementalRendering,
+    });
+    try {
+      await expect.poll(() => frame, { timeout: 5000 }).toContain("Message luban");
+      for (const ch of "abcdef") {
+        stdin.write(ch);
+        await new Promise(resolve => setTimeout(resolve, 40));
+      }
+      expect(raw).not.toContain("\u001b[2J");
+      expect(raw).not.toContain("\u001b[3J");
+      return markerRows(raw, "\u276f");
+    } finally {
+      app.unmount();
+      app.cleanup();
+    }
+  };
+
+  try {
+    const incremental = await composerRows(true);
+    // Sanity: the tracker sees the composer, and the bug shows up as drift.
+    expect(incremental.length).toBeGreaterThan(1);
+    expect(new Set(incremental).size).toBeGreaterThan(1);
+
+    const standard = await composerRows(false);
+    expect(standard.length).toBeGreaterThan(0);
+    expect(new Set(standard).size).toBe(1);
+  } finally {
+    if (oldHome === undefined) delete process.env.LUBAN_HOME;
+    else process.env.LUBAN_HOME = oldHome;
+  }
+}, 15000);
+
+it("starts the TUI with the drift-free renderer", async () => {
+  // The composer test above proves the standard renderer is the correct one for
+  // this frame; this pins the production entry point to it so a future edit
+  // cannot silently switch back to the incremental renderer and reintroduce the
+  // per-keystroke row growth.
+  const cli = await readFile(new URL("../cli.tsx", import.meta.url), "utf8");
+  expect(cli).toContain("incrementalRendering: false");
+  expect(cli).not.toContain("incrementalRendering: true");
+});
+
 it("copies the last answer with Ctrl+Y", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-copy-ui-"));
   const workspace = join(home, "workspace");
