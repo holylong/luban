@@ -156,11 +156,11 @@ function envKey(provider: string): string {
  * key lives in `auth.json` (or the older `account.json`) under the OpenCode
  * data directory.
  */
-function opencodeAuthKey(): string {
+function opencodeAuthKey(service: "opencode" | "opencode-go" = "opencode-go"): string {
   const inline = process.env.OPENCODE_AUTH_CONTENT;
   if (inline) {
     try {
-      const value = text(record((JSON.parse(inline) as JsonObject)["opencode-go"]).key);
+      const value = text(record((JSON.parse(inline) as JsonObject)[service]).key);
       if (value) return value;
     } catch {
       // Malformed content falls through to the files.
@@ -169,11 +169,11 @@ function opencodeAuthKey(): string {
   const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
   for (const file of ["auth.json", "account.json"]) {
     const data = readJson(join(dataHome, "opencode", file));
-    const direct = text(record(data["opencode-go"]).key);
+    const direct = text(record(data[service]).key);
     if (direct) return direct;
     for (const value of Object.values(record(data.accounts))) {
       const entry = record(value);
-      if (text(entry.serviceID, entry.serviceId) === "opencode-go") {
+      if (text(entry.serviceID, entry.serviceId) === service) {
         const key = text(record(entry.credential).key);
         if (key) return key;
       }
@@ -185,6 +185,10 @@ function opencodeAuthKey(): string {
 function resolveKey(providerName: string, provider: JsonObject, fallback: JsonObject): string {
   const options = record(provider.options);
   const keyEnv = text(provider.api_key_env, provider.apiKeyEnv);
+  if (providerName === "opencode-zen") return text(
+    provider.api_key, provider.apiKey, options.api_key, options.apiKey,
+    keyEnv ? process.env[keyEnv] : "", process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"),
+  );
   return text(
     provider.api_key,
     provider.apiKey,
@@ -192,7 +196,7 @@ function resolveKey(providerName: string, provider: JsonObject, fallback: JsonOb
     options.apiKey,
     keyEnv ? process.env[keyEnv] : "",
     process.env[`${envKey(providerName)}_API_KEY`],
-    providerName === "opencode-go" ? opencodeAuthKey() : "",
+    providerName === "opencode-go" ? opencodeAuthKey() : providerName === "opencode-zen" ? opencodeAuthKey("opencode") : "",
     fallback.api_key,
     fallback.apiKey,
     process.env.OPENAI_API_KEY,
@@ -238,12 +242,31 @@ const OPENCODE_GO_MODELS: Record<string, { name: string; api: "openai" | "anthro
   "muse-spark-1.2-contributor": { name: "Muse Spark 1.2 Contributor", api: "responses", vision: true },
 };
 
+/** Free chat models listed by OpenCode Zen; Jev uses /systemone and is not a chat model. */
+const OPENCODE_ZEN_FREE_MODELS: Record<string, { name: string; api: "openai" | "responses" }> = {
+  "big-pickle": { name: "Big Pickle · Free", api: "openai" },
+  "space-bunny-free": { name: "Space Bunny · Free", api: "openai" },
+  "longcat-2.5-preview-free": { name: "LongCat 2.5 Preview · Free", api: "openai" },
+  "exo-free": { name: "Exo · Free", api: "openai" },
+  "fledge-alpha-free": { name: "Fledge Alpha · Free", api: "openai" },
+  "mimo-v2.6-flash-free": { name: "MiMo V2.6 Flash · Free", api: "openai" },
+  "mimo-v2.5-free": { name: "MiMo V2.5 · Free", api: "openai" },
+  "ling-3.1-flash-free": { name: "Ling 3.1 Flash · Free", api: "openai" },
+  "ling-3.0-flash-fin-free": { name: "Ling 3.0 Flash Fin · Free", api: "openai" },
+  "nemotron-3-ultra-free": { name: "Nemotron 3 Ultra · Free", api: "openai" },
+  "nemotron-3.5-lightning-free": { name: "Nemotron 3.5 Lightning · Free", api: "openai" },
+  "muse-spark-1.3-contributor-free": { name: "Muse Spark 1.3 Contributor · Free", api: "responses" },
+};
+
 /**
  * Providers luban knows without any config file. Subscription providers are
  * offered only after login or explicit selection.
  */
 function builtinProviders(includeCodex = false): Record<string, JsonObject> {
-  const key = text(process.env.OPENCODE_API_KEY, process.env.OPENCODE_GO_API_KEY, opencodeAuthKey());
+  const goKey = text(process.env.OPENCODE_GO_API_KEY, process.env.OPENCODE_API_KEY, opencodeAuthKey());
+  // OPENCODE_API_KEY has historically selected Go in luban; only a Zen-specific
+  // credential may auto-register Zen, so an existing Go setup keeps its models.
+  const zenKey = text(process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"));
   return {
     ...(includeCodex ? { codex: {
       api: "codex",
@@ -252,7 +275,7 @@ function builtinProviders(includeCodex = false): Record<string, JsonObject> {
         capabilities: { vision: false, thinking: true, tools: true },
       }])),
     } } : {}),
-    ...(key ? { "opencode-go": {
+    ...(goKey ? { "opencode-go": {
       api_key_env: "OPENCODE_API_KEY",
       base_url: "https://opencode.ai/zen/go/v1",
       headers: { "x-opencode-session": "luban" },
@@ -266,6 +289,15 @@ function builtinProviders(includeCodex = false): Record<string, JsonObject> {
         },
       }])),
     } } : {}),
+    "opencode-zen": {
+      api_key: zenKey,
+      base_url: "https://opencode.ai/zen/v1",
+      models: Object.fromEntries(Object.entries(OPENCODE_ZEN_FREE_MODELS).map(([id, model]) => [id, {
+        name: model.name,
+        api: model.api,
+        capabilities: { vision: false, thinking: true, tools: true, ...(model.api === "responses" ? { temperature: false } : {}) },
+      }])),
+    },
   };
 }
 
@@ -391,6 +423,8 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const projectProviders = record(projectConfig.providers);
   const explicitProviders = { ...globalProviders, ...projectProviders };
   const mergedModel = { ...record(globalConfig.model), ...record(projectConfig.model) };
+  const preferences = readJson(join(home, "node-preferences.json"));
+  const requestedModel = text(options.model, process.env.LUBAN_MODEL, preferences.model, mergedModel.active, mergedModel.model);
   // A config that describes a single model (Python luban's style) keeps that
   // model as the default. Adding OpenCode Go there would silently outrank it,
   // so built-ins are only skipped when the config relies on that single-model
@@ -398,9 +432,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const singleModel = text(mergedModel.model, mergedModel.base_url, mergedModel.baseURL);
   const hasExplicitProviders = Object.keys(explicitProviders).length > 0;
   const wantsBuiltin = hasExplicitProviders || !singleModel
-    || text(mergedModel.active).toLowerCase().startsWith("opencode-go");
-  const preferences = readJson(join(home, "node-preferences.json"));
-  const requestedModel = text(options.model, process.env.LUBAN_MODEL, preferences.model, mergedModel.active, mergedModel.model);
+    || ["opencode-go/", "opencode-zen/"].some(prefix => requestedModel.toLowerCase().startsWith(prefix));
   const codexModelId = [options.model, process.env.LUBAN_MODEL, preferences.model, mergedModel.active]
     .find((value) => typeof value === "string" && value.toLowerCase().startsWith("codex/")) as string | undefined;
   const codexEnabled = preferences.codexEnabled === true || Boolean(codexModelId);
@@ -445,7 +477,12 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const storedEfforts = record(preferences.codexEfforts);
   const forcedEffort = codexEffort(process.env.LUBAN_CODEX_EFFORT);
   const configuredEffort = codexEffort(text(modelConfig.reasoning_effort, modelConfig.reasoningEffort));
-  const models = collectModels(raw).map((model) => {
+  // A fresh install must keep its historical fallback as the active model;
+  // an unconnected Zen catalog is visible in /models but cannot be the default.
+  const fallbackModels = !hasExplicitProviders && Object.keys(providers).length === 1
+    && "opencode-zen" in providers && !text(record(providers["opencode-zen"]).api_key)
+    ? collectModels({ model: mergedModel }) : [];
+  const models = [...fallbackModels, ...collectModels(raw)].map((model) => {
     if (model.api !== "codex") return model;
     const stored = storedEfforts[model.id];
     const effort = forcedEffort ?? (stored === "" ? undefined : codexEffort(stored) ?? configuredEffort);

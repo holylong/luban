@@ -14,6 +14,17 @@ function config(workspace: string): LubanConfig {
 }
 
 describe("AgentRunner", () => {
+  it("explains how to connect Zen before an uncredentialed model request", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-zen-unconnected-"));
+    const settings = config(workspace);
+    settings.model = { ...settings.model, id: "opencode-zen/exo-free", provider: "opencode-zen", model: "exo-free" };
+    const runner = new AgentRunner(settings, { async complete() { throw new Error("model should not be called"); } });
+    try {
+      await expect(runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once"))
+        .rejects.toThrow("OPENCODE_ZEN_API_KEY");
+    } finally { runner.close(); }
+  });
   it("lets the model correct malformed JSON tool arguments without failing the task", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-invalid-tool-json-"));
     let calls = 0;

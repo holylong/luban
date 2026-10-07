@@ -11,6 +11,7 @@ const originalDataHome = process.env.XDG_DATA_HOME;
 const originalOpencodeEnv = {
   OPENCODE_API_KEY: process.env.OPENCODE_API_KEY,
   OPENCODE_GO_API_KEY: process.env.OPENCODE_GO_API_KEY,
+  OPENCODE_ZEN_API_KEY: process.env.OPENCODE_ZEN_API_KEY,
   OPENCODE_AUTH_CONTENT: process.env.OPENCODE_AUTH_CONTENT,
 };
 
@@ -20,6 +21,7 @@ beforeEach(async () => {
   process.env.XDG_DATA_HOME = await mkdtemp(join(tmpdir(), "luban-xdg-"));
   delete process.env.OPENCODE_API_KEY;
   delete process.env.OPENCODE_GO_API_KEY;
+  delete process.env.OPENCODE_ZEN_API_KEY;
   delete process.env.OPENCODE_AUTH_CONTENT;
 });
 
@@ -100,7 +102,7 @@ describe("config", () => {
     expect(config.model.baseUrl).toBe("http://127.0.0.1:9999/v1");
     expect(config.model.apiKey).toBe("sk-test");
     expect(config.model.api).toBe("openai");
-    expect(config.models).toHaveLength(2);
+    expect(config.models.filter(item => item.provider === "local")).toHaveLength(2);
     expect(config.maxTokens).toBe(1234);
     expect(config.mesh).toMatchObject({
       enabled: true,
@@ -280,6 +282,48 @@ describe("config", () => {
     expect(model?.apiKey).toBe("sk-file-test");
   });
 
+  it("registers Zen free models from its own key without enabling Go", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    process.env.OPENCODE_ZEN_API_KEY = "sk-zen-test";
+    const config = loadConfig({ workspace, model: "opencode-zen/ling-3.1-flash-free" });
+    expect(config.model.baseUrl).toBe("https://opencode.ai/zen/v1");
+    expect(config.model.apiKey).toBe("sk-zen-test");
+    expect(config.model.api).toBe("openai");
+    expect(config.models.some(item => item.provider === "opencode-go")).toBe(false);
+    expect(config.models.find(item => item.id === "opencode-zen/muse-spark-1.3-contributor-free")?.api).toBe("responses");
+    expect(config.models.some(item => item.id === "opencode-zen/jev-1.13-free")).toBe(false);
+  });
+
+  it("selects Zen from --model even when a legacy single-model config exists", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-select-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    process.env.OPENCODE_ZEN_API_KEY = "sk-zen-test";
+    await writeFile(join(home, "config.json"), JSON.stringify({ model: { model: "local-default", base_url: "http://127.0.0.1:1234/v1" } }));
+    const config = loadConfig({ workspace, model: "opencode-zen/exo-free" });
+    expect(config.model.id).toBe("opencode-zen/exo-free");
+    expect(config.model.baseUrl).toBe("https://opencode.ai/zen/v1");
+  });
+
+  it("discovers the Zen key saved by OpenCode without reusing a Go-only key", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-auth-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    const data = join(process.env.XDG_DATA_HOME!, "opencode");
+    await mkdir(data, { recursive: true });
+    await writeFile(join(data, "auth.json"), JSON.stringify({ opencode: { type: "api", key: "sk-zen-file" }, "opencode-go": { type: "api", key: "sk-go-file" } }));
+    const config = loadConfig({ workspace });
+    expect(config.models.find(item => item.provider === "opencode-zen")?.apiKey).toBe("sk-zen-file");
+    expect(config.models.find(item => item.provider === "opencode-go")?.apiKey).toBe("sk-go-file");
+    await writeFile(join(data, "auth.json"), JSON.stringify({ "opencode-go": { type: "api", key: "sk-go-file" } }));
+    expect(loadConfig({ workspace }).models.find(item => item.provider === "opencode-zen")?.apiKey).toBe("");
+  });
+
   it("adds OpenCode Go alongside configured providers without changing the default", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opencode-alongside-"));
     const workspace = join(home, "project");
@@ -303,6 +347,24 @@ describe("config", () => {
     expect(loadConfig({ workspace }).models.some((item) => item.provider === "opencode-go")).toBe(false);
   });
 
+  it("lists Zen free models without a key but keeps the default model and does not borrow an OpenAI key", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-unconnected-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    const oldOpenAI = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-openai-not-zen";
+    try {
+      const config = loadConfig({ workspace });
+      expect(config.model.id).toBe("gpt-4.1-mini");
+      expect(config.models.some(item => item.id === "opencode-zen/ling-3.1-flash-free")).toBe(true);
+      expect(config.models.find(item => item.provider === "opencode-zen")?.apiKey).toBe("");
+    } finally {
+      if (oldOpenAI === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = oldOpenAI;
+    }
+  });
+
   it("lets a user provider override the built-in OpenCode Go definition", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opencode-override-"));
     const workspace = join(home, "project");
@@ -313,7 +375,7 @@ describe("config", () => {
       providers: { "opencode-go": { base_url: "https://example.test/v1", models: ["custom"] } },
     }));
     const config = loadConfig({ workspace });
-    expect(config.models.map((item) => item.model)).toEqual(["custom"]);
+    expect(config.models.filter(item => item.provider === "opencode-go").map((item) => item.model)).toEqual(["custom"]);
     expect(config.models[0]?.baseUrl).toBe("https://example.test/v1");
   });
 
