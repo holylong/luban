@@ -451,7 +451,7 @@ function Welcome({ config, mesh }: { config: LubanConfig; mesh?: MeshRuntime }) 
   return (
     <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
       <Text color={theme.dim}>·          ✦       ·</Text>
-      <Text color={theme.primary} bold>✦     d a g e n t     ·</Text>
+      <Text color={theme.primary} bold>✦     l u b a n     ·</Text>
       <Text color={theme.dim}>     ·          ✦</Text>
       <Text color={theme.muted}>luban v{VERSION}</Text>
       <Box marginTop={1}><Text color={theme.muted}>{config.workspace}</Text></Box>
