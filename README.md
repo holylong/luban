@@ -215,6 +215,16 @@ node dist/cli.js ~/dev/my-project
         "qwen3-coder": { "name": "Qwen3 Coder" }
       }
     },
+    "strata-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1"
+      },
+      "api_key_env": "STRATA_LOCAL_API_KEY",
+      "models": {
+        "qwen3.8-flash-next-iq2_xs": { "name": "Qwen3.8 Flash Next (Strata, local)" }
+      }
+    },
     "deepseek": {
       "api_key_env": "DEEPSEEK_API_KEY",
       "base_url": "https://api.deepseek.com/v1",
@@ -303,6 +313,11 @@ JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会
 完整示例见 [config.example.json](config.example.json)，其中 `model.active` 已选择 Codex；
 只需 Codex 登录和模型设置时，使用 [config.codex.example.json](config.codex.example.json)。
 
+本地模型走 OpenAI 兼容接口时，`baseURL` 要带 `/v1`；只返回 HTML 的端口是前端 UI，不能直接
+配置。示例中 `strata-local` 用 `127.0.0.1:8080/v1`，而 `web.port` 也是 `8080`——两者会冲突，
+跑 Strata 时请把 luban 的 Web 端口改成别的值。`api_key_env` 留空时，`resolveKey` 会回退到
+`DEEPSEEK_API_KEY` 等环境变量；本地服务不看这个头，但若要彻底干净，就显式设一个专用变量。
+
 ### OpenCode Go
 
 luban 内置 `opencode-go` provider：只要在本机找得到 OpenCode 的凭据（`OPENCODE_API_KEY`
@@ -331,7 +346,9 @@ luban 既有的 `OPENCODE_API_KEY` 仍对应 Go；单独使用 Zen 时请设
 `muse-spark-1.3-contributor-free` 自动走 Responses，其余内置免费聊天模型走 Chat Completions。
 Zen 与 Go 的本地凭据分别读取，不会把 Go 登录误当作 Zen 登录。免费模型名单和可用期限
 会变化，以 [Zen 官方列表](https://opencode.ai/docs/zen) 为准；Jev 免费版使用独立的
-System One 决策接口，不能在聊天模型选择器中使用。显式配置同名 provider 可覆盖内置模型表。
+System One 决策接口，不能在聊天模型选择器中使用。配置里显式写了 `opencode-zen` 也
+不会隐藏内置模型表：自定义的 endpoint、key 和模型条目优先，其余内置免费模型继续
+出现；若只想保留自己的清单，把 `models` 写成数组（如 `["exo-free"]`）即可完全覆盖。
 
 ## 日常交互
 
