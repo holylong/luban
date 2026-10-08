@@ -33,6 +33,8 @@ export interface TranscriptNote {
   text: string;
   /** Message count when it arrived, so it lands in the right place. */
   at: number;
+  /** Actual preceding message; survives changes in history length. */
+  after?: ChatMessage;
   tone?: TranscriptBlock["tone"];
 }
 
@@ -115,7 +117,12 @@ export function buildTranscript(messages: ChatMessage[], options: TranscriptOpti
   // Notes arrive while the run is in flight and are stamped with the number of
   // messages known at the time, so they read in order rather than collecting at
   // the end of the transcript.
-  const notes = [...options.notes ?? []].sort((a, b) => a.at - b.at);
+  const positions = new Map(messages.map((message, index) => [message, index + 1]));
+  const notes = (options.notes ?? []).map(entry => ({
+    ...entry,
+    // A removed anchor belongs to compacted history, before current output.
+    at: entry.after ? positions.get(entry.after) ?? 0 : entry.at,
+  })).sort((a, b) => a.at - b.at);
   const flushNotes = (index: number): void => {
     while (notes.length && notes[0]!.at <= index) {
       const entry = notes.shift()!;

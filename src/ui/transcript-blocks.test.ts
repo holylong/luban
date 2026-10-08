@@ -113,6 +113,20 @@ describe("runtime notes", () => {
     expect(blocks.find(block => block.id === "activity-late")).toMatchObject({ kind: "note", tone: "accent" });
   });
 
+  it("keeps interruption notices in order after history compaction", () => {
+    const removed = { role: "assistant", content: "old output" } as ChatMessage;
+    const blocks = buildTranscript(messages, {
+      expanded: false, width: 80,
+      notes: [
+        { id: "old-error", text: "stream interrupted", at: 50, after: removed },
+        { id: "retry", text: "retrying", at: 51, after: messages[0] },
+      ],
+    });
+    expect(blocks.map(block => block.id)).toEqual([
+      "activity-old-error", "user-0", "activity-retry", "assistant-1",
+    ]);
+  });
+
   it("renders nothing extra when no notes were collected", () => {
     expect(buildTranscript(messages, { expanded: false, width: 80 }).map(block => block.id)).toEqual(["user-0", "assistant-1"]);
   });
