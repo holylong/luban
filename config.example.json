@@ -38,6 +38,18 @@
         }
       }
     },
+    "strata-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1"
+      },
+      "api_key_env": "STRATA_LOCAL_API_KEY",
+      "models": {
+        "qwen3.8-flash-next-iq2_xs": {
+          "name": "Qwen3.8 Flash Next (Strata, local)"
+        }
+      }
+    },
     "deepseek": {
       "api_key": "",
       "api_key_env": "DEEPSEEK_API_KEY",
