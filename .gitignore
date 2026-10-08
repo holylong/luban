@@ -15,8 +15,9 @@ coverage/
 .luban/
 .smoke/
 .run/
-.deploy/askpass.sh
-.deploy/ssh.sh
+
+# private deployment/ops files (systemd units, cert renewal, ssh helpers)
+.deploy/
 
 # python bytecode
 __pycache__/

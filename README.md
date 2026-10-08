@@ -769,9 +769,11 @@ WantedBy=default.target
 
 **手机：**在 APK 中输入中继打印的 `https://relay.example.com:8788/login?token=<手机访问令牌>`。首次访问会把令牌换成 HttpOnly Cookie 并进入 `/m/`；之后 App 在本机加密保存最近连接，重启可以直接连接。若清除 App 数据或令牌失效，需要重新输入完整令牌链接。
 
-#### 当前部署：relay.example.com
+#### 部署你自己的中继
 
-本仓库的公网中继部署在 `https://relay.example.com`（443 端口）。服务器运行中继；每个电脑端 TUI 自己开启一个 loopback Web 服务并主动连接中继，退出该 TUI 时它的服务和隧道一起结束。把设置写入 `~/.luban/config.json`，凭据单独放在权限为 `600` 的 `~/.config/luban/relay.env`：
+公网中继可以部署在你自己的服务器上。下面是一个不含私有信息的示例：把主机名、证书路径和令牌按你的环境替换即可。
+
+服务器运行中继；每个电脑端 TUI 自己开启一个 loopback Web 服务并主动连接中继，退出该 TUI 时它的服务和隧道一起结束。把设置写入 `~/.luban/config.json`，凭据单独放在权限为 `600` 的 `~/.config/luban/relay.env`：
 
 ```json
 {
@@ -788,7 +790,7 @@ WantedBy=default.target
 
 配置好后直接运行 `luban /path/to/project`。TUI 中输入 `/token` 显示**当前实例**的登录链接；在两个目录或两个终端分别运行时会注册成两个独立节点，令牌和远程任务各自固定到对应实例。手机端可以使用这一个实例的工作目录、项目、模型和任务存储。无需单独运行 `luban web` 或安装电脑端 systemd 常驻单元。
 
-节点令牌由中继部署时写入 `~/.config/luban/relay.env`；公网中继 IP 证书由服务器上的 `luban-renew-cert.timer` 自动续期。检查中继可运行 `systemctl status luban-relay.service luban-renew-cert.timer`。IP 或服务器变化时，需要更新这里的 `remote.relay_url` 并重新申请证书。
+节点令牌由中继部署时写入 `~/.config/luban/relay.env`；若使用 IP 直连而非域名，可配 Let's Encrypt 的 IP 证书并用定时任务自动续期。检查中继可运行 `systemctl status <中继服务名> <续期定时器名>`。服务器地址变化时，需要更新这里的 `remote.relay_url` 并重新申请证书。
 
 ### Android APK 的构建、安装与使用
 

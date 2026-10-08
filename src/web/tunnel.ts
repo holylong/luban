@@ -22,7 +22,7 @@ import {
 export type TunnelState = "connecting" | "online" | "offline";
 
 export interface TunnelClientOptions {
-  /** Relay base URL, e.g. `http://relay.example.com:5000`. */
+  /** Relay base URL, e.g. `https://relay.example.com`. */
   relayUrl: string;
   /** Shared secret the relay requires from nodes. */
   nodeToken: string;
