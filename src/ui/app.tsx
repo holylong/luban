@@ -175,6 +175,7 @@ interface ActivityEntry {
   tone?: "muted" | "accent" | "green" | "red";
   /** Messages known when it arrived; places the note inside the transcript. */
   at: number;
+  after?: ChatMessage;
 }
 
 interface ApprovalRequest {
@@ -1019,8 +1020,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // Notes are stamped with the message count so the transcript can interleave
   // them where they happened; without that a retry notice would read as if it
   // belonged to the final answer.
-  const addActivity = (entry: Omit<ActivityEntry, "at">) =>
-    setActivity((current) => [...current, { ...entry, at: sessionRef.current.messages.length }].slice(-60));
+  const addActivity = (entry: Omit<ActivityEntry, "at" | "after">) =>
+    setActivity((current) => [...current, { ...entry, at: sessionRef.current.messages.length, after: sessionRef.current.messages.at(-1) }].slice(-60));
 
   /**
    * Pin the remote job whose detail the stream shows. Pinning is what lets a
@@ -2264,7 +2265,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       width: streamTextWidth,
       edits: sessionRef.current.edits,
       executions: executionLog,
-      notes: activity.map(({ id, text, tone, at }) => ({ id, text, tone, at })),
+      notes: activity.map(({ id, text, tone, at, after }) => ({ id, text, tone, at, after })),
     });
     if (pendingInputs.length) {
       for (const item of pendingInputs) {
