@@ -297,6 +297,44 @@ describe("config", () => {
     expect(config.models.some(item => item.id === "opencode-zen/jev-1.13-free")).toBe(false);
   });
 
+  it("merges the built-in Zen catalog into an explicit provider instead of hiding it", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-merge-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    process.env.OPENCODE_ZEN_API_KEY = "sk-zen-merge";
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { "opencode-zen": {
+        base_url: "https://opencode.ai/zen/v1",
+        api_key_env: "OPENCODE_ZEN_API_KEY",
+        models: { "ling-3.1-flash-free": { name: "My Ling" } },
+      } },
+    }));
+    const config = loadConfig({ workspace });
+    const zen = config.models.filter((item) => item.provider === "opencode-zen");
+    // The hand-written model and endpoint survive.
+    expect(zen.find((item) => item.id === "opencode-zen/ling-3.1-flash-free")?.name).toBe("My Ling");
+    expect(zen.every((item) => item.baseUrl === "https://opencode.ai/zen/v1")).toBe(true);
+    expect(zen.every((item) => item.apiKey === "sk-zen-merge")).toBe(true);
+    // The rest of the free catalog is visible again.
+    expect(zen.some((item) => item.id === "opencode-zen/exo-free")).toBe(true);
+    expect(zen.some((item) => item.id === "opencode-zen/nemotron-3-ultra-free")).toBe(true);
+    expect(zen.length).toBeGreaterThan(1);
+  });
+
+  it("keeps an explicit Zen model array as a full override", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-array-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { "opencode-zen": { models: ["exo-free"] } },
+    }));
+    const config = loadConfig({ workspace });
+    const zen = config.models.filter((item) => item.provider === "opencode-zen");
+    expect(zen.map((item) => item.id)).toEqual(["opencode-zen/exo-free"]);
+  });
+
   it("selects Zen from --model even when a legacy single-model config exists", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-select-"));
     const workspace = join(home, "project");

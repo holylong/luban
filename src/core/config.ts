@@ -301,6 +301,20 @@ function builtinProviders(includeCodex = false): Record<string, JsonObject> {
   };
 }
 
+/**
+ * Overlay a user's provider block on a built-in one. Scalars from the user win
+ * so an explicit endpoint or key is never rewritten, and model tables are
+ * unioned so listing a couple of models no longer hides the built-in catalog.
+ */
+function mergeModelCatalog(explicit: JsonObject, builtin: JsonObject): JsonObject {
+  const builtinModels = record(builtin.models);
+  const merged: JsonObject = { ...builtin, ...explicit };
+  // An explicit array is an intentional override; an object or a missing
+  // table unions with the built-in catalog instead of hiding it.
+  const models = Array.isArray(explicit.models) ? explicit.models : { ...builtinModels, ...record(explicit.models) };
+  return Object.keys(builtinModels).length ? { ...merged, models } : merged;
+}
+
 function headerMap(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(record(value)).flatMap(([key, val]) =>
     typeof val === "string" && val.trim() ? [[key, val.trim()]] : []));
@@ -441,6 +455,13 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   // built-ins are appended only when the user has not defined that provider.
   const providers: JsonObject = { ...explicitProviders };
   for (const [name, definition] of Object.entries(builtins)) {
+    // A hand-written Zen block usually pins the endpoint and a couple of
+    // models, which used to hide the rest of the free catalog. Merge the
+    // built-in model table in instead of dropping it; explicit entries win.
+    if (name in explicitProviders && name === "opencode-zen") {
+      providers[name] = mergeModelCatalog(record(explicitProviders[name]), definition);
+      continue;
+    }
     if (!(name in explicitProviders)) providers[name] = definition;
   }
   if (codexModelId) {
