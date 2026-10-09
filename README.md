@@ -1,5 +1,9 @@
 # luban
 
+<p align="center">
+  <img src="docs/assets/luban-logo.png" alt="luban Logo" width="480" />
+</p>
+
 luban 是一个 AI 编程助手，帮助你阅读代码、修改文件、运行命令和完成开发任务。支持终端、桌面和浏览器，也可以与局域网中的其他节点协作。
 
 ## 特色功能
