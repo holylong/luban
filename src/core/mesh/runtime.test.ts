@@ -156,6 +156,66 @@ describe("MeshRuntime", () => {
     }
   }, 15_000);
 
+  it("answers a sync request that outlives the socket idle timeout instead of dropping the reply", async () => {
+    // Regression: handleSocket used to destroy any socket idle for 60s, so a slow
+    // workspace sync (large tree, Windows over SMB) was killed mid-handler and its
+    // reply was silently discarded — the caller only saw "connected but no reply".
+    const [rootA, rootB] = await Promise.all([temporary("idle-a"), temporary("idle-b")]);
+    const configA = config(rootA, "alpha");
+    const configB = config(rootB, "beta");
+    await Promise.all([mkdir(configA.workspace, { recursive: true }), mkdir(configB.workspace, { recursive: true })]);
+
+    const beta = new MeshRuntime(configB);
+    // Shrink the ceiling so the test needs milliseconds rather than minutes.
+    beta.socketIdleTimeoutMs = 150;
+    await beta.start();
+    try {
+      const alpha = new MeshRuntime(configA);
+      await alpha.start();
+      try {
+        const { createConnection } = await import("node:net");
+        const { encodeFrame, envelope, decodeFrames } = await import("./protocol.js");
+        // A sync handler that blocks for well past the idle ceiling.
+        const slow = beta as unknown as { handleMessage: (m: JsonObject) => Promise<JsonObject> };
+        const original = slow.handleMessage.bind(beta);
+        beta.handleMessage = async (message: JsonObject) => {
+          if (message.type === "sync_request") await new Promise((r) => setTimeout(r, 900));
+          return original(message);
+        };
+
+        const request = envelope("sync_request", "alpha", "", {
+          project_id: configB.project, mode: "chunk", files: {},
+        });
+        request.expect_reply = true;
+        const port = configB.mesh.port;
+        const reply = await new Promise<JsonObject>((resolveReply, rejectReply) => {
+          const sock = createConnection({ host: "127.0.0.1", port });
+          const started = Date.now();
+          let buffer = Buffer.alloc(0);
+          sock.on("connect", () => sock.write(encodeFrame(request)));
+          sock.on("data", (chunk) => {
+            buffer = Buffer.concat([buffer, chunk]);
+            const decoded = decodeFrames(buffer);
+            const first = decoded.messages[0];
+            if (first) { sock.destroy(); resolveReply({ ...first, _elapsed: Date.now() - started }); }
+          });
+          sock.on("error", rejectReply);
+          sock.on("end", () => rejectReply(new Error("server closed the socket before replying")));
+          setTimeout(() => { sock.destroy(); rejectReply(new Error("no reply within 5s")); }, 5_000);
+        });
+
+        // The reply arrived after 900ms, i.e. ~6x the idle ceiling.
+        expect(Number(reply._elapsed)).toBeGreaterThan(500);
+        expect(reply.reply_to).toBe(request.id);
+        expect(reply).toMatchObject({ mode: "chunk" });
+      } finally {
+        await alpha.stop();
+      }
+    } finally {
+      await beta.stop();
+    }
+  });
+
   it("pings, chats, synchronizes, and runs a durable remote job", async () => {
     const [rootA, rootB] = await Promise.all([temporary("alpha"), temporary("beta")]);
     const configA = config(rootA, "alpha");

@@ -37,6 +37,12 @@ const MAX_POLL_LOG_LINES = 300;
 const MAX_POLL_EVENTS = 200;
 /** Per-job structured-event replay buffer. Bounded so a long task cannot grow memory without limit. */
 const MAX_JOB_STREAM_EVENTS = 4000;
+/**
+ * Idle ceiling for an inbound socket. It only applies while no handler is running
+ * (see handleSocket), so a genuine idle peer is still reaped, but a long sync is
+ * no longer cut off mid-request.
+ */
+const SOCKET_IDLE_TIMEOUT_MS = 15 * 60_000;
 
 export interface MeshPeer {
   name: string;
@@ -195,6 +201,8 @@ export class MeshRuntime {
   private runner?: MeshJobRunner;
   private stopping = false;
   private initialized = false;
+  /** Idle ceiling for inbound sockets. Overridable in tests so the timeout path stays fast. */
+  socketIdleTimeoutMs: number = SOCKET_IDLE_TIMEOUT_MS;
 
   constructor(readonly config: LubanConfig) {
     this.store = new MeshJobStore(config.mesh.jobsDir);
@@ -411,18 +419,34 @@ export class MeshRuntime {
 
   private handleSocket(socket: Socket): void {
     let buffer: Buffer = Buffer.alloc(0);
-    socket.setTimeout(60_000, () => socket.destroy());
+    // Track in-flight handlers so the idle timer cannot destroy the socket while
+    // a request is still being served. Syncing a large workspace (Windows over
+    // SMB, Defender filtering, cold caches) legitimately takes minutes; the old
+    // 60s idle timeout killed those sockets mid-handler and the reply was then
+    // dropped on the floor, so the peer reported "connected but no reply".
+    let inFlight = 0;
+    socket.setTimeout(this.socketIdleTimeoutMs, () => {
+      if (inFlight > 0) return;
+      socket.destroy();
+    });
     socket.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       let decoded;
       try { decoded = decodeFrames(buffer); } catch { socket.destroy(); return; }
       buffer = decoded.remaining;
       for (const message of decoded.messages) {
-        void this.handleMessage(message).then((reply) => {
-          if (message.expect_reply === false || socket.destroyed) return;
-          reply.reply_to ??= String(message.id || "");
-          socket.write(encodeFrame(reply));
-        });
+        inFlight += 1;
+        // A handler that outlives the peer must still surface as a reply, not a
+        // silently dropped connection: the caller would otherwise wait out its
+        // own timeout and report an unreachable peer.
+        void this.handleMessage(message)
+          .catch((error: unknown): JsonObject => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+          .then((reply) => {
+            inFlight -= 1;
+            if (message.expect_reply === false || socket.destroyed) return;
+            reply.reply_to ??= String(message.id || "");
+            socket.write(encodeFrame(reply));
+          });
       }
     });
     socket.on("error", () => undefined);

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import fg from "fast-glob";
-import { scanWorkspace } from "./sync.js";
+import { scanWorkspace, RESERVED_SYNC_IGNORE } from "./sync.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -97,5 +97,31 @@ describe("workspace scan hardening", () => {
     const files = await scanWorkspace(root);
     expect(Object.keys(files)).toEqual(["src/index.ts"]);
     expect(await readFile(join(root, "src", "index.ts"), "utf8")).toBe("export {};\n");
+  });
+
+  /**
+   * Regression: a `sync.ignore` list without `.luban` made every scan throw
+   * "path escapes or is reserved: .luban/backup/...bundle", because the walk
+   * reached our own backup bundle and `portableParts` rejects the leading `.luban`.
+   * A user-supplied ignore must never be able to re-admit a reserved directory.
+   */
+  it("excludes reserved metadata dirs even when the caller's ignore omits them", async () => {
+    const root = await fixture("luban-scan-reserved-");
+    await mkdir(join(root, ".luban", "backup"), { recursive: true });
+    await writeFile(join(root, ".luban", "backup", "luban-pre-rewrite.bundle"), "binary\n");
+    await writeFile(join(root, ".luban", "sync_state.json"), "{}\n");
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+    await writeFile(join(root, "app.py"), "print('hi')\n");
+
+    const lean = ["node_modules", "*.log"]; // no .luban, no .git
+    await expect(scanWorkspace(root, lean)).resolves.toEqual(
+      expect.objectContaining({ "app.py": expect.any(String) }),
+    );
+    expect(Object.keys(await scanWorkspace(root, lean))).toEqual(["app.py"]);
+
+    for (const reserved of RESERVED_SYNC_IGNORE) {
+      expect(await scanWorkspace(root, [reserved, ...lean])).toBeDefined();
+    }
   });
 });

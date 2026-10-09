@@ -19,8 +19,18 @@ import type { ConflictPolicy, SyncMode } from "../types.js";
 import type { JsonObject } from "./protocol.js";
 
 const runFile = promisify(execFile);
+/**
+ * `portableParts` rejects these two unconditionally, so they can never take part
+ * in a transfer. They are a hard floor rather than a mere config default:
+ * `sync.ignore` replaces the default list wholesale, so an operator who omits
+ * `.luban` there would otherwise make every scan throw on its own backup
+ * bundles and break sync for the whole project.
+ */
+export const RESERVED_SYNC_IGNORE = [".luban", ".git"];
+
 export const DEFAULT_SYNC_IGNORE = [
-  ".luban", ".git", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+  ...RESERVED_SYNC_IGNORE,
+  "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
   ".venv", "venv", "node_modules", "target", "*.pyc", "*.pyo", ".DS_Store", "*.log",
   // `.dagent` holds cached toolchains; a wine prefix inside it links to the
   // filesystem root, and the whole cache is build output nobody wants to sync.
@@ -84,6 +94,9 @@ function ignoreGlobs(patterns: string[]): string[] {
 }
 
 export async function scanWorkspace(root: string, ignore = DEFAULT_SYNC_IGNORE): Promise<Record<string, string>> {
+  // The reserved entries are appended unconditionally: a caller-supplied list
+  // that drops them would resurface the throw below on our own metadata dirs.
+  const patterns = ignoreGlobs([...new Set([...ignore, ...RESERVED_SYNC_IGNORE])]);
   const files = await fg("**/*", {
     cwd: root,
     onlyFiles: true,
@@ -91,7 +104,7 @@ export async function scanWorkspace(root: string, ignore = DEFAULT_SYNC_IGNORE):
     followSymbolicLinks: false,
     suppressErrors: true,
     unique: true,
-    ignore: ignoreGlobs(ignore),
+    ignore: patterns,
   });
   const result: Record<string, string> = {};
   for (const file of files.sort()) {

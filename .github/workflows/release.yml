@@ -1,4 +1,4 @@
-name: Publish Linux release
+name: Publish release
 
 on:
   push:
@@ -51,11 +51,24 @@ jobs:
 
           两个安装包可单独安装，也可同时安装。Desktop 提供项目文件树、代码预览和 Agent 对话。
           EOF
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$cli" "$desktop" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" "$cli" "$desktop" --verify-tag --title "luban ${version}" --notes-file release-notes.md
-          fi
+          # The Linux and Windows jobs publish to the same release concurrently, so
+          # both may observe "no release yet" and race to create it. Treat a lost
+          # race as retryable instead of failing the run.
+          set +e
+          uploaded=0
+          for attempt in 1 2 3 4 5; do
+            uploaded=0
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" "$cli" "$desktop" --clobber && uploaded=1
+            else
+              gh release create "$GITHUB_REF_NAME" "$cli" "$desktop" --verify-tag --title "luban ${version}" --notes-file release-notes.md && uploaded=1
+            fi
+            [ "$uploaded" = "1" ] && break
+            echo "release not published yet (attempt ${attempt}/5); retrying"
+            sleep 10
+          done
+          set -e
+          test "$uploaded" = "1"
           test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -ge 2
       - name: Record publication for SSH verification
         run: |
@@ -63,3 +76,74 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git notes --ref=release-status add -m "GitHub Release ${GITHUB_REF_NAME} published with CLI and Desktop packages" "$GITHUB_SHA"
           git push origin refs/notes/release-status
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Verify version tag
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version $version"
+          }
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      # electron@44 publishes no scripts field, so its binary-download postinstall
+      # never runs during `npm ci`. Fetch the runtime explicitly before packaging.
+      - name: Ensure Electron runtime
+        run: node node_modules/electron/install.js
+      - name: Build Windows CLI and Desktop packages
+        run: npm run package:windows
+      - name: Write release notes
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $lines = @(
+            "Windows x64 ZIP 包（解压即用，无需安装）：",
+            "",
+            "luban-cli-${version}-win-x64.zip：终端版，解压后运行 luban.cmd。",
+            "luban-desktop-${version}-win-x64.zip：图形桌面版，解压后运行 luban-desktop.cmd（内含 luban.cmd）。",
+            "",
+            "两个 ZIP 可单独使用，也可同时解压。解压包已内置 Node.js 运行时，无需预装 Node.js。",
+            "配置目录：%USERPROFILE%\.luban\config.json。"
+          )
+          Set-Content -Path windows-release-notes.md -Value $lines -Encoding utf8
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $cli = "release/luban-cli-${version}-win-x64.zip"
+          $desktop = "release/luban-desktop-${version}-win-x64.zip"
+          foreach ($asset in @($cli, $desktop)) {
+            if (-not (Test-Path $asset) -or (Get-Item $asset).Length -eq 0) {
+              throw "missing or empty asset: $asset"
+            }
+          }
+          # The Linux and Windows jobs publish to the same release concurrently,
+          # so both may observe "no release yet" and race to create it.
+          $uploaded = $false
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            $uploaded = $false
+            gh release view $env:GITHUB_REF_NAME *> $null
+            if ($LASTEXITCODE -eq 0) {
+              gh release upload $env:GITHUB_REF_NAME $cli $desktop --clobber
+              $uploaded = $true
+            } else {
+              gh release create $env:GITHUB_REF_NAME $cli $desktop --verify-tag --title "luban $version" --notes-file windows-release-notes.md
+              $uploaded = $true
+            }
+            if ($uploaded) { break }
+            Write-Host "release not published yet (attempt $attempt/5); retrying"
+            Start-Sleep -Seconds 10
+          }
+          if (-not $uploaded) { throw "release publish did not succeed after 5 attempts" }
+          $count = gh release view $env:GITHUB_REF_NAME --json assets --jq '.assets | length'
+          if ([int]$count -lt 2) { throw "expected at least 2 assets, found $count" }
