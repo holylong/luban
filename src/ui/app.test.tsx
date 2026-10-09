@@ -79,6 +79,7 @@ it("never erases the whole screen while repainting frames", async () => {
       stdin.write(ch);
       await new Promise(resolve => setTimeout(resolve, 40));
     }
+    await expect.poll(() => raw).toContain("abcdefghij");
     expect(raw).not.toContain("\u001b[2J");
     expect(raw).not.toContain("\u001b[3J");
     expect(raw).toContain("abcdefghij");

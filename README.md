@@ -144,6 +144,17 @@ Linux 安装包按用途命名，选对应架构即可：
 
 维护者在 Linux 上运行 `npm ci && npm run package:linux`，会在 `release/` 同时生成两种安装包；也可以单独运行 `npm run package:linux:cli` 或 `npm run package:linux:desktop`。源码开发时可先 `npm run build`，再用 `npm run desktop -- /path/to/project` 启动桌面版。桌面图标使用与 Android App 相同的 L 形标识，Web/PWA 图标也保持一致。
 
+### Windows 便携包（x64）
+
+Windows 包是自带 Node.js 的 zip，解压后即可运行，不写注册表：
+
+| 文件名 | 入口 | 内容 |
+| --- | --- | --- |
+| `luban-cli-<版本>-win-x64.zip` | `luban.cmd` | 终端 Agent，内置 Node.js |
+| `luban-desktop-<版本>-win-x64.zip` | `luban-desktop.cmd` | 图形工作台，内置 Node.js 和 Electron，同时包含 `luban.cmd` |
+
+在 Windows x64 上运行 `npm ci && npm run package:windows`，产物在 `release/`。也可以单独运行 `npm run package:windows:cli` 或 `npm run package:windows:desktop`。
+
 ### 从源码安装
 
 需要 Node.js 20 或更高版本。

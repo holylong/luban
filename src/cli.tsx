@@ -15,6 +15,7 @@ import { sharedHistory } from "./core/session-history.js";
 import { runHistory } from "./core/history-command.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
 import { App } from "./ui/app.js";
+import { windowsOutput } from "./ui/windows-output.js";
 import { applyTheme, resolveThemeId, themeIds } from "./ui/theme.js";
 import { LubanWebServer } from "./web/server.js";
 import { ApprovalBroker } from "./web/approval.js";
@@ -686,8 +687,9 @@ async function main(): Promise<number> {
     // row too low, so each keystroke stamps the composer onto a fresh line and
     // the box grows by a row per key. The standard renderer erases with
     // ansiEscapes.eraseLines(previousLineCount), whose count includes that
-    // trailing newline, so it redraws in place without flicker.
-    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { exitOnCtrlC: false, incrementalRendering: false });
+    // trailing newline, so it redraws in place. On Windows, windowsOutput turns
+    // fixed-height frame erases into row updates without requiring DECSET 2026.
+    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { stdout: windowsOutput(process.stdout), exitOnCtrlC: false, incrementalRendering: false });
     await instance.waitUntilExit();
     return 0;
   } catch (error) {
