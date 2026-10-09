@@ -28,6 +28,10 @@ jobs:
           test "${GITHUB_REF_NAME}" = "v${version}"
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+      # electron@44 publishes no scripts field, so its binary-download postinstall
+      # never runs during `npm ci`. Fetch the runtime explicitly before packaging.
+      - name: Ensure Electron runtime
+        run: node node_modules/electron/install.js
       - name: Build CLI and Desktop packages
         run: npm run package:linux
       - name: Publish GitHub Release
