@@ -453,7 +453,12 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
           onlyFiles: true,
           dot: false,
           unique: true,
-          ignore: ["**/.git/**", "**/node_modules/**", "**/.luban/**", "**/dist/**"],
+          // Do not traverse symlinks: one pointing at a tool cache or at the
+          // filesystem root turns a scoped lookup into a whole-disk walk that
+          // ends in an EACCES on root-owned directories.
+          followSymbolicLinks: false,
+          suppressErrors: true,
+          ignore: ["**/.git/**", "**/node_modules/**", "**/.luban/**", "**/.dagent/**", "**/dist/**"],
         });
         return matches.slice(0, 2000).join("\n") || "(no matches)";
       },
@@ -473,7 +478,9 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
           cwd: workspace,
           onlyFiles: true,
           dot: false,
-          ignore: ["**/.git/**", "**/node_modules/**", "**/.luban/**", "**/dist/**", "**/*.lock"],
+          followSymbolicLinks: false,
+          suppressErrors: true,
+          ignore: ["**/.git/**", "**/node_modules/**", "**/.luban/**", "**/.dagent/**", "**/dist/**", "**/*.lock"],
         });
         const matches: string[] = [];
         for (const file of files) {

@@ -24,6 +24,7 @@ import { AcpServer } from "./core/acp.js";
 import { LubanRelayServer } from "./web/relay.js";
 import { TunnelClient, normalizeRelayUrl } from "./web/tunnel.js";
 import { generateToken } from "./web/auth.js";
+import { installProcessGuard } from "./core/process-guard.js";
 import { generateTlsMaterial, readTlsMaterial } from "./web/tls.js";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -756,6 +757,11 @@ async function runAcp(argv: string[]): Promise<number> {
   for (const state of runners.values()) state.runner.close();
   return 0;
 }
+
+// Installed before any subsystem starts: without it, one rejected background
+// promise ends the process, and a long-lived mesh/web node then appears to peers
+// as a port that keeps changing and refusing connections.
+installProcessGuard({ label: "luban" });
 
 const command = process.argv[2];
 const entry = command === "login" && process.argv[3] === "codex"

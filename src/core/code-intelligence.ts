@@ -73,7 +73,8 @@ async function genericSearch(
   const expression = new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
   const pattern = scopeGlob || "**/*";
   const files = await fg(pattern, { cwd: workspace, onlyFiles: true, dot: false,
-    ignore: ["**/.git/**", "**/node_modules/**", "**/.luban/**", "**/dist/**", "**/target/**", "**/__pycache__/**", "**/*.lock"] });
+    followSymbolicLinks: false, suppressErrors: true,
+    ignore: ["**/.git/**", "**/node_modules/**", "**/.luban/**", "**/.dagent/**", "**/dist/**", "**/target/**", "**/__pycache__/**", "**/*.lock"] });
   const results: unknown[] = [];
   for (const file of files.slice(0, 2000)) {
     signal.throwIfAborted();

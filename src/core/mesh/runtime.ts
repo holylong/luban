@@ -551,7 +551,20 @@ export class MeshRuntime {
   }
 
   private async workspaceHasFiles(workspace: string): Promise<boolean> {
-    const files = await fg("**/*", { cwd: workspace, onlyFiles: true, dot: true, ignore: [".luban/**"] });
+    const files = await fg("**/*", {
+      cwd: workspace,
+      onlyFiles: true,
+      dot: true,
+      // A hidden tool cache such as `.dagent/winbuild/_home/.wine/dosdevices/z:`
+      // is a symlink to the filesystem root. Following it walks this "does the
+      // project have context?" probe out of the workspace into root-owned
+      // directories (lost+found) where scandir throws EACCES, and without
+      // suppressErrors that EACCES rejects an un-awaited promise and kills the
+      // mesh node. Skip symlinks and tolerate unreadable entries.
+      followSymbolicLinks: false,
+      suppressErrors: true,
+      ignore: [".luban/**", ".dagent/**"],
+    });
     return files.length > 0;
   }
 

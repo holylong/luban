@@ -22,6 +22,9 @@ const runFile = promisify(execFile);
 export const DEFAULT_SYNC_IGNORE = [
   ".luban", ".git", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
   ".venv", "venv", "node_modules", "target", "*.pyc", "*.pyo", ".DS_Store", "*.log",
+  // `.dagent` holds cached toolchains; a wine prefix inside it links to the
+  // filesystem root, and the whole cache is build output nobody wants to sync.
+  ".dagent",
 ];
 
 export function sha256(data: Buffer | string): string {
@@ -86,6 +89,7 @@ export async function scanWorkspace(root: string, ignore = DEFAULT_SYNC_IGNORE):
     onlyFiles: true,
     dot: true,
     followSymbolicLinks: false,
+    suppressErrors: true,
     unique: true,
     ignore: ignoreGlobs(ignore),
   });
