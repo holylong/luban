@@ -85,7 +85,7 @@ async function openWorkspace(workspace) {
       window = new BrowserWindow({
         width: 1500, height: 950, minWidth: 920, minHeight: 620,
         show: false, backgroundColor: "#050607",
-        icon: join(dirname(cli), "web-ui", "icon-512.png"),
+        icon: join(dirname(cli), "web-ui", process.platform === "win32" ? "icon.ico" : "icon-512.png"),
         webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
       });
       window.once("ready-to-show", () => window.show());

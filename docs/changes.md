@@ -1,5 +1,14 @@
 # 修改记录
 
+## 1.16.76（2026-10-09）
+
+- 从 README Logo 生成独立的榫卯 L 应用图标，提供多尺寸 PNG 与 Windows ICO。
+- Linux 桌面安装包安装 16–512 像素的菜单图标；桌面窗口、Web favicon 和 PWA 使用新图标。
+- Windows 桌面打包时嵌入 EXE 图标；便携包附带 `create-shortcuts.cmd`，用于解压后创建带图标的桌面快捷方式。
+- Windows 图标资源编辑使用构建依赖 `rcedit`；版本同步更新至 1.16.76。
+
+验证：Linux 桌面包构建通过，包内 9 种菜单图标与窗口/Web 图标校验通过；Windows ICO 尺寸、脚本语法及版本一致性检查通过。Windows 打包与快捷方式运行待 Windows x64 实测。
+
 ## 1.16.75（2026-10-09）
 
 - 生成以榫卯和木工角尺为灵感的 luban Logo，保存至 `assets/luban-logo.png`。

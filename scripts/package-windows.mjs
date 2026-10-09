@@ -1,4 +1,5 @@
 /** Build self-contained Windows x64 CLI and Desktop zip packages. */
+import rcedit from "rcedit";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -49,7 +50,7 @@ function copyRuntime(payload, kind) {
   run(`Smoke test ${kind} runtime`, join(payload, "node.exe"), [join(app, "dist", "cli.js"), "--version"], payload, true);
 }
 
-function packageVariant(kind) {
+async function packageVariant(kind) {
   const output = join(root, "release");
   const stageRoot = join(output, ".stage");
   const folder = `luban-${kind}-${version}-win-x64`;
@@ -57,6 +58,10 @@ function packageVariant(kind) {
   rmSync(payload, { recursive: true, force: true });
   mkdirSync(payload, { recursive: true });
   copyRuntime(payload, kind);
+  copyFileSync(join(root, "assets", "luban.ico"), join(payload, "luban.ico"));
+  for (const name of ["create-shortcuts.cmd", "create-shortcuts.ps1"]) {
+    copyFileSync(join(root, "packaging", "windows", name), join(payload, name));
+  }
   copyFileSync(join(root, "packaging", "windows", "luban.cmd"), join(payload, "luban.cmd"));
   if (kind === "desktop") {
     const electronSource = join(root, "node_modules", "electron", "dist");
@@ -64,6 +69,11 @@ function packageVariant(kind) {
       throw new Error("Electron runtime missing; run npm ci before package:windows:desktop");
     }
     cpSync(electronSource, join(payload, "electron"), { recursive: true });
+    await rcedit(join(payload, "electron", "electron.exe"), {
+      icon: join(payload, "luban.ico"),
+      "version-string": { ProductName: "luban Desktop", FileDescription: "luban Desktop" },
+      "product-version": version,
+    });
     cpSync(join(root, "apps", "desktop"), join(payload, "desktop"), { recursive: true });
     copyFileSync(join(root, "packaging", "windows", "luban-desktop.cmd"), join(payload, "luban-desktop.cmd"));
   }
@@ -73,6 +83,7 @@ function packageVariant(kind) {
     kind === "cli"
       ? "Run luban.cmd from this folder, or add this folder to PATH."
       : "Run luban-desktop.cmd to open the graphical workspace. luban.cmd is also included.",
+    "Run create-shortcuts.cmd to create desktop shortcuts with the luban icon.",
     "Node.js is bundled. Configuration is read from %USERPROFILE%\\.luban\\config.json.",
     "",
   ].join("\r\n"));
@@ -84,5 +95,5 @@ function packageVariant(kind) {
 }
 
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")]);
-if (selection === "all" || selection === "cli") packageVariant("cli");
-if (selection === "all" || selection === "desktop") packageVariant("desktop");
+if (selection === "all" || selection === "cli") await packageVariant("cli");
+if (selection === "all" || selection === "desktop") await packageVariant("desktop");

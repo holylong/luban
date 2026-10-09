@@ -58,11 +58,15 @@ function packageVariant(kind) {
       copyFileSync(join(root, "packaging", "linux", "luban-desktop"), launcher);
       chmodSync(launcher, 0o755);
       const applications = join(stage, "usr", "share", "applications");
-      const icons = join(stage, "usr", "share", "icons", "hicolor", "scalable", "apps");
+      const icons = join(stage, "usr", "share", "icons", "hicolor");
       mkdirSync(applications, { recursive: true });
       mkdirSync(icons, { recursive: true });
       copyFileSync(join(root, "packaging", "linux", "luban.desktop"), join(applications, "luban-desktop.desktop"));
-      copyFileSync(join(root, "assets", "luban.svg"), join(icons, "luban.svg"));
+      for (const size of [16, 24, 32, 48, 64, 128, 192, 256, 512]) {
+        const directory = join(icons, `${size}x${size}`, "apps");
+        mkdirSync(directory, { recursive: true });
+        copyFileSync(join(root, "assets", `luban-${size}.png`), join(directory, "luban.png"));
+      }
     }
 
     const metadata = join(stage, "DEBIAN");

@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "1.16.75",
+  "version": "1.16.76",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -47,6 +47,7 @@
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.7",
     "electron": "44.4.5",
+    "rcedit": "4.0.1",
     "react-dom": "19.1.9",
     "tsx": "4.20.6",
     "vite": "7.3.6",
