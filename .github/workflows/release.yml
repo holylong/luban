@@ -74,8 +74,26 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git notes --ref=release-status add -m "GitHub Release ${GITHUB_REF_NAME} published with CLI and Desktop packages" "$GITHUB_SHA"
-          git push origin refs/notes/release-status
+          # The Linux and Windows jobs publish concurrently and both check out a
+          # shallow clone that carries no notes refs, so a bare `push` is rejected
+          # as non-fast-forward whenever the other job records first. Re-fetch the
+          # remote notes tip and rebuild our note on top of it, so the push is a
+          # fast-forward; retry to cover the fetch/push race itself.
+          note="GitHub Release ${GITHUB_REF_NAME} published with CLI and Desktop packages"
+          set +e
+          pushed=0
+          for attempt in 1 2 3 4 5; do
+            git fetch --no-tags origin +refs/notes/release-status:refs/notes/release-status
+            git notes --ref=release-status add -f -m "$note" "$GITHUB_SHA"
+            if git push origin refs/notes/release-status; then
+              pushed=1
+              break
+            fi
+            echo "notes push rejected (attempt ${attempt}/5); re-fetching and retrying"
+            sleep 5
+          done
+          set -e
+          test "$pushed" = "1"
 
   windows:
     runs-on: windows-2022

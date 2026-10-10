@@ -50,6 +50,8 @@ export interface MeshPeer {
   port: number;
   udpPort: number;
   capabilities: string[];
+  /** Luban product/build version advertised by the peer; empty until it answers. */
+  version: string;
   lastSeen: number;
   note: string;
   online: boolean;
@@ -376,6 +378,9 @@ export class MeshRuntime {
       port: this.config.mesh.port,
       udp_port: this.config.mesh.udpPort,
       capabilities: this.config.mesh.capabilities,
+      // Advertised so peers can spot version skew. Signed together with the rest
+      // of the announce below, so a spoofed version fails verification.
+      version: VERSION,
     };
     if (this.config.mesh.token) info.auth = signObject(info, this.config.mesh.token);
     return info;
@@ -408,6 +413,9 @@ export class MeshRuntime {
       port: Number(info.port || existing?.port || 0),
       udpPort: Number(info.udp_port || existing?.udpPort || 0),
       capabilities: Array.isArray(info.capabilities) ? info.capabilities.map(String) : existing?.capabilities || [],
+      // Older builds never announce a version; keep whatever we already know
+      // rather than downgrading a known peer back to "unknown".
+      version: String(info.version || existing?.version || ""),
       lastSeen: now(),
       note: existing?.note || "",
       online: true,
@@ -445,6 +453,10 @@ export class MeshRuntime {
             inFlight -= 1;
             if (message.expect_reply === false || socket.destroyed) return;
             reply.reply_to ??= String(message.id || "");
+            // Stamp the answering node's version on every reply so the caller
+            // learns it from any RPC, not just from LAN discovery. Cheap, and it
+            // keeps cross-subnet contacts (which never see an announce) informed.
+            reply.node_version ??= VERSION;
             socket.write(encodeFrame(reply));
           });
       }
@@ -860,6 +872,9 @@ export class MeshRuntime {
       port: contact.port,
       udpPort: contact.udpPort,
       capabilities: current?.capabilities || [],
+      // A stored contact carries no version; never clobber one learned from a
+      // discovery announce or a handshake.
+      version: current?.version || "",
       lastSeen: current?.lastSeen || 0,
       note: contact.note,
       online: current?.online || false,
@@ -898,6 +913,12 @@ export class MeshRuntime {
     if (reply.ok === false) throw new Error(String(reply.error || `${peerName} rejected ${type}`));
     peer.lastSeen = now();
     peer.online = true;
+    // Older peers omit node_version; keep what discovery or an earlier reply taught us.
+    const learned = String(reply.node_version || "");
+    if (learned && peer.version !== learned) {
+      peer.version = learned;
+      this.emit({ type: "peer", peer, discovered: false });
+    }
     return reply;
   }
 

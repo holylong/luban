@@ -758,7 +758,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
     tools.push(
       {
         name: "mesh_get_peers",
-        description: "List LAN luban peers, their addresses, capabilities, and current reachability.",
+        description: "List LAN luban peers, their addresses, capabilities, versions, and current reachability.",
         risk: "read",
         parameters: schema({}),
         async execute() {
@@ -768,6 +768,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
             udp_port: peer.udpPort,
             online: peer.online,
             capabilities: peer.capabilities,
+            version: peer.version || "unknown",
             note: peer.note,
           })), null, 2);
         },
@@ -916,6 +917,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
             address: `${peer.host}:${peer.port}`,
             online: Date.now() / 1000 - (peer.last_seen || 0) < 25,
             capabilities: peer.capabilities || [],
+            version: (peer as { version?: string }).version || "unknown",
           })), null, 2);
         },
       },

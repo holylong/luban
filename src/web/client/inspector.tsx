@@ -110,6 +110,7 @@ export function Inspector({ store }: { store: WorkbenchStore }): React.ReactElem
               <span className={`dot ${item.online ? "online" : "offline"}`} />
               <span className="name" title={`${item.host}:${item.port}`}>{item.name}</span>
               <span className="state">{item.online ? "在线" : relativeTime(item.last_seen) || "离线"}</span>
+              {item.version && item.version !== "unknown" && <span className="muted">v{item.version}</span>}
             </div>
           ))}
         </div>

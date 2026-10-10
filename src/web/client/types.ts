@@ -79,6 +79,8 @@ export interface PeerView {
   last_seen: number;
   note: string;
   online: boolean;
+  /** Peer luban version; "unknown" until the peer answers nodeInfo. */
+  version: string;
 }
 
 export interface InboxMessage {

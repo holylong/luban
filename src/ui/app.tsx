@@ -1725,7 +1725,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       await meshAction(value, "mesh_get_peers", "known LAN peers", async () => {
         const peers = runtime.peers();
         if (!peers.length) return "No peers discovered yet. Use `/add-contact name host port` for cross-subnet peers.";
-        return ["### Mesh peers", ...peers.map((peer) => `- ${peer.online ? "●" : "○"} **${peer.name}** — ${peer.host}:${peer.port}${peer.capabilities.length ? ` — ${peer.capabilities.join(", ")}` : ""}${peer.note ? ` — ${peer.note}` : ""}`)].join("\n");
+        return ["### Mesh peers", ...peers.map((peer) => `- ${peer.online ? "●" : "○"} **${peer.name}** — ${peer.host}:${peer.port}${peer.capabilities.length ? ` — ${peer.capabilities.join(", ")}` : ""}${peer.version ? ` — v${peer.version}` : ""}${peer.note ? ` — ${peer.note}` : ""}`)].join("\n");
       });
       return;
     }

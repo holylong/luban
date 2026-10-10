@@ -148,6 +148,8 @@ describe("LubanWebServer", () => {
       expect(contact.body.ok).toBe(true);
       const peers = await jsonRequest(`${base}api/peers`);
       expect(peers.body).toEqual(expect.arrayContaining([expect.objectContaining({ name: "peer-one", port: 9999, online: false })]));
+      // Every peer carries a version string; peers that never answered nodeInfo report "unknown".
+      for (const peer of peers.body as Array<{ version?: unknown }>) expect(typeof peer.version).toBe("string");
 
       const submitted = await jsonRequest(`${base}api/jobs`, {
         method: "POST", headers: { "content-type": "application/json" },

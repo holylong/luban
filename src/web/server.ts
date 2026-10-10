@@ -350,6 +350,7 @@ export class LubanWebServer {
         port: peer.port,
         udp_port: peer.udpPort,
         capabilities: peer.capabilities,
+        version: peer.version || "unknown",
         last_seen: peer.lastSeen,
         note: peer.note,
         online: peer.online,
