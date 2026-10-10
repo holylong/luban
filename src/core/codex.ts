@@ -54,7 +54,8 @@ export class CodexClient {
         "--output-schema", schema, "--output-last-message", output,
         "-c", 'forced_login_method="chatgpt"', "-C", this.config.workspace];
       if (this.config.model.model !== "default") args.push("--model", this.config.model.model);
-      if (this.config.model.reasoningEffort) args.push("-c", `model_reasoning_effort="${this.config.model.reasoningEffort}"`);
+      const effort = options?.reasoningEffort ?? (options?.enableThinking === false ? "low" : this.config.model.reasoningEffort);
+      if (effort) args.push("-c", `model_reasoning_effort="${effort}"`);
       args.push("-");
       const command = process.env.LUBAN_CODEX_BIN || "codex";
       const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {

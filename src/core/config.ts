@@ -349,6 +349,7 @@ function collectModels(raw: JsonObject): ModelRef[] {
       const apiRaw = text(perModel.api, perModel.type, providerApi).toLowerCase();
       const api = apiRaw === "anthropic" ? "anthropic" : apiRaw === "responses" ? "responses" : apiRaw === "codex" ? "codex" : "openai";
       const headers = { ...providerHeaders, ...headerMap(perModel.headers) };
+      const thinkingControl = text(perModel.thinking_control, perModel.thinkingControl, provider.thinking_control, provider.thinkingControl);
       const modelId = `${providerName}/${model.id}`.toLowerCase();
       const visionDefault = /vision|gpt-4o|gpt-4\.1|claude.*(sonnet|opus)|gemini.*(pro|flash)|qwen.*vl/i.test(`${providerName} ${model.id}`);
       result.push({
@@ -359,6 +360,10 @@ function collectModels(raw: JsonObject): ModelRef[] {
         baseUrl,
         apiKey,
         api,
+        ...(["qwen", "thinking", "reasoning-effort", "adaptive", "budget", "none"].includes(thinkingControl)
+          ? { thinkingControl: thinkingControl as ModelRef["thinkingControl"] } : {}),
+        ...(codexEffort(perModel.reasoning_effort ?? provider.reasoning_effort)
+          ? { reasoningEffort: codexEffort(perModel.reasoning_effort ?? provider.reasoning_effort) } : {}),
         ...(Object.keys(headers).length ? { headers } : {}),
         capabilities: {
           vision: caps.vision !== undefined ? caps.vision === true : visionDefault,

@@ -1303,6 +1303,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       const inbox = new AgentInbox(sessionRef.current, () => save(nextMessages));
       inboxRef.current = inbox;
       const result = await runnerRef.current.run(nextMessages, runMode, controller.signal, handleEvent, approveTool, () => save(nextMessages), inbox, askUser);
+      sessionRef.current.performance = result.metrics;
       setMessages([...result.messages]);
       setExecutionLog((current) => toolHistory(result.messages, sessionRef.current.edits).map((entry) => ({
         ...entry,
@@ -1320,6 +1321,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         steps: result.steps,
         modelCalls: result.modelCalls,
         elapsedMs: result.elapsedMs,
+        metrics: result.metrics,
       });
       setNotice(result.ok
         ? `Completed in ${result.steps} step${result.steps === 1 ? "" : "s"}`

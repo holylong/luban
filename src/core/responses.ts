@@ -1,7 +1,8 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
 import { finalizeCompletion, MAX_OUTPUT_TOKENS } from "./openai.js";
-import type { CompletionResult, DeltaHandler, NoticeHandler } from "./openai.js";
+import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
+import { modelThinkingFields } from "./model-controls.js";
 import { parseModelEvent, sseData } from "./sse.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
 import { describeModelError } from "./model-errors.js";
@@ -131,23 +132,26 @@ export class ResponsesClient {
     signal: AbortSignal,
     onDelta?: DeltaHandler,
     onNotice?: NoticeHandler,
+    options?: ModelRequestOptions,
   ): Promise<CompletionResult> {
     const converted = await responsesInput(messages, this.config.workspace);
     const body = JSON.stringify({
       model: this.config.model.model,
       ...(converted.instructions ? { instructions: converted.instructions } : {}),
       input: converted.input,
-      max_output_tokens: Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS),
+      max_output_tokens: Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS),
+      ...modelThinkingFields(this.config, options, Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS)),
       ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
       stream: true,
       store: false,
       ...(tools.length ? { tools: responsesTools(tools), tool_choice: "auto" } : {}),
     });
-    const retries = this.config.maxRetries ?? 3;
+    const retries = options?.maxRetries ?? this.config.maxRetries ?? 3;
+    const timeoutMs = options?.timeoutMs ?? this.config.timeoutMs;
     for (let attempt = 0; ; attempt += 1) {
       signal.throwIfAborted();
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(new Error(`model timed out after ${this.config.timeoutMs / 1000}s`)), this.config.timeoutMs);
+      const timeout = setTimeout(() => controller.abort(new Error(`model timed out after ${timeoutMs / 1000}s`)), timeoutMs);
       const abort = () => controller.abort(signal.reason ?? new Error("aborted"));
       signal.addEventListener("abort", abort, { once: true });
       let response: Response | undefined;
@@ -180,7 +184,7 @@ export class ResponsesClient {
           if (!response.body) throw new Error("model returned an empty stream");
           // Do not retry after streaming starts: callbacks may already have rendered output.
           clearTimeout(timeout);
-          return await this.consumeStream(response.body, onDelta, controller, onNotice, signal);
+          return await this.consumeStream(response.body, onDelta, controller, onNotice, signal, options?.thinkingTimeoutMs);
         }
       } catch (error) {
         if (signal.aborted || response?.ok || attempt >= retries) throw error;
@@ -212,7 +216,7 @@ export class ResponsesClient {
       { input: Number(usage.input_tokens || 0), output: Number(usage.output_tokens || 0) });
   }
 
-  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, signal?: AbortSignal): Promise<CompletionResult> {
+  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, signal?: AbortSignal, idleOverrideMs?: number): Promise<CompletionResult> {
     let content = "";
     const argBuffers = new Map<string, { name: string; arguments: string; order: number }>();
     let order = 0;
@@ -221,7 +225,7 @@ export class ResponsesClient {
     let finished = false;
     let incomplete = false;
 
-    const idleTimeout = this.config.thinkingTimeoutMs ?? Math.max(this.config.timeoutMs, 600_000);
+    const idleTimeout = idleOverrideMs ?? this.config.thinkingTimeoutMs ?? Math.max(this.config.timeoutMs, 600_000);
     const idleAbort = () => {
       onNotice?.(`模型已 ${idleTimeout / 1000}s 没有任何输出，中断本次请求`);
       controller.abort(new Error(`model stream idle timeout after ${idleTimeout / 1000}s`));

@@ -185,3 +185,17 @@ describe("shell exit codes", () => {
     await expect(tools.get("bash")!.execute({ command: "sleep 5", timeout: 1 }, signal)).rejects.toThrow(/timed out/);
   });
 });
+
+it("includes refreshed diagnostics in edit results without losing the inline diff", async () => {
+  const { tools, workspace, signal } = await setup();
+  await writeFile(join(workspace, "tsconfig.json"), '{"compilerOptions":{"strict":true,"noLib":true}}');
+  try {
+    const broken = await tools.get("write_file")!.execute({ path: "src/a.ts", content: 'export const answer: number = "bad";\n' }, signal);
+    expect(broken).toMatch(/^Edited src\/a.ts/);
+    expect(broken).toContain('2322');
+    expect(broken).toContain('export const answer: number = "bad";');
+    const fixed = await tools.get("edit_file")!.execute({ path: "src/a.ts", old_text: '"bad"', new_text: "42" }, signal);
+    expect(fixed).toContain("Diagnostics: no errors reported");
+    expect(fixed).toContain("+1 -1");
+  } finally { for (const tool of tools.values()) tool.close?.(); }
+});

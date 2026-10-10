@@ -250,11 +250,12 @@ async function queryLsp(
 /** Code intelligence: TS/JS language service, configured LSP servers, then text fallback. */
 export function codeIntelligenceTool(workspace: string, config?: LubanConfig): ToolDefinition {
   const lsp = config ? new LspManager(config) : undefined;
+  const projects = new Map<string, { signature: string; service: import("typescript").LanguageService; state: { signal: AbortSignal; revision: number } }>();
   return {
     name: "code_intelligence",
     description: "Query definitions, references, symbols, or diagnostics. TypeScript/JavaScript use the TS language service; configured LSP servers (pyright/gopls/rust-analyzer/…) answer other languages; otherwise keyword matching applies. Positions are 1-based lines and UTF-16 columns. Use scope_glob to narrow monorepos. Use diagnostics after edits.",
     risk: "read",
-    close: () => lsp?.close(),
+    close: () => { lsp?.close(); for (const project of projects.values()) project.service.dispose(); projects.clear(); },
     parameters: {
       type: "object", additionalProperties: false, required: ["path", "operation"],
       properties: {
@@ -372,25 +373,46 @@ export function codeIntelligenceTool(workspace: string, config?: LubanConfig): T
       }
       const files = [...new Set([...project.fileNames.filter(allowed), ...referencedFiles, file])];
       if (files.length > 2000) throw new Error("code intelligence project exceeds 2000 source files; use a narrower tsconfig");
-      let loadedBytes = 0;
-      const snapshots = new Map<string, import("typescript").IScriptSnapshot | undefined>();
-      const service = ts.createLanguageService({
-        getCompilationSettings: () => options, getScriptFileNames: () => files, getScriptVersion: () => "0",
-        getScriptSnapshot(path) {
-          if (snapshots.has(path)) return snapshots.get(path);
-          const text = read(path);
-          loadedBytes += text?.length ?? 0;
-          if (loadedBytes > 32_000_000) throw new Error("code intelligence source budget exceeds 32 MB");
-          const snapshot = text === undefined ? undefined : ts.ScriptSnapshot.fromString(text);
-          snapshots.set(path, snapshot);
-          return snapshot;
-        },
-        getCurrentDirectory: () => resolve(workspace), getDefaultLibFileName: ts.getDefaultLibFilePath,
-        fileExists: host.fileExists, readFile: read, readDirectory: (path, extensions, excludes, includes, depth) => [...host.readDirectory(path, extensions ?? [], excludes, includes ?? ["**/*"], depth)],
-        directoryExists: (path) => allowed(path) && ts.sys.directoryExists(path),
-        getDirectories: (path) => allowed(path) ? ts.sys.getDirectories(path).filter((name) => allowed(join(path, name))) : [],
-        getCancellationToken: () => ({ isCancellationRequested: () => signal.aborted, throwIfCancellationRequested: () => signal.throwIfAborted() }),
-      });
+      const key = configFile ?? dirname(file);
+      const signature = JSON.stringify({ options, files });
+      let cached = projects.get(key);
+      if (cached && cached.signature !== signature) { cached.service.dispose(); projects.delete(key); cached = undefined; }
+      if (!cached) {
+        const state = { signal, revision: 0 };
+        const version = (path: string): string => {
+          if (!allowed(path)) return "missing";
+          try { const info = statSync(path, { bigint: true }); return `${info.mtimeNs}:${info.ctimeNs}:${info.size}`; } catch { return "missing"; }
+        };
+        let loadedBytes = 0;
+        const snapshots = new Map<string, { version: string; snapshot: import("typescript").IScriptSnapshot | undefined; bytes: number }>();
+        const service = ts.createLanguageService({
+          getCompilationSettings: () => options, getScriptFileNames: () => files, getScriptVersion: version,
+          getProjectVersion: () => String(state.revision),
+          getScriptSnapshot(path) {
+            const current = version(path);
+            const previous = snapshots.get(path);
+            if (previous?.version === current) return previous.snapshot;
+            const text = read(path);
+            loadedBytes += (text?.length ?? 0) - (previous?.bytes ?? 0);
+            if (loadedBytes > 32_000_000) throw new Error("code intelligence source budget exceeds 32 MB");
+            const snapshot = text === undefined ? undefined : ts.ScriptSnapshot.fromString(text);
+            snapshots.set(path, { version: current, snapshot, bytes: text?.length ?? 0 });
+            return snapshot;
+          },
+          getCurrentDirectory: () => resolve(workspace), getDefaultLibFileName: ts.getDefaultLibFilePath,
+          fileExists: host.fileExists, readFile: read, readDirectory: (path, extensions, excludes, includes, depth) => [...host.readDirectory(path, extensions ?? [], excludes, includes ?? ["**/*"], depth)],
+          directoryExists: (path) => allowed(path) && ts.sys.directoryExists(path),
+          getDirectories: (path) => allowed(path) ? ts.sys.getDirectories(path).filter((name) => allowed(join(path, name))) : [],
+          getCancellationToken: () => ({ isCancellationRequested: () => state.signal.aborted, throwIfCancellationRequested: () => state.signal.throwIfAborted() }),
+        });
+        cached = { signature, service, state };
+        projects.set(key, cached);
+        if (projects.size > 4) { const oldest = projects.keys().next().value!; projects.get(oldest)!.service.dispose(); projects.delete(oldest); }
+      }
+      projects.delete(key); projects.set(key, cached);
+      cached.state.signal = signal;
+      cached.state.revision += 1;
+      const service = cached.service;
       try {
         const source = service.getProgram()?.getSourceFile(file);
         if (!source) throw new Error("file could not be loaded (missing, outside workspace, or exceeds 2 MB)");
@@ -428,7 +450,7 @@ export function codeIntelligenceTool(workspace: string, config?: LubanConfig): T
         if (Date.now() - started > timeoutMs) throw new Error(`code intelligence timed out after ${timeoutMs}ms`);
         return JSON.stringify({ operation: args.operation, engine: "typescript", config: configFile ? relative(resolve(workspace), configFile) : null,
           total: results.length, truncated: results.length > maxResults, results: results.slice(0, maxResults) });
-      } finally { service.dispose(); clearTimeout(timer); }
+      } finally { clearTimeout(timer); }
       } catch (error) {
         clearTimeout(timer);
         throw error;

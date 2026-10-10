@@ -25,3 +25,9 @@ describe("run outcome line", () => {
     expect(note.lines).toBe(3);
   });
 });
+
+it("displays timing totals without treating parallel tool durations as wall time", () => {
+  const note = outcomeNote({ status: "completed", text: "", metrics: { modelMs: 1200, toolMs: 2400, approvalMs: 300, compactions: 2, requests: [] } });
+  expect(note.text).toContain("模型 1.2s · 工具累计 2.4s · 审批 0.3s · 压缩 2 次");
+  expect(note.lines).toBe(2);
+});

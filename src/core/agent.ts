@@ -9,7 +9,7 @@ import { AnthropicClient } from "./anthropic.js";
 import { ResponsesClient } from "./responses.js";
 import { CodexClient } from "./codex.js";
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
-import { clipContextText, compactMessages, estimateMessagesTokens } from "./context.js";
+import { clipContextText, compactForRequest, compactMessages, estimateMessagesTokens } from "./context.js";
 import { isContextOverflowError, isModelTimeoutError } from "./model-errors.js";
 import { parseToolArguments } from "./json-args.js";
 import { repairToolHistory } from "./history.js";
@@ -29,6 +29,7 @@ import type {
   LubanConfig,
   PendingInput,
   RunResult,
+  RunMetrics,
   ToolCall,
   ToolDefinition,
 } from "./types.js";
@@ -102,8 +103,9 @@ export type DecisionEngine = "model" | "kev";
 const PROMPT_HEADER = `You are luban, a production coding agent working directly in the user's workspace.
 
 Work rules:
-1. Inspect relevant files before editing. For TypeScript/JavaScript use code_intelligence to resolve definitions/references and check diagnostics after changes. For other languages use the project's toolchain; call code_intelligence when its language server or text fallback answers a specific unresolved question. Follow AGENTS.md or CLAUDE.md instructions when present.
+1. Inspect relevant files before editing. Use code_intelligence to resolve definitions/references when needed. File edit tools include TypeScript/JavaScript and configured LSP diagnostics in their results; do not call diagnostics again unless unavailable or another change requires it. Use the project's checks for broader verification. Follow AGENTS.md or CLAUDE.md instructions when present.
 2. Use tools to perform requested work; do not merely describe what you would do. When independent files or inspections are ready, issue their tool calls together in one response; the runtime executes writes in order. Do not wait for one independent write before starting the next. After a check passes, run another check only for a concrete uncovered requirement or a change made since that check.
+2a. Use read_files to inspect independent files in one response. Independent bash inspections/checks may set independent: true to run together; keep commands with shared writes or ordering dependencies sequential.
 3. Keep changes scoped. Never commit, publish, or contact people unless explicitly requested.
 3a. When the user explicitly asks to commit and push code to the configured Git remote, call git_publish directly with a concise commit message. It checks the repository, commits changes if needed, and pushes in one tool call. Do not create a plan or split this routine request into separate status/add/commit/push calls. If the user asked for additional code changes or checks, complete those first.`;
 
@@ -192,11 +194,12 @@ function lastUserQuestion(messages: ChatMessage[]): string {
 }
 
 function currentTurnHasToolError(messages: ChatMessage[]): boolean {
-  let lastUser = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]!.role === "user" && messages[index]!.name !== TRUNCATION_MARKER) { lastUser = index; break; }
+    const message = messages[index]!;
+    if (message.role === "user" || message.role === "assistant") break;
+    if (message.role === "tool" && String(message.content).startsWith("TOOL ERROR:")) return true;
   }
-  return messages.slice(lastUser + 1).some((message) => message.role === "tool" && String(message.content).startsWith("TOOL ERROR:"));
+  return false;
 }
 
 /** Conservative fast path: any request that also asks for coding work keeps full thinking. */
@@ -267,6 +270,15 @@ export class AgentRunner {
 
   constructor(readonly config: LubanConfig, client?: ModelClient, mesh?: MeshRuntime, private readonly depth = 0) {
     this.tools = createTools(config, mesh);
+    this.tools.set("read_files", {
+      name: "read_files", risk: "read", description: "Read up to 8 independent text files in one request. Each file uses read_file and its normal path permissions and scoped instructions; results have separate execution records.",
+      parameters: { type: "object", additionalProperties: false, required: ["files"], properties: {
+        files: { type: "array", minItems: 1, maxItems: 8, items: { type: "object", additionalProperties: false, required: ["path"], properties: {
+          path: { type: "string" }, offset: { type: "integer", minimum: 1 }, limit: { type: "integer", minimum: 1, maximum: 4000 },
+        } } },
+      } },
+      async execute() { throw new Error("read_files requires 1-8 file entries with string paths and optional integer offset/limit"); },
+    });
     this.outputs = new ToolOutputStore(config.home);
     const outputTool = this.outputs.tool();
     this.tools.set(outputTool.name, outputTool);
@@ -465,7 +477,9 @@ export class AgentRunner {
     try {
       repairToolHistory(messages);
       await persist();
-      return await this.runLoop(messages, mode, controller.signal, onEvent, approve, persist);
+      const metrics: RunMetrics = { modelMs: 0, toolMs: 0, approvalMs: 0, compactions: 0, requests: [] };
+      const result = await this.runLoop(messages, mode, controller.signal, onEvent, approve, persist, metrics);
+      return { ...result, metrics };
     } finally {
       try {
         await this.inbox?.close();
@@ -488,6 +502,7 @@ export class AgentRunner {
     onEvent: (event: AgentEvent) => void,
     approve: ApproveTool,
     persist: () => Promise<void>,
+    metrics: RunMetrics,
   ): Promise<RunResult> {
     signal.throwIfAborted();
     for (const tool of planTools(messages)) this.tools.set(tool.name, tool);
@@ -543,17 +558,26 @@ export class AgentRunner {
         modelCalls += 1;
         onEvent({ type: "model-call", index: modelCalls });
         let receivedOutput = false;
+        const requestStarted = Date.now();
+        let firstOutputMs: number | undefined;
+        let requestOk = false;
         try {
-          return await this.client.complete(callMessages, callTools, callSignal, (text, kind) => {
-            if (text) receivedOutput = true;
+          const response = await this.client.complete(callMessages, callTools, callSignal, (text, kind) => {
+            if (text) { receivedOutput = true; firstOutputMs ??= Date.now() - requestStarted; }
             onDelta?.(text, kind);
           }, (text) => {
             if (!isModelTimeoutError(text) && !text.startsWith("模型连接在输出中途中断")) {
               onEvent({ type: "status", text });
             }
           }, options);
+          requestOk = true;
+          return response;
         } catch (error) {
           if (callSignal.aborted || receivedOutput || !isModelTimeoutError(error) || attempt >= silentRetries) throw error;
+        } finally {
+          const elapsedMs = Date.now() - requestStarted;
+          metrics.modelMs += elapsedMs;
+          metrics.requests.push({ index: modelCalls, purpose: mainRequest ? "task" : String(callMessages[0]?.content).startsWith("Compress prior") ? "compaction" : "handoff", elapsedMs, firstOutputMs, ok: requestOk });
         }
       }
     };
@@ -591,9 +615,10 @@ export class AgentRunner {
         ? this.config.maxTokens : Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS);
       const inputBudget = (this.config.contextWindow ?? 128_000)
         - Math.max(this.config.contextReserve ?? 16_384, outputReserve) - schemaTokens;
-      const compacted = compactMessages(messages, inputBudget, this.config.maxHistoryMessages ?? 80);
+      const compacted = compactForRequest(messages, inputBudget, this.config.maxHistoryMessages ?? 80);
       if (compacted.messages !== messages) {
-        if (this.config.semanticCompaction !== false && estimateMessagesTokens(compacted.messages) <= inputBudget) {
+        metrics.compactions += 1;
+        if (compacted.removed > 0 && this.config.semanticCompaction !== false && estimateMessagesTokens(compacted.messages) <= inputBudget) {
           const summary = compacted.messages.find((message) => message.role === "system" && String(message.content).startsWith("[luban context summary]"));
           if (summary?.content) {
             try {
@@ -704,7 +729,23 @@ export class AgentRunner {
       }
       signal.throwIfAborted();
       const ids = new Set<string>();
-      const toolCalls = completion.toolCalls.map((original) => {
+      const expanded = completion.toolCalls.flatMap((call) => {
+        if (call.function.name !== "read_files") return [call];
+        try {
+          const args = parseToolArguments(call.function.arguments);
+          if (!args || typeof args !== "object" || Array.isArray(args)) return [call];
+          const record = args as Record<string, unknown>;
+          const entries = record.files;
+          if (this.config.permissions?.deny.some(rule => permissionRuleMatches(rule, this.tools.get("read_files")!, record))) return [call];
+          if (!Array.isArray(entries) || entries.length < 1 || entries.length > 8) return [call];
+          if (!entries.every(entry => entry && typeof entry === "object" && !Array.isArray(entry)
+            && typeof entry.path === "string" && Object.keys(entry).every(key => ["path", "offset", "limit"].includes(key))
+            && (entry.offset === undefined || Number.isInteger(entry.offset) && entry.offset >= 1)
+            && (entry.limit === undefined || Number.isInteger(entry.limit) && entry.limit >= 1 && entry.limit <= 4000))) return [call];
+          return entries.map((entry, index) => ({ ...call, id: `${call.id}-${index + 1}`, function: { name: "read_file", arguments: JSON.stringify(entry) } }));
+        } catch { return [call]; }
+      });
+      const toolCalls = expanded.map((original) => {
         const call = normalizeToolCall(original, this.tools);
         const id = call.id && !ids.has(call.id) ? call.id : `call-${randomUUID()}`;
         ids.add(id);
@@ -755,18 +796,15 @@ export class AgentRunner {
         return { ok: false, text: lastText || "Repeated tool-call loop", steps: totalSteps, messages, stopReason: "loop", modelCalls, elapsedMs: Date.now() - runStartedAt };
       }
 
-      // A tool call is prepared, dispatched, then settled. Only dispatch is
-      // parallel: preparation mutates the transcript (scoped instructions,
-      // approval trust) and settling emits ordered events and archives output,
-      // so both must stay sequential. Concurrent reads used to be serialized
-      // here purely because they shared one function.
+      // Gates and transcript mutations remain ordered; completion events are live.
       interface PreparedCall {
         id: string;
         name: string;
         ok: boolean;
         output: string;
         parallel: boolean;
-        started: number;
+        elapsedMs?: number;
+        result?: ChatMessage;
         run?: () => Promise<string>;
       }
       const prepared: PreparedCall[] = [];
@@ -791,7 +829,6 @@ export class AgentRunner {
           output = `TOOL ERROR: unknown tool ${name}`;
         }
         onEvent({ type: "tool-start", id, name, args });
-        const started = Date.now();
         if (ok && tool) {
           try {
             signal.throwIfAborted();
@@ -811,23 +848,26 @@ export class AgentRunner {
               // only Esc released it, so a task left alone looked like it was
               // "working" while it was really waiting for a keypress.
               const timeoutSeconds = this.config.approvalTimeoutSeconds ?? 600;
-              decision = await new Promise<Approval>((resolveApproval, reject) => {
-                const abort = () => reject(signal.reason ?? new Error("aborted"));
-                signal.addEventListener("abort", abort, { once: true });
-                const timer = timeoutSeconds > 0
-                  ? setTimeout(() => {
-                    reject(new Error(`permission prompt for ${tool.name} timed out after ${timeoutSeconds}s with no answer; the tool was not executed`));
-                  }, timeoutSeconds * 1000)
-                  : undefined;
-                timer?.unref?.();
-                Promise.resolve().then(() => {
-                  signal.throwIfAborted();
-                  return approve(tool, args);
-                }).then(resolveApproval, reject).finally(() => {
-                  if (timer) clearTimeout(timer);
-                  signal.removeEventListener("abort", abort);
+              const approvalStarted = Date.now();
+              try {
+                decision = await new Promise<Approval>((resolveApproval, reject) => {
+                  const abort = () => reject(signal.reason ?? new Error("aborted"));
+                  signal.addEventListener("abort", abort, { once: true });
+                  const timer = timeoutSeconds > 0
+                    ? setTimeout(() => {
+                      reject(new Error(`permission prompt for ${tool.name} timed out after ${timeoutSeconds}s with no answer; the tool was not executed`));
+                    }, timeoutSeconds * 1000)
+                    : undefined;
+                  timer?.unref?.();
+                  Promise.resolve().then(() => {
+                    signal.throwIfAborted();
+                    return approve(tool, args);
+                  }).then(resolveApproval, reject).finally(() => {
+                    if (timer) clearTimeout(timer);
+                    signal.removeEventListener("abort", abort);
+                  });
                 });
-              });
+              } finally { metrics.approvalMs += Date.now() - approvalStarted; }
             }
             signal.throwIfAborted();
             if (decision === "deny") throw new Error("permission denied by user");
@@ -853,17 +893,17 @@ export class AgentRunner {
           }
         }
         prepared.push({
-          id, name, ok, output, started,
-          // Only read-only tools run concurrently: they never prompt, so there
-          // is at most one approval on screen, and they cannot observe each
-          // other's writes.
-          parallel: Boolean(run) && tool?.parallelSafe === true && tool.risk === "read",
+          id, name, ok, output,
+          // Approval remains sequential. Only safe reads and explicitly
+          // independent shell commands may overlap during execution.
+          parallel: Boolean(run) && ((tool?.parallelSafe === true && tool.risk === "read") || (name === "bash" && args.independent === true)),
           ...(run ? { run } : {}),
         });
       };
 
       const settleCall = async (item: PreparedCall): Promise<ChatMessage> => {
         const { id, name, ok } = item;
+        metrics.toolMs += item.elapsedMs ?? 0;
         let { output } = item;
         const editPreview = ok && ["write_file", "edit_file", "apply_patch"].includes(name) && output.startsWith("Edited ") ? output : undefined;
         try {
@@ -879,7 +919,7 @@ export class AgentRunner {
           id,
           name,
           ok,
-          elapsedMs: Date.now() - item.started,
+          elapsedMs: item.elapsedMs ?? 0,
           preview: output.slice(0, 4000),
           editPreview,
         });
@@ -887,16 +927,19 @@ export class AgentRunner {
       };
 
       // Prepare sequentially (gates, approval, scoped instructions), then run
-      // consecutive read-only calls together, then settle in call order.
+      // independent calls concurrently; append results in original call order.
       for (const call of toolCalls) await prepareCall(call);
       const dispatch = async (item: PreparedCall): Promise<void> => {
-        if (!item.run) return;
+        if (!item.run) { item.result = await settleCall(item); return; }
+        const started = Date.now();
         try {
           item.output = await item.run();
         } catch (error) {
           item.ok = false;
           item.output = `TOOL ERROR: ${error instanceof Error ? error.message : String(error)}`;
         }
+        item.elapsedMs = Date.now() - started;
+        item.result = await settleCall(item);
       };
       for (let index = 0; index < prepared.length;) {
         const item = prepared[index]!;
@@ -908,6 +951,7 @@ export class AgentRunner {
           if (await this.inbox?.hasSteering()) {
             item.ok = false;
             item.output = "TOOL ERROR: Not executed: a new user instruction is pending; reconsider this call after reading it";
+            item.result = await settleCall(item);
             index += 1;
             continue;
           }
@@ -917,13 +961,23 @@ export class AgentRunner {
         }
         let end = index;
         while (end < prepared.length && prepared[end]!.parallel) end += 1;
-        await Promise.all(prepared.slice(index, end).map(dispatch));
+        let next = index;
+        await Promise.all(Array.from({ length: Math.min(4, end - index) }, async () => {
+          while (next < end) {
+            const pending = prepared[next++]!;
+            if (await this.inbox?.hasSteering()) {
+              pending.ok = false;
+              pending.output = "TOOL ERROR: Not executed: a new user instruction is pending; reconsider this call after reading it";
+              pending.result = await settleCall(pending);
+            } else await dispatch(pending);
+          }
+        }));
         index = end;
       }
       for (const item of prepared) {
-        messages.push(await settleCall(item));
-        await persist();
+        messages.push(item.result!);
       }
+      await persist();
       signal.throwIfAborted();
       if (repeatCount >= 3) {
         const lastResult = messages.at(-1)!;

@@ -97,6 +97,8 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
         return options.approve(tool, args, job.id);
       }, () => store.save(session), undefined,
       interactive && options.askUser ? (question, questionSignal) => options.askUser!(job.id, question, questionSignal) : undefined);
+      session.performance = result.metrics;
+      await store.save(session);
       return { ok: result.ok, text: result.text, stopReason: result.stopReason };
     } finally { runner.close(); }
   });

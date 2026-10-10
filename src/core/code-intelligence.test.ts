@@ -77,3 +77,22 @@ it("prefers LSP pull diagnostics and falls back without them", async () => {
     withoutLsp.close?.();
   }
 });
+
+it("refreshes cached dependency files, compiler options, and newly added modules", async () => {
+  const root = await fixture();
+  const tool = codeIntelligenceTool(root);
+  const run = async () => JSON.parse(await tool.execute({ path: "main.ts", operation: "diagnostics" }, new AbortController().signal));
+  try {
+    expect((await run()).results.some((r: { code: number }) => r.code === 2322)).toBe(true);
+    await writeFile(join(root, "lib.ts"), 'export function greet(name: string): number { return 1; }');
+    expect((await run()).results.some((r: { code: number }) => r.code === 2322)).toBe(false);
+    await writeFile(join(root, "main.ts"), 'const n: number = null;');
+    expect((await run()).results.some((r: { code: number }) => r.code === 2322)).toBe(true);
+    await writeFile(join(root, "tsconfig.json"), '{"compilerOptions":{"strict":false,"noLib":true},"include":["*.ts"]}');
+    expect((await run()).results.some((r: { code: number }) => r.code === 2322)).toBe(false);
+    await writeFile(join(root, "main.ts"), 'import { added } from "./added"; const n: number = added;');
+    expect((await run()).results.some((r: { code: number }) => r.code === 2307)).toBe(true);
+    await writeFile(join(root, "added.ts"), 'export const added = 1;');
+    expect((await run()).results.some((r: { code: number }) => r.code === 2307)).toBe(false);
+  } finally { tool.close?.(); }
+});

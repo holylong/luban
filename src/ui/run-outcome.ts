@@ -1,3 +1,4 @@
+import type { RunMetrics } from "../core/types.js";
 import type { TranscriptBlock } from "./transcript-blocks.js";
 
 export interface RunOutcome {
@@ -9,6 +10,7 @@ export interface RunOutcome {
   /** Model round-trips and wall time, so "it felt slow" becomes a number. */
   modelCalls?: number;
   elapsedMs?: number;
+  metrics?: RunMetrics;
 }
 
 const PRESENTATION: Record<RunOutcome["status"], { icon: string; label: string; tone: NonNullable<TranscriptBlock["tone"]> }> = {
@@ -28,11 +30,12 @@ const PRESENTATION: Record<RunOutcome["status"], { icon: string; label: string; 
 export function outcomeNote(outcome: RunOutcome): TranscriptBlock {
   const presentation = PRESENTATION[outcome.status];
   const detail = outcome.status === "failed" ? outcome.detail?.trim() : undefined;
+  const timing = outcome.metrics ? `\n模型 ${(outcome.metrics.modelMs / 1000).toFixed(1)}s · 工具累计 ${(outcome.metrics.toolMs / 1000).toFixed(1)}s · 审批 ${(outcome.metrics.approvalMs / 1000).toFixed(1)}s · 压缩 ${outcome.metrics.compactions} 次` : "";
   return {
     id: "outcome",
     kind: "note",
     tone: presentation.tone,
-    lines: detail ? 1 + detail.split("\n").length : 1,
-    text: `${presentation.icon} ${presentation.label}${outcome.steps === undefined ? "" : ` · ${outcome.steps} 步`}${outcome.modelCalls ? ` · ${outcome.modelCalls} 次模型调用` : ""}${outcome.elapsedMs ? ` · ${(outcome.elapsedMs / 1000).toFixed(1)}s` : ""}${detail ? `\n${detail}` : ""}`,
+    lines: 1 + (detail ? detail.split("\n").length : 0) + (timing ? 1 : 0),
+    text: `${presentation.icon} ${presentation.label}${outcome.steps === undefined ? "" : ` · ${outcome.steps} 步`}${outcome.modelCalls ? ` · ${outcome.modelCalls} 次模型调用` : ""}${outcome.elapsedMs ? ` · ${(outcome.elapsedMs / 1000).toFixed(1)}s` : ""}${timing}${detail ? `\n${detail}` : ""}`,
   };
 }

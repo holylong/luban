@@ -61,7 +61,7 @@ describe("OpenAiClient", () => {
     expect(requestBody?.stream_options).toEqual({ include_usage: true });
   });
 
-  it("sends enable_thinking only for Qwen or an explicit thinking setting", async () => {
+  it("uses each model's native thinking switch without sending Qwen fields to DeepSeek", async () => {
     const bodies: Record<string, unknown>[] = [];
     server = createServer((request, response) => {
       const chunks: Buffer[] = [];
@@ -82,8 +82,6 @@ describe("OpenAiClient", () => {
     const run = (config: LubanConfig, thinking = true) =>
       new OpenAiClient(config).complete([{ role: "user", content: "hi" }], [], new AbortController().signal, undefined, undefined, { enableThinking: thinking });
 
-    // DeepSeek on the same gateway must not be told to think: enable_thinking
-    // there turns on heavy reasoning that can eat the whole output budget.
     await run(configFor("opencode-go/deepseek-v4.1-flash", "deepseek-v4.1-flash"));
     await run(configFor("qwen-local/qwen3.8-flash", "qwen3.8-flash"));
     const forced = configFor("opencode-go/deepseek-v4.1-flash", "deepseek-v4.1-flash");
@@ -92,7 +90,11 @@ describe("OpenAiClient", () => {
 
     expect(bodies[0]).not.toHaveProperty("chat_template_kwargs");
     expect(bodies[1]?.chat_template_kwargs).toEqual({ enable_thinking: true });
-    expect(bodies[2]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+    expect(bodies[2]).not.toHaveProperty("chat_template_kwargs");
+    expect(bodies[0]?.thinking).toEqual({ type: "enabled" });
+    expect(bodies[2]?.thinking).toEqual({ type: "enabled" });
+    await run(forced, false);
+    expect(bodies[3]?.thinking).toEqual({ type: "disabled" });
   });
 
   it("retries a transient rate limit response", async () => {

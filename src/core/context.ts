@@ -13,6 +13,12 @@ export function estimateMessagesTokens(messages: ChatMessage[]): number {
   return messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
 }
 
+/** Message count limits the retained tail only once the request needs compaction. */
+export function compactForRequest(messages: ChatMessage[], inputBudget: number, maxMessages = 80): { messages: ChatMessage[]; removed: number } {
+  if (estimateMessagesTokens(messages) <= inputBudget * 0.8) return { messages, removed: 0 };
+  return compactMessages(messages, Math.floor(inputBudget * 0.6), maxMessages);
+}
+
 /** Keep both the command preamble and the error/summary commonly found at the end. */
 export function clipContextText(text: string, limit: number): string {
   if (text.length <= limit) return text;

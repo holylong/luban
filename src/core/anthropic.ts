@@ -1,7 +1,8 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
 import { finalizeCompletion, MAX_OUTPUT_TOKENS } from "./openai.js";
-import type { CompletionResult, DeltaHandler, NoticeHandler } from "./openai.js";
+import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
+import { modelThinkingFields } from "./model-controls.js";
 
 import { parseModelEvent, sseData, validateCompletion } from "./sse.js";
 import { parseToolArguments } from "./json-args.js";
@@ -76,18 +77,22 @@ async function delay(ms: number, signal: AbortSignal): Promise<void> {
 export class AnthropicClient {
   constructor(private readonly config: LubanConfig) {}
 
-  async complete(messages: ChatMessage[], tools: Array<Record<string, unknown>>, signal: AbortSignal, onDelta?: DeltaHandler, onNotice?: NoticeHandler): Promise<CompletionResult> {
+  async complete(messages: ChatMessage[], tools: Array<Record<string, unknown>>, signal: AbortSignal, onDelta?: DeltaHandler, onNotice?: NoticeHandler, options?: ModelRequestOptions): Promise<CompletionResult> {
     const converted = await anthropicMessages(messages, this.config.workspace);
     const anthropicTools = tools.map((entry) => {
       const fn = entry.function as JsonObject;
       return { name: fn.name, description: fn.description, input_schema: fn.parameters };
     });
-    const retries = this.config.maxRetries ?? 3;
+    const retries = options?.maxRetries ?? this.config.maxRetries ?? 3;
+    const timeoutMs = options?.timeoutMs ?? this.config.timeoutMs;
+    const maxTokens = Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS);
+    const thinkingFields = modelThinkingFields(this.config, options, maxTokens);
+    const thinkingType = (thinkingFields.thinking as { type?: string } | undefined)?.type;
     for (let attempt = 0; ; attempt += 1) {
       signal.throwIfAborted();
       const controller = new AbortController();
       const abort = () => controller.abort(signal.reason ?? new Error("aborted"));
-      const timer = setTimeout(() => controller.abort(new Error(`model timed out after ${this.config.timeoutMs / 1_000}s`)), this.config.timeoutMs);
+      const timer = setTimeout(() => controller.abort(new Error(`model timed out after ${timeoutMs / 1_000}s`)), timeoutMs);
       signal.addEventListener("abort", abort, { once: true });
       try {
         const response = await fetch(endpoint(this.config.model.baseUrl), {
@@ -102,8 +107,9 @@ export class AnthropicClient {
             model: this.config.model.model,
             system: converted.system,
             messages: converted.messages,
-            max_tokens: Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS),
-            ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
+            max_tokens: maxTokens,
+            ...thinkingFields,
+            ...(this.config.model.capabilities?.temperature === false || thinkingType === "enabled" || thinkingType === "adaptive" ? {} : { temperature: this.config.temperature }),
             stream: true,
             ...(anthropicTools.length ? { tools: anthropicTools } : {}),
           }),
@@ -122,7 +128,7 @@ export class AnthropicClient {
         if ((response.headers.get("content-type") || "").includes("text/event-stream")) {
           if (!response.body) throw new Error("model returned an empty stream");
           clearTimeout(timer);
-          return await this.consumeStream(response.body, onDelta, controller, onNotice, signal);
+          return await this.consumeStream(response.body, onDelta, controller, onNotice, signal, options?.thinkingTimeoutMs);
         }
         const data = await response.json() as JsonObject;
         const blocks = Array.isArray(data.content) ? data.content as JsonObject[] : [];
@@ -146,7 +152,7 @@ export class AnthropicClient {
     }
   }
 
-  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, signal?: AbortSignal): Promise<CompletionResult> {
+  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, signal?: AbortSignal, idleOverrideMs?: number): Promise<CompletionResult> {
     const toolSlots = new Map<number, ToolCall>();
     let finished = false;
     let finishReason: unknown;
@@ -154,7 +160,7 @@ export class AnthropicClient {
     let reasoning = "";
     let input = 0;
     let output = 0;
-    const idleTimeout = this.config.thinkingTimeoutMs ?? Math.max(this.config.timeoutMs, 600_000);
+    const idleTimeout = idleOverrideMs ?? this.config.thinkingTimeoutMs ?? Math.max(this.config.timeoutMs, 600_000);
     const idleAbort = () => {
       onNotice?.(`模型已 ${idleTimeout / 1000}s 没有任何输出，中断本次请求`);
       controller.abort(new Error(`model stream idle timeout after ${idleTimeout / 1000}s`));

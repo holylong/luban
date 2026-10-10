@@ -663,7 +663,7 @@ Following the guidelines, I should answer naturally.
       },
     };
     const runnerConfig = config(workspace);
-    runnerConfig.contextWindow = 8_192;
+    runnerConfig.contextWindow = 16_384;
     runnerConfig.contextReserve = 2_048;
     runnerConfig.semanticCompaction = true;
     const runner = new AgentRunner(runnerConfig, client);

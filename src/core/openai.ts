@@ -3,6 +3,7 @@ import { resolveImageParts } from "./vision.js";
 import { parseModelEvent, sseData, validateCompletion, type CompletionCheck } from "./sse.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
 import { describeModelError } from "./model-errors.js";
+import { modelThinkingFields } from "./model-controls.js";
 
 /**
  * Ceiling for one response's output, matching OpenCode's default. A larger cap
@@ -56,6 +57,7 @@ export type NoticeHandler = (text: string) => void;
 /** Per-request speed controls. The configured thinking budget remains available to other tasks. */
 export interface ModelRequestOptions {
   enableThinking?: boolean;
+  reasoningEffort?: LubanConfig["model"]["reasoningEffort"];
   maxTokens?: number;
   timeoutMs?: number;
   thinkingTimeoutMs?: number;
@@ -157,13 +159,7 @@ export class OpenAiClient {
     onNotice?: NoticeHandler,
     options?: ModelRequestOptions,
   ): Promise<CompletionResult> {
-    // `chat_template_kwargs.enable_thinking` is Qwen's switch. Sending it to a
-    // DeepSeek/GLM/Kimi model on the same gateway turns on heavy reasoning that
-    // can consume the entire output budget and still leave no answer, so only
-    // Qwen gets it automatically; any model gets it when `thinking` is set in
-    // the config, which is an explicit choice.
-    const thinking = options?.enableThinking ?? this.config.enableThinking;
-    const sendThinking = thinking !== undefined && (/qwen/iu.test(this.config.model.id) || this.config.enableThinking !== undefined);
+    const thinkingFields = modelThinkingFields(this.config, options, Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS));
     const body = JSON.stringify({
       model: this.config.model.model,
       messages: await openAiWireMessages(messages, this.config.workspace),
@@ -173,7 +169,7 @@ export class OpenAiClient {
       // OpenAI-compatible servers (e.g. vLLM) omit usage from the stream
       // unless explicitly requested; the TUI token counters depend on it.
       stream_options: { include_usage: true },
-      ...(sendThinking ? { chat_template_kwargs: { enable_thinking: thinking } } : {}),
+      ...thinkingFields,
       ...(tools.length ? { tools, tool_choice: "auto" } : {}),
     });
     const retries = options?.maxRetries ?? this.config.maxRetries ?? 3;

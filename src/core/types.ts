@@ -38,6 +38,8 @@ export interface ModelRef {
   api: "openai" | "anthropic" | "responses" | "codex";
   /** Codex CLI model_reasoning_effort override; absent uses Codex config.toml. */
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  /** Override automatic reasoning-control detection for compatible gateways. */
+  thinkingControl?: "qwen" | "thinking" | "reasoning-effort" | "adaptive" | "budget" | "none";
   /** Extra request headers a provider requires (e.g. OpenCode Go's session id). */
   headers?: Record<string, string>;
   capabilities: ModelCapabilities;
@@ -113,7 +115,7 @@ export interface LubanConfig {
   /** Tokens kept free for the next model response and provider overhead. */
   contextReserve: number;
   semanticCompaction: boolean;
-  /** Compact old exchanges before chat-template/message overhead grows without bound. */
+  /** Maximum retained messages when token pressure triggers compaction. */
   maxHistoryMessages?: number;
   /** Retries for transient model transport, rate-limit, and server errors. */
   maxRetries: number;
@@ -276,7 +278,18 @@ export type AgentEvent =
   | { type: "usage"; input: number; output: number }
   | { type: "error"; text: string };
 
+export interface RunMetrics {
+  /** Request latency includes retries inside the provider adapter. */
+  modelMs: number;
+  /** Sum of tool execution durations; parallel work can exceed wall time. */
+  toolMs: number;
+  approvalMs: number;
+  compactions: number;
+  requests: Array<{ index: number; purpose: "task" | "compaction" | "handoff"; elapsedMs: number; firstOutputMs?: number; ok: boolean }>;
+}
+
 export interface RunResult {
+  metrics?: RunMetrics;
   ok: boolean;
   text: string;
   steps: number;
@@ -302,6 +315,8 @@ export interface PendingInput {
 }
 
 export interface SessionRecord {
+  /** Timing breakdown of the last completed run, preserved with the session. */
+  performance?: RunMetrics;
   edits?: Array<{ id: string; name: string; preview: string }>;
   pendingInputs?: PendingInput[];
   id: string;

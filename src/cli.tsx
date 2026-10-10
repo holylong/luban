@@ -139,10 +139,15 @@ async function runHeadless(config: LubanConfig, prompt: string, mesh?: MeshRunti
       () => store.save(session),
     );
     session.messages = result.messages;
+    session.performance = result.metrics;
     await store.save(session);
     process.stdout.write(`${result.text.trim()}\n`);
     // Same accounting the TUI shows, so headless runs are measurable too.
     process.stderr.write(`[${result.steps} steps · ${result.modelCalls} model calls · ${(result.elapsedMs / 1000).toFixed(1)}s · ${(result.elapsedMs / Math.max(1, result.modelCalls) / 1000).toFixed(1)}s/call]\n`);
+    if (result.metrics) {
+      const timing = result.metrics;
+      process.stderr.write(`[model ${(timing.modelMs / 1000).toFixed(1)}s · tools cumulative ${(timing.toolMs / 1000).toFixed(1)}s · approval ${(timing.approvalMs / 1000).toFixed(1)}s · ${timing.compactions} compactions]\n`);
+    }
     return result.ok ? 0 : 1;
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

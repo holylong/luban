@@ -101,14 +101,17 @@ describe("self-hosted model output controls", () => {
         modes.push(options?.enableThinking ?? true);
         return modes.length === 1
           ? { content: "", toolCalls: [{ id: "fail", type: "function" as const, function: { name: "failing_read", arguments: "{}" } }], usage: { input: 1, output: 1 } }
-          : { content: "The tool failed; I need to diagnose it.", toolCalls: [], usage: { input: 1, output: 1 } };
+          : modes.length === 2
+            ? { content: "", toolCalls: [{ id: "recover", type: "function" as const, function: { name: "recovered_read", arguments: "{}" } }], usage: { input: 1, output: 1 } }
+            : { content: "Recovered.", toolCalls: [], usage: { input: 1, output: 1 } };
       },
     });
     runner.tools.set("failing_read", { name: "failing_read", description: "test failure", risk: "read", parameters: {}, async execute() { throw new Error("temporary failure"); } });
+    runner.tools.set("recovered_read", { name: "recovered_read", description: "recovery", risk: "read", parameters: {}, async execute() { return "success"; } });
     try {
       await runner.run([...initialMessages(workspace), { role: "user", content: "提交代码到服务器" }],
         "agent", new AbortController().signal, () => undefined, async () => "once");
-      expect(modes).toEqual([false, true]);
+      expect(modes).toEqual([false, true, false]);
     } finally { runner.close(); }
   });
 });

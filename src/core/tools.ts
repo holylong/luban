@@ -7,6 +7,7 @@ import fg from "fast-glob";
 import { terminateProcessTree } from "./process-tree.js";
 import { assessShellCommand, defaultSandboxSettings, wrapWithBackend } from "./sandbox.js";
 import { codeIntelligenceTool } from "./code-intelligence.js";
+import { languageOfPath } from "./lsp.js";
 import { resolveInside } from "./paths.js";
 import { LubanBackend } from "./backend.js";
 import { callMcpTool, listMcpTools, searchMcpTools } from "./mcp.js";
@@ -400,8 +401,20 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
   const workspace = config.workspace;
   const background = new BackgroundTasks();
   const checkpoints = new CheckpointStore(config);
+  const codeIntel = codeIntelligenceTool(workspace, config);
+  const editedFileResult = async (path: string, before: string, after: string, signal: AbortSignal): Promise<string> => {
+    const preview = editPreview(relative(workspace, path), before, after);
+    if (!/\.[cm]?[jt]sx?$/iu.test(path) && !Object.values(config.lspServers ?? {}).some(server => server.enabled && server.languages.includes(languageOfPath(path) ?? ""))) return preview;
+    try {
+      const diagnostics = JSON.parse(await codeIntel.execute({ path: relative(workspace, path), operation: "diagnostics", timeout_ms: 3000, max_results: 20 }, signal)) as { results: Array<{ category?: string; code?: string | number; line?: number; message?: string }> };
+      const errors = diagnostics.results.filter(item => item.category?.toLowerCase() === "error");
+      return `${preview}\nDiagnostics: ${errors.length ? errors.map(item => `${item.line ?? 1}: ${item.code ?? "error"} ${item.message ?? ""}`).join("\n").slice(0, 3000) : "no errors reported"}`;
+    } catch (error) {
+      return `${preview}\nDiagnostics unavailable: ${error instanceof Error ? error.message : String(error)}. Use the project's checks if needed.`;
+    }
+  };
   const tools: ToolDefinition[] = [
-    codeIntelligenceTool(workspace, config),
+    codeIntel,
     {
       name: "read_file",
       description: "Read a UTF-8 text file in the workspace, optionally by line range.",
@@ -501,13 +514,13 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       description: "Create or replace a UTF-8 file in the workspace.",
       risk: "write",
       parameters: schema({ path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
-      async execute(args) {
+      async execute(args, signal) {
         const path = await resolveInside(workspace, stringArg(args, "path"));
         const content = stringArg(args, "content", false);
         const before = await readFile(path, "utf8").catch(error => { if (error.code === "ENOENT") return ""; throw error; });
         await mkdir(resolve(path, ".."), { recursive: true });
         await writeFile(path, content, "utf8");
-        return editPreview(relative(workspace, path), before, content);
+        return editedFileResult(path, before, content, signal);
       },
     },
     {
@@ -515,7 +528,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       description: "Replace one exact occurrence in a UTF-8 file.",
       risk: "write",
       parameters: schema({ path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" } }, ["path", "old_text", "new_text"]),
-      async execute(args) {
+      async execute(args, signal) {
         const path = await resolveInside(workspace, stringArg(args, "path"));
         const oldText = stringArg(args, "old_text");
         const newText = stringArg(args, "new_text", false);
@@ -525,7 +538,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
         if (source.indexOf(oldText, first + oldText.length) >= 0) throw new Error("old_text is not unique; include more context");
         const updated = `${source.slice(0, first)}${newText}${source.slice(first + oldText.length)}`;
         await writeFile(path, updated, "utf8");
-        return editPreview(relative(workspace, path), source, updated);
+        return editedFileResult(path, source, updated, signal);
       },
     },
     {
@@ -537,6 +550,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
         command: { type: "string" },
         timeout: { type: "integer", minimum: 1, maximum: 600 },
         background: { type: "boolean", description: "Return a task id immediately" },
+        independent: { type: "boolean", description: "Run alongside other independent calls in this response. Set only for commands with no shared writes or ordering dependencies." },
         pty: { type: "boolean", description: "Run under a real PTY via script(1) so curses/progress output and tty detection work. Foreground only." },
       }, ["command"]),
       async execute(args, signal) {
@@ -587,7 +601,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
         const previews: string[] = [];
         for (const path of paths) {
           const after = await readFile(await resolveInside(workspace, path), "utf8").catch(error => { if (error.code === "ENOENT") return ""; throw error; });
-          previews.push(editPreview(path, before.get(path)!, after));
+          previews.push(await editedFileResult(await resolveInside(workspace, path), before.get(path)!, after, signal));
         }
         return previews.join("\n\n") + `\nApplied patch to ${files.length} file${files.length === 1 ? "" : "s"}`;
       },
