@@ -112,7 +112,7 @@ describe("AgentRunner", () => {
         if (++calls === 1) return {
           content: "", usage: { input: 1, output: 1 },
           toolCalls: [
-            { id: "shell", type: "function" as const, function: { name: "Bash", arguments: '{"command":"printf alias-ok","description":"check"}' } },
+            { id: "shell", type: "function" as const, function: { name: "Bash", arguments: JSON.stringify({ command: process.platform === "win32" ? "echo alias-ok" : "printf alias-ok", description: "check" }) } },
             { id: "files", type: "function" as const, function: { name: "Glob", arguments: '{"pattern":"*.txt"}' } },
           ],
         };

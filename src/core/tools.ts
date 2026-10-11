@@ -15,6 +15,7 @@ import { createKevTool } from "./kev.js";
 import { editPreview } from "./edit-preview.js";
 import type { MeshRuntime } from "./mesh/runtime.js";
 import type { LubanConfig, ToolDefinition } from "./types.js";
+import { guardTool } from "./tool-validation.js";
 
 const MAX_OUTPUT = 120_000;
 /**
@@ -99,17 +100,21 @@ interface BackgroundTask {
 class BackgroundTasks {
   private readonly tasks = new Map<string, BackgroundTask>();
 
-  adopt(command: string, child: ReturnType<typeof spawn>, output: CapturedOutput, startedAt: string): string {
+  adopt(command: string, child: ReturnType<typeof spawn>, output: CapturedOutput, startedAt: string, signal: AbortSignal): string {
     const task: BackgroundTask = {
       id: randomUUID(), command, status: "running", output, startedAt, child,
     };
     child.on("error", (error) => { task.output.chunks.push(Buffer.from("\n" + error.message, "utf8")); task.status = "failed"; });
+    const abort = () => { this.stop(task.id); };
     child.on("close", (code) => {
+      signal.removeEventListener("abort", abort);
       task.exitCode = code;
       if (task.status === "stopping") task.status = "stopped";
       else if (task.status === "running") task.status = code === 0 ? "done" : "failed";
     });
     this.tasks.set(task.id, task);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
     return task.id;
   }
 
@@ -310,7 +315,7 @@ async function runShell(workspace: string, command: string, signal: AbortSignal,
         adopted = true;
         clearTimeout(timer);
         signal.removeEventListener("abort", abort);
-        const id = background.adopt(command, child, backgroundOutput, startedAt);
+        const id = background.adopt(command, child, backgroundOutput, startedAt, signal);
         settled = true;
         resolvePromise("background task " + id + " started after " + AUTO_BACKGROUND_MS / 1000 + "s; use get_background_task with task_id " + id + " to inspect it, or stop_background_task to terminate it");
       }, AUTO_BACKGROUND_MS)
@@ -941,7 +946,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
     );
   }
 
-  return new Map(tools.map((tool) => [tool.name, tool]));
+  return new Map(tools.map((tool) => [tool.name, guardTool(tool)]));
 }
 
 export function openAiToolSchemas(tools: Map<string, ToolDefinition>): Array<Record<string, unknown>> {

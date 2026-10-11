@@ -22,6 +22,7 @@ import { ToolOutputStore } from "./tool-output.js";
 import { McpManager } from "./mcp.js";
 import type { MeshRuntime } from "./mesh/runtime.js";
 import { createTools, openAiToolSchemas } from "./tools.js";
+import { validateToolArguments } from "./tool-validation.js";
 import type {
   AgentEvent,
   AgentMode,
@@ -49,16 +50,20 @@ function normalizeToolCall(call: ToolCall, tools: Map<string, ToolDefinition>): 
   const name = folded.length === 1 ? folded[0]! : TOOL_ALIASES[requested.toLowerCase()];
   if (!name || !tools.has(name)) return call;
   let args = call.function.arguments;
-  if (["read_file", "write_file", "edit_file"].includes(name)) {
+  if (["read_file", "write_file", "edit_file", "bash"].includes(name)) {
     try {
       const parsed = parseToolArguments(args || "{}");
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const values = parsed as Record<string, unknown>;
+        if (name === "bash" && typeof values.description === "string") delete values.description;
         if (values.path === undefined && values.file_path !== undefined) values.path = values.file_path;
         if (name === "edit_file") {
           if (values.old_text === undefined && values.old_string !== undefined) values.old_text = values.old_string;
           if (values.new_text === undefined && values.new_string !== undefined) values.new_text = values.new_string;
+          delete values.old_string;
+          delete values.new_string;
         }
+        delete values.file_path;
         args = JSON.stringify(values);
       }
     } catch { /* Invalid JSON is reported by the normal tool-call validator. */ }
@@ -279,7 +284,7 @@ export class AgentRunner {
       : config.model.api === "responses" ? new ResponsesClient(config) : new OpenAiClient(config));
     if (depth < 2) {
       const runChild = async (instruction: string, maxSteps: number, signal: AbortSignal, readOnly: boolean, useWorktree: boolean, autoMerge: boolean, parentBudget: () => number): Promise<string> => {
-        const capped = Math.max(1, Math.min(maxSteps, parentBudget()));
+        const capped = Math.min(maxSteps, parentBudget());
         if (capped < 1) throw new Error("parent step budget exhausted; cannot delegate further subtasks");
         const childConfig: LubanConfig = {
           ...config,
@@ -287,6 +292,7 @@ export class AgentRunner {
           ...(readOnly ? { permissionMode: "ask" as const, permissions: { ...(config.permissions ?? { allow: [], deny: [] }), allow: [] } } : {}),
         };
         let worktree: string | undefined;
+        let discardWorktree = false;
         try {
           if (useWorktree && !readOnly) {
             if (await isGitRepo(config.workspace, signal)) {
@@ -306,24 +312,27 @@ export class AgentRunner {
             );
             let suffix = "";
             if (worktree) {
-              if (autoMerge) {
-                const merged = await autoMergeWorktree(config.workspace, worktree, signal)
-                  .catch((error) => `merge failed: ${error instanceof Error ? error.message : String(error)}`);
-                suffix = `\n\n[worktree: ${worktree}]\n${merged.slice(0, 4000)}`;
+              if (autoMerge && result.ok) {
+                const merged = await autoMergeWorktree(config.workspace, worktree, signal);
+                discardWorktree = /^merge: \d+ applied, 0 conflicted/u.test(merged);
+                suffix = `\n\n${merged}\n[worktree ${discardWorktree ? "merged; temporary directory will be removed" : `preserved for recovery: ${worktree}`}]`;
               } else {
                 const diff = await worktreeDiff(worktree, signal).catch((error) => `diff unavailable: ${error instanceof Error ? error.message : String(error)}`);
                 const applies = await checkDiffApplies(config.workspace, worktree, signal)
                   .then((text) => text)
                   .catch((error) => error instanceof Error ? error.message : String(error));
-                suffix = `\n\n[worktree: ${worktree}]\n${diff.slice(0, 8000)}\nMerge check: ${applies}`;
+                suffix = `\n\n[worktree preserved: ${worktree}; full files and diff remain available]\n${diff.slice(0, 8000)}\nMerge check: ${applies}`;
               }
             }
             return `Subagent ${result.ok ? "completed" : "stopped"} after ${result.steps} steps (budget ${capped}):\n${result.text}${suffix}`;
           } finally {
             child.close();
           }
+        } catch (error) {
+          if (worktree) throw new Error(`${error instanceof Error ? error.message : String(error)}\nWorktree preserved for recovery: ${worktree}`, { cause: error });
+          throw error;
         } finally {
-          if (worktree) await disposeWorktree(config.workspace, worktree, signal).catch(() => undefined);
+          if (worktree && discardWorktree) await disposeWorktree(config.workspace, worktree, signal).catch(() => undefined);
         }
       };
       this.tools.set("delegate_task", {
@@ -755,19 +764,16 @@ export class AgentRunner {
         return { ok: false, text: lastText || "Repeated tool-call loop", steps: totalSteps, messages, stopReason: "loop", modelCalls, elapsedMs: Date.now() - runStartedAt };
       }
 
-      // A tool call is prepared, dispatched, then settled. Only dispatch is
-      // parallel: preparation mutates the transcript (scoped instructions,
-      // approval trust) and settling emits ordered events and archives output,
-      // so both must stay sequential. Concurrent reads used to be serialized
-      // here purely because they shared one function.
+      // Prepare and commit each write before touching the next call. Read-only
+      // groups run concurrently, with stable result slots and serialized saves.
       interface PreparedCall {
         id: string;
         name: string;
         ok: boolean;
         output: string;
-        parallel: boolean;
         started: number;
         run?: () => Promise<string>;
+        slot?: ChatMessage;
       }
       const prepared: PreparedCall[] = [];
       const prepareCall = async (call: (typeof toolCalls)[number]): Promise<void> => {
@@ -795,6 +801,7 @@ export class AgentRunner {
         if (ok && tool) {
           try {
             signal.throwIfAborted();
+            validateToolArguments(tool, args);
             if (await this.inbox?.hasSteering()) throw new Error("Not executed: a new user instruction is pending; reconsider this call after reading it");
             if (mode === "ask" && tool.risk !== "read") throw new Error("ASK mode is read-only; switch to AGENT to execute this tool");
             let decision: Approval = "once";
@@ -854,10 +861,6 @@ export class AgentRunner {
         }
         prepared.push({
           id, name, ok, output, started,
-          // Only read-only tools run concurrently: they never prompt, so there
-          // is at most one approval on screen, and they cannot observe each
-          // other's writes.
-          parallel: Boolean(run) && tool?.parallelSafe === true && tool.risk === "read",
           ...(run ? { run } : {}),
         });
       };
@@ -865,7 +868,9 @@ export class AgentRunner {
       const settleCall = async (item: PreparedCall): Promise<ChatMessage> => {
         const { id, name, ok } = item;
         let { output } = item;
-        const editPreview = ok && ["write_file", "edit_file", "apply_patch"].includes(name) && output.startsWith("Edited ") ? output : undefined;
+        const editStart = ["write_file", "edit_file", "apply_patch", "delegate_task"].includes(name)
+          ? output.search(/^Edited .+ \(\+\d+ -\d+\)/mu) : -1;
+        const editPreview = ok && editStart >= 0 ? output.slice(editStart) : undefined;
         try {
           // Retries never re-execute tools: only this single capture runs, and a
           // failed archive preserves the original output for compaction.
@@ -874,6 +879,9 @@ export class AgentRunner {
           // Tool effects already happened. Preserve the result if archiving fails.
           onEvent({ type: "status", text: `Could not archive tool output: ${error instanceof Error ? error.message : String(error)}` });
         }
+        const message: ChatMessage = { role: "tool", name, tool_call_id: id, content: output, ...(editPreview ? { editPreview } : {}) };
+        if (item.slot) Object.assign(item.slot, message);
+        else messages.push(message);
         onEvent({
           type: "tool-end",
           id,
@@ -883,46 +891,52 @@ export class AgentRunner {
           preview: output.slice(0, 4000),
           editPreview,
         });
-        return { role: "tool", name, tool_call_id: id, content: output, ...(editPreview ? { editPreview } : {}) };
+        return message;
       };
 
-      // Prepare sequentially (gates, approval, scoped instructions), then run
-      // consecutive read-only calls together, then settle in call order.
-      for (const call of toolCalls) await prepareCall(call);
       const dispatch = async (item: PreparedCall): Promise<void> => {
         if (!item.run) return;
         try {
+          signal.throwIfAborted();
+          if (await this.inbox?.hasSteering()) throw new Error("Not executed: a new user instruction is pending; reconsider this call after reading it");
+          signal.throwIfAborted();
           item.output = await item.run();
         } catch (error) {
           item.ok = false;
           item.output = `TOOL ERROR: ${error instanceof Error ? error.message : String(error)}`;
         }
       };
-      for (let index = 0; index < prepared.length;) {
-        const item = prepared[index]!;
-        if (!item.parallel) {
-          // Steering is re-checked at dispatch time. Preparation now happens
-          // for the whole batch before anything runs, so without this a message
-          // that arrived while an earlier tool was executing would no longer
-          // stop the remaining sequential calls.
-          if (await this.inbox?.hasSteering()) {
-            item.ok = false;
-            item.output = "TOOL ERROR: Not executed: a new user instruction is pending; reconsider this call after reading it";
-            index += 1;
-            continue;
-          }
-          await dispatch(item);
-          index += 1;
-          continue;
+      let saves = Promise.resolve();
+      const completeCall = async (item: PreparedCall) => {
+        await dispatch(item);
+        await settleCall(item);
+        const saved = saves.catch(() => undefined).then(persist);
+        saves = saved;
+        await saved;
+      };
+      const canParallel = (call: ToolCall) => {
+        const tool = this.tools.get(call.function.name);
+        return tool?.parallelSafe === true && tool.risk === "read";
+      };
+      for (let index = 0; index < toolCalls.length;) {
+        let end = index + 1;
+        if (canParallel(toolCalls[index]!)) {
+          while (end < toolCalls.length && canParallel(toolCalls[end]!)) end++;
         }
-        let end = index;
-        while (end < prepared.length && prepared[end]!.parallel) end += 1;
-        await Promise.all(prepared.slice(index, end).map(dispatch));
+        const first = prepared.length;
+        for (const call of toolCalls.slice(index, end)) await prepareCall(call);
+        const group = prepared.slice(first);
+        for (const item of group) {
+          // A crash leaves an honest unknown status, never an invitation to
+          // replay effects. Completion replaces this slot in original order.
+          item.slot = { role: "tool", name: item.name, tool_call_id: item.id,
+            content: "TOOL ERROR: interrupted before a result was recorded. Execution status is unknown; inspect current state before retrying." };
+          messages.push(item.slot);
+        }
+        const settled = await Promise.allSettled(group.map(completeCall));
+        const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (failure) throw failure.reason;
         index = end;
-      }
-      for (const item of prepared) {
-        messages.push(await settleCall(item));
-        await persist();
       }
       signal.throwIfAborted();
       if (repeatCount >= 3) {

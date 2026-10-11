@@ -1,47 +1,47 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { resolveInside } from "./paths.js";
+import { terminateProcessTree } from "./process-tree.js";
+import { editPreview } from "./edit-preview.js";
 
-function runGit(workspace: string, args: string[], signal: AbortSignal, timeoutMs = 30_000): Promise<string> {
+function runGit(workspace: string, args: string[], signal: AbortSignal, timeoutMs = 30_000, input = ""): Promise<string> {
+  signal.throwIfAborted();
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("git", args, { cwd: workspace, env: process.env, windowsHide: true });
-    let output = "";
+    const child = spawn("git", ["--no-pager", ...args], { cwd: workspace, env: process.env, windowsHide: true, detached: process.platform !== "win32" });
+    const stdout: Buffer[] = [], stderr: Buffer[] = [];
+    let bytes = 0;
     let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        child.kill("SIGTERM");
-        reject(new Error(`git ${args[0]} timed out`));
-      }
-    }, timeoutMs);
-    const abort = () => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        child.kill("SIGTERM");
-        reject(signal.reason ?? new Error("aborted"));
-      }
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
-    child.stderr.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
-    child.on("error", (error) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        signal.removeEventListener("abort", abort);
-        reject(error);
-      }
-    });
-    child.on("close", (code) => {
+    const finish = (error?: unknown) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       signal.removeEventListener("abort", abort);
-      if (code) reject(new Error(`git ${args.join(" ")} failed: ${output.slice(0, 2000)}`));
-      else resolvePromise(output);
-    });
+      if (error) reject(error);
+      else resolvePromise(Buffer.concat(stdout).toString("utf8"));
+    };
+    const abort = () => { terminateProcessTree(child); finish(signal.reason ?? new Error("aborted")); };
+    const timer = setTimeout(() => { terminateProcessTree(child); finish(new Error(`git ${args[0]} timed out`)); }, timeoutMs);
+    signal.addEventListener("abort", abort, { once: true });
+    const capture = (sink: Buffer[], chunk: Buffer) => {
+      if (settled) return;
+      bytes += chunk.length;
+      if (bytes > 32 * 1024 * 1024) {
+        terminateProcessTree(child);
+        finish(new Error("git output exceeds 32 MB; worktree must be preserved"));
+      } else sink.push(chunk);
+    };
+    child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => capture(stderr, chunk));
+    child.on("error", finish);
+    child.on("close", (code, killedBy) => finish(code !== 0 || killedBy
+      ? new Error(`git ${args[0]} failed (${killedBy ?? code}): ${Buffer.concat(stderr).toString("utf8").slice(0, 2000)}`)
+      : undefined));
+    child.stdin.on("error", error => { if (input) finish(error); });
+    child.stdin.end(input);
+    if (signal.aborted) abort();
   });
 }
 
@@ -57,16 +57,21 @@ export async function isGitRepo(workspace: string, signal: AbortSignal): Promise
 /** Create a detached worktree at HEAD for isolated subtasks. Caller must dispose. */
 export async function createWorktree(workspace: string, signal: AbortSignal): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "luban-worktree-"));
-  // mkdtemp leaves an empty dir; git worktree needs a missing path.
-  await rm(dir, { recursive: true, force: true });
-  await runGit(workspace, ["worktree", "add", "--detach", dir, "HEAD"], signal);
+  try {
+    await runGit(workspace, ["worktree", "add", "--detach", dir, "HEAD"], signal);
+  } catch (error) {
+    // Only remove an empty failed allocation. A partially populated worktree
+    // stays available for recovery, and is identified in the error.
+    await rmdir(dir).catch(() => undefined);
+    throw new Error(`Could not create worktree at ${dir}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
   return dir;
 }
 
 export async function worktreeDiff(worktree: string, signal: AbortSignal): Promise<string> {
   try {
     const status = await runGit(worktree, ["status", "--short"], signal);
-    const diff = await runGit(worktree, ["diff", "--no-ext-diff", "--stat", "--patch", "--", "."], signal);
+    const diff = await runGit(worktree, ["diff", "--no-ext-diff", "--binary", "--stat", "HEAD", "--", "."], signal);
     return `STATUS\n${status.trim() || "(clean)"}\n\nDIFF\n${diff.trim() || "(no diff)"}`.slice(0, 60_000);
   } catch (error) {
     return `worktree diff unavailable: ${error instanceof Error ? error.message : String(error)}`;
@@ -75,56 +80,52 @@ export async function worktreeDiff(worktree: string, signal: AbortSignal): Promi
 
 /** Verify a worktree diff still applies cleanly onto the parent workspace. */
 export async function checkDiffApplies(workspace: string, worktree: string, signal: AbortSignal): Promise<string> {
-  const patch = await runGit(worktree, ["diff", "--no-ext-diff", "--patch", "--", "."], signal);
-  if (!patch.trim()) return "clean: no changes to merge";
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn("git", ["apply", "--check", "--whitespace=nowarn", "-"], { cwd: workspace, env: process.env, windowsHide: true });
-    let output = "";
-    child.stderr.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code) reject(new Error(`worktree changes conflict with workspace: ${output.slice(0, 2000) || `exit ${code}`}`));
-      else resolvePromise("applies cleanly: use apply_patch or git apply to merge the worktree diff");
-    });
-    child.stdin.end(patch);
-  });
+  const patch = await runGit(worktree, ["diff", "--no-ext-diff", "--binary", "HEAD", "--", "."], signal);
+  const untracked = (await runGit(worktree, ["ls-files", "--others", "--exclude-standard", "-z", "--", "."], signal)).split("\0").filter(Boolean);
+  if (!patch.trim() && !untracked.length) return "clean: no changes to merge";
+  if (patch.trim()) await runGit(workspace, ["apply", "--check", "--whitespace=nowarn", "-"], signal, 30_000, patch);
+  for (const file of untracked) {
+    const [parent, child] = await Promise.all([readOptional(workspace, file), readOptional(worktree, file)]);
+    if (parent && !parent.equals(child ?? Buffer.alloc(0))) throw new Error(`new worktree file conflicts with workspace: ${file}`);
+  }
+  return `applies cleanly: tracked changes can use git apply; ${untracked.length} untracked file(s) remain in the worktree and require copying separately`;
 }
 
 export async function disposeWorktree(workspace: string, worktree: string, signal: AbortSignal): Promise<void> {
+  const target = resolve(worktree);
+  const temporaryName = relative(resolve(tmpdir()), target);
+  if (!/^luban-worktree-[^/\\]+$/u.test(temporaryName)) throw new Error(`refusing to remove a worktree not created by luban: ${worktree}`);
   try {
-    await runGit(workspace, ["worktree", "remove", "--force", worktree], signal);
+    await runGit(workspace, ["worktree", "remove", "--force", target], signal);
   } catch {
-    await rm(worktree, { recursive: true, force: true }).catch(() => undefined);
+    await rm(target, { recursive: true, force: true }).catch(() => undefined);
     await runGit(workspace, ["worktree", "prune"], signal).catch(() => undefined);
   }
 }
 
-async function readOptional(root: string, file: string): Promise<string> {
+async function readOptional(root: string, file: string): Promise<Buffer | undefined> {
   try {
-    return await readFile(join(root, file), "utf8");
-  } catch {
-    return "";
+    const path = await resolveInside(root, file);
+    const info = await lstat(path);
+    if (!info.isFile()) throw new Error(`merge requires a regular file: ${file}`);
+    return await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
   }
 }
 
-function applyPatch(workspace: string, patch: string, signal: AbortSignal): Promise<boolean> {
-  return new Promise((resolvePromise) => {
-    const child = spawn("git", ["apply", "--whitespace=nowarn", "-"], { cwd: workspace, env: process.env, windowsHide: true });
-    const abort = () => {
-      child.kill("SIGTERM");
-      resolvePromise(false);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    child.on("error", () => {
-      signal.removeEventListener("abort", abort);
-      resolvePromise(false);
-    });
-    child.on("close", (code) => {
-      signal.removeEventListener("abort", abort);
-      resolvePromise(code === 0);
-    });
-    child.stdin.end(patch);
-  });
+async function applyPatch(workspace: string, patch: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    await runGit(workspace, ["apply", "--whitespace=nowarn", "-"], signal, 30_000, patch);
+    return true;
+  } catch (error) {
+    signal.throwIfAborted();
+    // Only an actual patch conflict is recoverable. Missing git, timeouts and
+    // IO errors must retain the entire worktree rather than claiming a merge.
+    if (error instanceof Error && /git apply failed \(1\)/u.test(error.message)) return false;
+    throw error;
+  }
 }
 
 /** Auto-merge a worktree back into its parent workspace.
@@ -132,60 +133,60 @@ function applyPatch(workspace: string, patch: string, signal: AbortSignal): Prom
  * `.luban/conflicts/<path>.parent` / `.worktree` copies and reported.
  * Never commits. */
 export async function autoMergeWorktree(workspace: string, worktree: string, signal: AbortSignal): Promise<string> {
-  const patch = await runGit(worktree, ["diff", "--no-ext-diff", "--patch", "--", "."], signal);
-  if (!patch.trim()) return "merge: worktree is clean, nothing to apply";
-  const changed = (await runGit(worktree, ["diff", "--no-ext-diff", "--name-only", "--", "."], signal))
-    .split("\n").map((line) => line.trim()).filter(Boolean);
+  signal.throwIfAborted();
+  const changed = (await runGit(worktree, ["diff", "--no-ext-diff", "--name-only", "-z", "HEAD", "--", "."], signal)).split("\0").filter(Boolean);
   const applied: string[] = [];
   const conflicted: string[] = [];
-  // git diff omits untracked files; merge those by copy with the same policy.
-  const untracked = (await runGit(worktree, ["status", "--porcelain", "--", "."], signal))
-    .split("\n").map((line) => line.trim()).filter((line) => line.startsWith("??"))
-    .map((line) => line.slice(2).trim().replace(/^"(.*)"$/, "$1")).filter(Boolean);
-  const { dirname } = await import("node:path");
+  const previews: string[] = [];
+  const untracked = (await runGit(worktree, ["ls-files", "--others", "--exclude-standard", "-z", "--", "."], signal)).split("\0").filter(Boolean);
+  const record = (file: string, before?: Buffer, after?: Buffer) => {
+    if (before?.includes(0) || after?.includes(0)) previews.push(`Changed binary file ${file} (${before?.length ?? 0} → ${after?.length ?? 0} bytes)`);
+    else previews.push(editPreview(file, before?.toString("utf8") ?? "", after?.toString("utf8") ?? ""));
+  };
+  const saveConflict = async (file: string, parent?: Buffer, child?: Buffer) => {
+    conflicted.push(file);
+    const safe = /^[\w.-]{1,80}$/u.test(file) ? file : `${basename(file).replace(/[^\w.-]/gu, "_").slice(0, 60)}-${createHash("sha256").update(file).digest("hex").slice(0, 16)}`;
+    for (const [suffix, content] of [["parent", parent], ["worktree", child]] as const) {
+      const path = await resolveInside(workspace, join(".luban", "conflicts", `${safe}.${suffix}`));
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, content ?? Buffer.alloc(0));
+    }
+  };
   for (const file of untracked) {
     signal.throwIfAborted();
-    if (file.includes("/")) await mkdir(join(workspace, dirname(file)), { recursive: true });
     const [parentContent, worktreeContent] = await Promise.all([
       readOptional(workspace, file),
       readOptional(worktree, file),
     ]);
-    if (!parentContent) {
-      await writeFile(join(workspace, file), worktreeContent);
+    if (worktreeContent === undefined) throw new Error(`worktree file disappeared during merge: ${file}`);
+    if (parentContent === undefined) {
+      const target = await resolveInside(workspace, file);
+      await mkdir(dirname(target), { recursive: true });
+      const info = await lstat(await resolveInside(worktree, file));
+      await writeFile(target, worktreeContent, { flag: "wx", mode: info.mode & 0o777 });
       applied.push(`${file} (new)`);
+      record(file, undefined, worktreeContent);
       continue;
     }
-    if (parentContent === worktreeContent) {
+    if (parentContent.equals(worktreeContent)) {
       applied.push(`${file} (identical)`);
       continue;
     }
-    conflicted.push(file);
-    const conflictsDir = join(workspace, ".luban", "conflicts");
-    await mkdir(conflictsDir, { recursive: true });
-    const safe = file.replace(/[/\\]/g, "__");
-    await writeFile(join(conflictsDir, `${safe}.parent`), parentContent);
-    await writeFile(join(conflictsDir, `${safe}.worktree`), worktreeContent);
+    await saveConflict(file, parentContent, worktreeContent);
   }
   for (const file of changed) {
     signal.throwIfAborted();
-    const filePatch = await runGit(worktree, ["diff", "--no-ext-diff", "--patch", "--", file], signal);
+    const [parentContent, worktreeContent] = await Promise.all([readOptional(workspace, file), readOptional(worktree, file)]);
+    const filePatch = await runGit(worktree, ["diff", "--no-ext-diff", "--binary", "HEAD", "--", file], signal);
     if (filePatch.trim() && await applyPatch(workspace, filePatch, signal)) {
       applied.push(file);
+      record(file, parentContent, await readOptional(workspace, file));
       continue;
     }
-    conflicted.push(file);
-    const conflictsDir = join(workspace, ".luban", "conflicts");
-    await mkdir(conflictsDir, { recursive: true });
-    const safe = file.replace(/[/\\]/g, "__");
-    const [parentContent, worktreeContent] = await Promise.all([
-      readOptional(workspace, file),
-      readOptional(worktree, file),
-    ]);
-    await writeFile(join(conflictsDir, `${safe}.parent`), parentContent);
-    await writeFile(join(conflictsDir, `${safe}.worktree`), worktreeContent);
+    await saveConflict(file, parentContent, worktreeContent);
   }
   const summary = [`merge: ${applied.length} applied, ${conflicted.length} conflicted`];
   if (applied.length) summary.push(`applied: ${applied.join(", ")}`);
   if (conflicted.length) summary.push(`conflicts saved under .luban/conflicts/ (*.parent = workspace, *.worktree = subtask): ${conflicted.join(", ")}`);
-  return summary.join("\n");
+  return [...summary, ...previews].join("\n\n");
 }
