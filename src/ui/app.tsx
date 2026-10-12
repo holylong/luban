@@ -1968,7 +1968,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     return () => { off(); if (jobEventRefreshRef.current) clearTimeout(jobEventRefreshRef.current); jobEventRefreshRef.current = null; };
   }, [mesh]);
 
-  useInput((character, key) => {
+  const handleInput: Parameters<typeof useInput>[0] = (character, key) => {
     if (questionRequest) {
       if (key.escape) { questionRequest.reject(new Error("question dismissed by user")); return; }
       const index = Number(character) - 1;
@@ -2072,8 +2072,11 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       if (dialog.type === "codex-effort") {
         const model = config.models.find((item) => item.id === dialog.modelId);
         const efforts = CODEX_EFFORTS.filter((item) => item.value !== "ultra" || model?.model !== "gpt-6-luna");
-        if (key.upArrow) setDialog({ ...dialog, index: (dialog.index - 1 + efforts.length) % efforts.length });
-        else if (key.downArrow) setDialog({ ...dialog, index: (dialog.index + 1) % efforts.length });
+        if (key.upArrow || key.downArrow) {
+          const delta = key.upArrow ? -1 : 1;
+          setDialog(current => current?.type === "codex-effort"
+            ? { ...current, index: (current.index + delta + efforts.length) % efforts.length } : current);
+        }
         else if (key.escape) setDialog({ type: "models", index: Math.max(0, config.models.findIndex((item) => item.id === dialog.modelId)) });
         else if (key.return) {
           const selected = efforts[dialog.index];
@@ -2226,7 +2229,13 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       if (match) setInput(input.replace(/@[\w./-]*$/u, `@${match} `));
       return;
     }
-  });
+  };
+  // Keep Ink subscribed while renders update the handler's current state.
+  const inputHandlerRef = useRef(handleInput);
+  inputHandlerRef.current = handleInput;
+  useInput(useCallback<Parameters<typeof useInput>[0]>((character, key) => {
+    inputHandlerRef.current(character, key);
+  }, []));
 
   const dialogNeedle = dialogQuery.trim().toLowerCase();
   const filterDialogRows = <T extends { title: string; detail: string }>(items: T[]): T[] =>

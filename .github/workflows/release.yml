@@ -14,7 +14,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+
   linux:
+    needs: verify
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -96,6 +109,7 @@ jobs:
           test "$pushed" = "1"
 
   windows:
+    needs: verify
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -153,10 +167,10 @@ jobs:
             gh release view $env:GITHUB_REF_NAME *> $null
             if ($LASTEXITCODE -eq 0) {
               gh release upload $env:GITHUB_REF_NAME $cli $desktop --clobber
-              $uploaded = $true
+              $uploaded = ($LASTEXITCODE -eq 0)
             } else {
               gh release create $env:GITHUB_REF_NAME $cli $desktop --verify-tag --title "luban $version" --notes-file windows-release-notes.md
-              $uploaded = $true
+              $uploaded = ($LASTEXITCODE -eq 0)
             }
             if ($uploaded) { break }
             Write-Host "release not published yet (attempt $attempt/5); retrying"

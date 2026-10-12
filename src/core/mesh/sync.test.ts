@@ -18,6 +18,31 @@ describe("mesh workspace sync", () => {
     expect(await readFile(join(destination, "src", "hello.txt"), "utf8")).toBe("hello mesh\n");
   });
 
+  it.each(["auto", "both", "dest_wins", "source_wins"] as const)("handles deletion of locally modified files with %s", async (policy) => {
+    const root = await mkdtemp(join(tmpdir(), "luban-sync-delete-"));
+    await applyTransfer(root, { files: [{ path: "shared.txt", data_b64: Buffer.from("base").toString("base64") }] });
+    await writeFile(join(root, "shared.txt"), "local changes");
+    const result = await applyTransfer(root, { delete: ["shared.txt"], conflict_policy: policy });
+    expect(result.conflicts).toEqual(["shared.txt"]);
+    if (policy === "source_wins") {
+      await expect(readFile(join(root, "shared.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(result.applied).toEqual(["shared.txt"]);
+    } else {
+      expect(await readFile(join(root, "shared.txt"), "utf8")).toBe("local changes");
+      expect(result.applied).toEqual([]);
+    }
+  });
+
+  it("deletes unchanged synchronized files but preserves files without a baseline", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-sync-delete-clean-"));
+    await applyTransfer(root, { files: [{ path: "clean.txt", data_b64: Buffer.from("base").toString("base64") }] });
+    await writeFile(join(root, "unknown.txt"), "keep");
+    const result = await applyTransfer(root, { delete: ["clean.txt", "unknown.txt", "absent.txt"] });
+    expect(result.applied).toEqual(["clean.txt"]);
+    expect(result.conflicts).toEqual(["unknown.txt"]);
+    expect(await readFile(join(root, "unknown.txt"), "utf8")).toBe("keep");
+  });
+
   it("rejects traversal and reserved metadata paths", async () => {
     const root = await mkdtemp(join(tmpdir(), "luban-sync-safe-"));
     await expect(safeWorkspacePath(root, "../secret")).rejects.toThrow(/escapes|invalid/u);

@@ -43,6 +43,15 @@ describe("cookies", () => {
 });
 
 describe("auth gate", () => {
+  it("rejects malformed cookies and still accepts a valid header", () => {
+    const gate = new AuthGate("s3cret");
+    for (const value of ["%", "%GG", "%E0%A4"]) {
+      expect(parseCookie(`luban_token=${value}`, "luban_token")).toBeUndefined();
+      expect(gate.check(request({ cookie: `luban_token=${value}` }), url())).toMatchObject({ ok: false, status: 401 });
+      expect(gate.check(request({ cookie: `luban_token=${value}`, "x-luban-token": "s3cret" }), url())).toMatchObject({ ok: true, source: "header" });
+    }
+  });
+
   it("is disabled without a token", () => {
     const gate = new AuthGate("");
     expect(gate.enabled).toBe(false);

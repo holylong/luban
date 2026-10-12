@@ -424,11 +424,20 @@ export async function applyTransfer(
   }
   for (const path of Array.isArray(transfer.delete) ? transfer.delete.map(String) : []) {
     const target = await safeWorkspacePath(root, path);
-    try {
-      await unlink(target);
-      applied.push(path);
+    let current: Buffer;
+    try { current = await readFile(target); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       delete state.fingerprints[path];
-    } catch { /* already absent */ }
+      continue;
+    }
+    const base = state.fingerprints[path];
+    if (base === undefined || sha256(current) !== base) {
+      conflicts.push(path);
+      if (policy !== "source_wins") continue;
+    }
+    await unlink(target);
+    applied.push(path);
+    delete state.fingerprints[path];
   }
   await saveState(root, state);
   return { applied, merged, conflicts };

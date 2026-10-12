@@ -139,6 +139,35 @@ describe("relay tunnel", () => {
     expect(cookie).toContain("HttpOnly");
   });
 
+  it("rejects malformed authentication cookies without a server error", async () => {
+    const response = await phone("/api/node", { headers: { cookie: "luban_token=%" } });
+    expect(response.status).toBe(401);
+  });
+
+  it("routes a dedicated token to its replacement node after reconnecting", async () => {
+    const accessToken = "dedicated-phone-token";
+    const options = { relayUrl, nodeToken: NODE_TOKEN, accessToken, localPort: node.port, name: "dedicated", version: VERSION, workspace: "/tmp/ws" };
+    const first = new TunnelClient(options);
+    const replacement = new TunnelClient(options);
+    await first.start();
+    try {
+      await waitFor(async () => (await phone(`/api/node?token=${accessToken}`)).status === 200);
+      first.stop();
+      await waitFor(async () => {
+        const response = await phone(`/relay/nodes?token=${accessToken}`);
+        const body = await response.json() as { nodes: Array<{ online: boolean }> };
+        return body.nodes[0]?.online === false;
+      });
+      await replacement.start();
+      await waitFor(async () => (await phone(`/api/node?token=${accessToken}`)).status === 200);
+      const login = await phone(`/login?token=${accessToken}`);
+      expect(login.headers.get("location")).toBe(`/m/?node=${replacement.nodeId}`);
+    } finally {
+      first.stop();
+      replacement.stop();
+    }
+  });
+
   it("never lets a node token be used as a phone token", async () => {
     const response = await phone(`/api/node?token=${NODE_TOKEN}`);
     expect(response.status).toBe(401);

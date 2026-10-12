@@ -241,8 +241,10 @@ export class LubanRelayServer {
   }
 
   private nodeForAccessToken(token: string | undefined): RelayNode | undefined {
-    if (!token) return undefined;
-    return [...this.nodes.values()].find(node => tokenMatches(node.accessToken, token));
+    if (!token || tokenMatches(this.accessToken, token)) return undefined;
+    return [...this.nodes.values()]
+      .filter(node => tokenMatches(node.accessToken, token))
+      .sort((left, right) => right.lastSeenAt - left.lastSeenAt || right.connectedAt - left.connectedAt)[0];
   }
 
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
