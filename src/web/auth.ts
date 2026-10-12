@@ -41,7 +41,8 @@ export function parseCookie(header: string | undefined, name: string): string | 
     const index = part.indexOf("=");
     if (index < 0) continue;
     if (part.slice(0, index).trim() !== name) continue;
-    return decodeURIComponent(part.slice(index + 1).trim());
+    try { return decodeURIComponent(part.slice(index + 1).trim()); }
+    catch { return undefined; }
   }
   return undefined;
 }
