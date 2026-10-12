@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "1.16.83",
+  "version": "1.16.84",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -36,6 +36,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json"
   },
   "dependencies": {
+    "ajv": "8.17.1",
     "commander": "14.0.3",
     "fast-glob": "3.3.3",
     "ink": "6.8.0",
