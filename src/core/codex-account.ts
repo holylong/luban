@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { codexInvocation } from "./codex-command.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -40,7 +41,7 @@ export interface CodexUsage {
 export async function codexAccountRequest<T>(method: string, params?: JsonObject, signal?: AbortSignal): Promise<T> {
   if (signal?.aborted) throw signal.reason ?? new Error("cancelled");
   return await new Promise<T>((resolve, reject) => {
-    const child = spawn(process.env.LUBAN_CODEX_BIN || "codex", ["app-server"], {
+    const child = spawn(...codexInvocation(["app-server"]), {
       stdio: ["pipe", "pipe", "pipe"],
     });
     child.stdout.setEncoding("utf8");
