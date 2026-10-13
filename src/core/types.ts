@@ -319,6 +319,8 @@ export interface SessionRecord {
   performance?: RunMetrics;
   edits?: Array<{ id: string; name: string; preview: string }>;
   pendingInputs?: PendingInput[];
+  /** Raw submitted composer inputs, including slash commands, in submission order. */
+  inputHistory?: string[];
   id: string;
   title: string;
   /**

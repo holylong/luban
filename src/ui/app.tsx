@@ -61,7 +61,7 @@ import { buildTranscript, estimateLines } from "./transcript-blocks.js";
 import { outcomeNote, type RunOutcome } from "./run-outcome.js";
 import { verificationHeadline, verificationLine, verificationSummary, visibleVerifications } from "./verification-view.js";
 import { workspaceDiff } from "../core/workspace-diff.js";
-import { historyFromMessages, pushInputHistory, recallDown, recallUp } from "./input-history.js";
+import { historyFromSession, pushInputHistory, recallDown, recallUp } from "./input-history.js";
 import { toAttachedImage } from "../core/vision.js";
 import { buildCopyText, osc52CopySequence, writeSystemClipboard } from "./clipboard.js";
 import { buildSessionMarkdown, collectExportedEdits, defaultExportFilename, expandExportPath, summarizeEdits } from "./session-export.js";
@@ -1477,7 +1477,11 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     const value = resolveCompletion(raw.trim(), commandIndex);
     if (!value) return;
     const rememberInput = () => {
-      setInputHistory((current) => pushInputHistory(current, value));
+      const record = sessionRef.current;
+      const history = pushInputHistory(historyFromSession(record), raw);
+      record.inputHistory = history;
+      setInputHistory(history);
+      void store.save(record).catch((error) => setNotice(`输入历史保存失败：${error instanceof Error ? error.message : String(error)}`));
       setHistoryIndex(null);
       draftBackupRef.current = "";
     };
@@ -1854,7 +1858,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           setMode(record.mode);
           setActiveMode(record.mode);
           setPendingInputs([...(record.pendingInputs ?? [])]);
-          setInputHistory(historyFromMessages(record.messages));
+          setInputHistory(historyFromSession(record));
           setHistoryIndex(null);
           draftBackupRef.current = "";
           const model = config.models.find((item) => item.id === record.model);
@@ -2117,7 +2121,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             setExecutionLog(toolHistory(record.messages, record.edits));
             setMode(record.mode);
             setPendingInputs([...(record.pendingInputs ?? [])]);
-            setInputHistory(historyFromMessages(record.messages));
+            setInputHistory(historyFromSession(record));
             setHistoryIndex(null);
             draftBackupRef.current = "";
             const model = config.models.find((item) => item.id === record.model);
@@ -2167,14 +2171,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     const commandOptions = commandMatches(input);
     const argumentOptions = argumentMatches(input);
     const completionCount = commandOptions.length || argumentOptions.length;
-    if (!dialog && !approval && !showHelp && completionCount && (key.upArrow || key.downArrow)
+    if (!dialog && !approval && !showHelp && historyIndex === null && completionCount && (key.upArrow || key.downArrow)
       && layoutInput(input, input.length, inputWidth, inputMaxRows).total === 1) {
       setCommandIndex((current) => (current + (key.upArrow ? -1 : 1) + completionCount) % completionCount);
       return;
     }
     if (!dialog && !approval && !showHelp && key.upArrow) {
-      // A multi-line value uses the arrows to move the cursor instead.
-      if (layoutInput(input, input.length, inputWidth, inputMaxRows).total > 1 || !inputHistory.length) return;
+      // Once recall starts, wrapped and multi-line entries remain navigable.
+      if ((historyIndex === null && layoutInput(input, input.length, inputWidth, inputMaxRows).total > 1) || !inputHistory.length) return;
       const recalled = recallUp(inputHistory, historyIndex, input, draftBackupRef.current);
       draftBackupRef.current = recalled.draft;
       setHistoryIndex(recalled.index);
@@ -2182,7 +2186,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       return;
     }
     if (!dialog && !approval && !showHelp && key.downArrow) {
-      if (layoutInput(input, input.length, inputWidth, inputMaxRows).total > 1 || historyIndex === null) return;
+      if (historyIndex === null) return;
       const recalled = recallDown(inputHistory, historyIndex, draftBackupRef.current);
       if (!recalled.input && recalled.index !== null) return;
       draftBackupRef.current = recalled.draft;
@@ -2476,6 +2480,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           <Text color={!dialog && !approval && !showHelp ? theme.accent : theme.dim}>{!dialog && !approval && !showHelp ? " ❯ " : " · "}</Text>
           <TextArea
             value={input}
+            historyActive={historyIndex !== null}
             onChange={(value) => { setInput(stripMouseReports(value)); setHistoryIndex(null); setCommandIndex(0); }}
             onSubmit={(value) => { void submit(value); }}
             focus={!dialog && !approval && !questionRequest && !showHelp}

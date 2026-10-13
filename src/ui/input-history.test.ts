@@ -28,6 +28,14 @@ describe("input history recall", () => {
     expect(state).toEqual({ index: null, input: "drafting", draft: "drafting" });
   });
 
+  it("retains every input beyond the previous history limits", () => {
+    const messages = Array.from({ length: 250 }, (_, index) => ({ role: "user" as const, content: `task ${index}` }));
+    const history = historyFromMessages(messages);
+    expect(history).toHaveLength(250);
+    expect(pushInputHistory(history, "/status")).toHaveLength(251);
+    expect(history[0]).toBe("task 0");
+  });
+
   it("seeds history from user messages for resumed sessions", () => {
     const seeded = historyFromMessages([
       { role: "system", content: "sys" },

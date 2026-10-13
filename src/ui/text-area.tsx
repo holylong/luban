@@ -9,6 +9,8 @@ export interface TextAreaProps {
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   focus: boolean;
+  /** While browsing recalled inputs, the parent owns arrows even for wrapped text. */
+  historyActive?: boolean;
   placeholder: string;
   /** Columns available to the text itself. */
   width: number;
@@ -32,15 +34,14 @@ export interface TextAreaProps {
 /**
  * A bounded, scrollable multi-line prompt box.
  *
- * Up/down move the cursor while the value spans several lines; the caller keeps
- * history recall for the single-line case and skips it when the value is
- * multi-line, so the two never fight over the same key.
+ * Up/down move the cursor in multi-line drafts. During history recall the
+ * caller owns both arrows, including for wrapped and multi-line entries.
  */
-export function TextArea({ value, onChange, onSubmit, focus, placeholder, width, maxRows, mouseGuard, caret, measureRef }: TextAreaProps): React.ReactElement {
+export function TextArea({ value, onChange, onSubmit, focus, historyActive = false, placeholder, width, maxRows, mouseGuard, caret, measureRef }: TextAreaProps): React.ReactElement {
   // Ink refreshes useInput listeners in an effect, after the new frame is visible.
   // A key arriving in that gap must still submit with the current run/view state.
-  const settingsRef = useRef({ onChange, onSubmit, focus, width, maxRows, mouseGuard });
-  settingsRef.current = { onChange, onSubmit, focus, width, maxRows, mouseGuard };
+  const settingsRef = useRef({ onChange, onSubmit, focus, historyActive, width, maxRows, mouseGuard });
+  settingsRef.current = { onChange, onSubmit, focus, historyActive, width, maxRows, mouseGuard };
   const cursorRef = useRef(value.length);
   const lastValueRef = useRef(value);
   const caretNonceRef = useRef(0);
@@ -62,9 +63,11 @@ export function TextArea({ value, onChange, onSubmit, focus, placeholder, width,
   }
 
   const update = (next: string, cursor: number): void => {
+    const previous = lastValueRef.current;
     cursorRef.current = Math.max(0, Math.min(cursor, next.length));
     lastValueRef.current = next;
-    settingsRef.current.onChange(next);
+    // Cursor motion must not reset the parent's history navigation state.
+    if (next !== previous) settingsRef.current.onChange(next);
     tick((current) => current + 1);
   };
 
@@ -90,7 +93,7 @@ export function TextArea({ value, onChange, onSubmit, focus, placeholder, width,
     if (key.ctrl && input === "c") return;
     // History recall owns the arrows for a single-line value.
     if (key.upArrow || key.downArrow) {
-      if (!multiline) return;
+      if (!multiline || settingsRef.current.historyActive) return;
       const target = layout.cursorRow + (key.upArrow ? -1 : 1);
       if (target < 0 || target >= layout.total) return;
       const row = layout.rows[target]!;

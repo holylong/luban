@@ -56,7 +56,7 @@ export class SessionStore {
     }
     if (edits.size) record.edits = [...edits.values()];
     const meaningful = record.messages.some((message) => message.role !== "system");
-    if (!meaningful && !record.pendingInputs?.length) return;
+    if (!meaningful && !record.pendingInputs?.length && !record.inputHistory?.length) return;
     // Only a derived title is re-derived. A title the model wrote is the whole
     // point of the naming round trip, and recomputing it here would replace it
     // with the raw opening line on the very next save.

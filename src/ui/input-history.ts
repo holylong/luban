@@ -1,17 +1,15 @@
-import type { ChatMessage } from "../core/types.js";
-
-export const MAX_INPUT_HISTORY = 200;
+import type { ChatMessage, SessionRecord } from "../core/types.js";
 
 /** Append a submitted input to history. Trims, drops empties and consecutive duplicates. */
 export function pushInputHistory(history: string[], value: string): string[] {
   const trimmed = value.trim();
   if (!trimmed) return history;
   if (history.at(-1) === trimmed) return history;
-  return [...history, trimmed].slice(-MAX_INPUT_HISTORY);
+  return [...history, trimmed];
 }
 
 /** Seed input history from user messages so Up works after --resume / session switch. */
-export function historyFromMessages(messages: ChatMessage[], limit = 100): string[] {
+export function historyFromMessages(messages: ChatMessage[], limit = Number.POSITIVE_INFINITY): string[] {
   const out: string[] = [];
   for (const message of messages) {
     if (message.role !== "user") continue;
@@ -21,6 +19,11 @@ export function historyFromMessages(messages: ChatMessage[], limit = 100): strin
     out.push(text);
   }
   return out.slice(-limit);
+}
+
+/** Older sessions have no raw history; recover the user messages they retained. */
+export function historyFromSession(record: SessionRecord): string[] {
+  return record.inputHistory ? [...record.inputHistory] : historyFromMessages(record.messages);
 }
 
 export interface HistoryRecall {
