@@ -8,6 +8,7 @@ import { Command } from "commander";
 import { render } from "ink";
 import { AgentRunner, initialMessages } from "./core/agent.js";
 import { loadConfig, savePreferredModel } from "./core/config.js";
+import { codexInvocation } from "./core/codex-command.js";
 import { announceHost, directedBroadcasts, MeshRuntime } from "./core/mesh/runtime.js";
 import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
@@ -771,7 +772,7 @@ installProcessGuard({ label: "luban" });
 const command = process.argv[2];
 const entry = command === "login" && process.argv[3] === "codex"
   ? new Promise<number>((resolve, reject) => {
-      const child = spawn(process.env.LUBAN_CODEX_BIN || "codex", ["login"], { stdio: "inherit" });
+      const child = spawn(...codexInvocation(["login"]), { stdio: "inherit" });
       child.on("error", reject);
       child.on("close", (code) => {
         if (code !== 0) return resolve(code ?? 1);
