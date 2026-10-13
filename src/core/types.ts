@@ -275,7 +275,7 @@ export type AgentEvent =
   | { type: "thought"; text: string }
   | { type: "tool-start"; id: string; name: string; args: Record<string, unknown> }
   | { type: "tool-end"; id: string; name: string; ok: boolean; elapsedMs: number; preview: string; editPreview?: string }
-  | { type: "usage"; input: number; output: number }
+  | { type: "usage"; input: number; output: number; cached?: number; reasoning?: number }
   | { type: "error"; text: string };
 
 export interface RunMetrics {
@@ -285,7 +285,8 @@ export interface RunMetrics {
   toolMs: number;
   approvalMs: number;
   compactions: number;
-  requests: Array<{ index: number; purpose: "task" | "compaction" | "handoff"; elapsedMs: number; firstOutputMs?: number; ok: boolean }>;
+  requests: Array<{ index: number; purpose: "task" | "compaction" | "handoff"; elapsedMs: number; firstOutputMs?: number; ok: boolean;
+    usage?: { input: number; output: number; cached?: number; reasoning?: number } }>;
 }
 
 export interface RunResult {

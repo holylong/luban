@@ -14,6 +14,41 @@ function config(workspace: string): LubanConfig {
 }
 
 describe("AgentRunner", () => {
+  it("keeps Codex's configured timeout, records usage, and avoids automatic title calls", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-codex-controls-"));
+    const settings = config(workspace);
+    settings.model = { ...settings.model, api: "codex", reasoningEffort: "medium" };
+    settings.timeoutMs = 300_000;
+    let calls = 0;
+    const runner = new AgentRunner(settings, {
+      async complete(_messages, _tools, _signal, _delta, _notice, options) {
+        calls++;
+        expect(options?.timeoutMs).toBeUndefined();
+        return { content: "done", toolCalls: [], usage: { input: 120, output: 30, cached: 100, reasoning: 20 } };
+      },
+    });
+    try {
+      const messages: ChatMessage[] = [...initialMessages(workspace), { role: "user", content: "hi" }];
+      const result = await runner.run(messages, "ask", new AbortController().signal, () => undefined, async () => "once");
+      expect(result.metrics?.requests[0]?.usage).toEqual({ input: 120, output: 30, cached: 100, reasoning: 20 });
+      expect(await runner.suggestTitle(messages)).toBeUndefined();
+      expect(calls).toBe(1);
+    } finally { runner.close(); }
+  });
+
+  it("does not replay a silent Codex timeout", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-codex-timeout-"));
+    const settings = config(workspace);
+    settings.model = { ...settings.model, api: "codex" };
+    settings.maxRetries = 5;
+    let calls = 0;
+    const runner = new AgentRunner(settings, { async complete() { calls++; throw new Error("model stream idle timeout"); } });
+    try {
+      await expect(runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
+        "ask", new AbortController().signal, () => undefined, async () => "once")).rejects.toThrow("idle timeout");
+      expect(calls).toBe(1);
+    } finally { runner.close(); }
+  });
   it("retries a silent stream timeout without surfacing intermediate timeout notices", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-silent-timeout-"));
     let calls = 0;
