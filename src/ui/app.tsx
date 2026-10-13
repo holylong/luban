@@ -912,7 +912,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     return () => { cancelled = true; };
   }, [config.workspace]);
   const [diff, setDiff] = useState<Awaited<ReturnType<typeof workspaceDiff>> | null>(null);
-  const [usage, setUsage] = useState({ input: 0, output: 0 });
+  const [usage, setUsage] = useState({ input: 0, output: 0, cached: 0, reasoning: 0 });
   const [meshChats, setMeshChats] = useState<MeshChatMessage[]>([]);
   const [meshRows, setMeshRows] = useState<Array<{ job: MeshJob; lastLog: string }>>([]);
   const [, setMeshRevision] = useState(0);
@@ -1005,7 +1005,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     titleAbortRef.current = controller;
     void runnerRef.current.suggestTitle(record.messages, controller.signal).then(async (suggestion) => {
       if (!suggestion) return;
-      setUsage((current) => ({ input: current.input + suggestion.input, output: current.output + suggestion.output }));
+      setUsage((current) => ({ ...current, input: current.input + suggestion.input, output: current.output + suggestion.output }));
       if (!suggestion.title) return;
       // The user may have opened another session while the call was in flight;
       // that rename belongs to the session it was written for, not to this one.
@@ -1202,7 +1202,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       lastOutputRef.current = Date.now();
       setLivePhase({ kind: "responding", detail: "", since: Date.now() });
     }
-    if (event.type === "usage") setUsage((current) => ({ input: current.input + event.input, output: current.output + event.output }));
+    if (event.type === "usage") setUsage((current) => ({ input: current.input + event.input, output: current.output + event.output,
+      cached: current.cached + (event.cached ?? 0), reasoning: current.reasoning + (event.reasoning ?? 0) }));
     if (event.type === "error") {
       setStatus("");
       addActivity({ id: `error-${Date.now()}`, text: event.text, tone: "red" });
@@ -1611,6 +1612,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         `模型：${config.model.id}${config.model.reasoningEffort ? ` · ${config.model.reasoningEffort}` : ""}`,
         `模式：${mode} · 权限：${config.permissionMode}`,
         `会话上下文估计：${estimateMessagesTokens(messages).toLocaleString("zh-CN")} / ${config.contextWindow.toLocaleString("zh-CN")} token`,
+        `本次打开以来用量：输入 ${usage.input}（缓存 ${usage.cached}） · 输出 ${usage.output}（推理 ${usage.reasoning}） token`,
         `工作区：${config.workspace}`,
       ];
       try {
@@ -2496,7 +2498,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         <Box justifyContent="space-between" paddingX={2} height={1} overflow="hidden">
           <Box flexGrow={1} overflow="hidden">
             <Text color={theme.dim} wrap="truncate-end">
-              {`${config.model.name}  ${usage.input}↑ ${usage.output}↓ · ctx ${contextPct}%`}
+              {`${config.model.name}  ${usage.input}↑ ${usage.output}↓${usage.cached ? ` · cache ${Math.round(usage.cached / Math.max(1, usage.input) * 100)}%` : ""} · ctx ${contextPct}%`}
               <Text color={theme.text}>  Enter 发送 · Ctrl+J 换行</Text>
               <Text>  Ctrl+Y 复制回答 · 拖选即复制</Text>
               {pendingCount ? <Text color={theme.accent}>  {pendingCount} pending</Text> : null}

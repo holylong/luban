@@ -16,7 +16,8 @@ export interface CompletionResult {
   content: string;
   reasoning: string;
   toolCalls: ToolCall[];
-  usage: { input: number; output: number };
+  /** Cached input and reasoning output are subsets, not additional tokens. */
+  usage: { input: number; output: number; cached?: number; reasoning?: number };
   /**
    * The provider stopped at its output budget. The prose is kept so the run can
    * continue from it; the tool calls are never kept, because a response that ran

@@ -21,6 +21,39 @@ afterEach(() => {
   else process.env.LUBAN_CODEX_ACCOUNT_TEST_LOG = originalLog;
 });
 
+it("shows real Codex input/output and cache usage after a task", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-codex-tokens-ui-"));
+  const fake = join(home, "codex");
+  await writeFile(fake, `#!/usr/bin/env node
+const fs = require('fs');
+const args = process.argv.slice(2);
+process.stdin.resume();
+process.stdin.on('end', () => {
+  fs.writeFileSync(args[args.indexOf('--output-last-message') + 1], JSON.stringify({content:'Task complete',tool_calls:[]}));
+  process.stdout.write(JSON.stringify({type:'turn.completed',usage:{input_tokens:120,cached_input_tokens:100,output_tokens:30,reasoning_output_tokens:20}}) + '\\n');
+});
+`, { mode: 0o755 });
+  process.env.LUBAN_HOME = home;
+  process.env.LUBAN_CODEX_BIN = fake;
+  const config = loadConfig({ workspace: home, model: "codex/gpt-6.1-sol" });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 150, rows: 40, isTTY: true });
+  let frame = "";
+  stdout.on("data", data => { frame = stripVTControlCharacters(String(data)); });
+  const app = render(<App config={config} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: true, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame).toContain("Auto");
+    stdin.write("hello");
+    await new Promise(resolve => setTimeout(resolve, 80));
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("120↑ 30↓ · cache 83%");
+    await expect.poll(() => frame).toContain("Task complete");
+  } finally { app.unmount(); app.cleanup(); }
+});
+
 it("shows Codex quota and usage without redeeming, then confirms a reset", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-codex-usage-ui-"));
   const workspace = join(home, "workspace");

@@ -237,7 +237,7 @@ interface ModelClient {
     /** Retry/timeout progress for the wait between requests. */
     onNotice?: (text: string) => void,
     options?: ModelRequestOptions,
-  ): Promise<{ content: string; reasoning?: string; toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>; usage: { input: number; output: number }; truncated?: boolean; streamEnded?: boolean }>;
+  ): Promise<{ content: string; reasoning?: string; toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>; usage: { input: number; output: number; cached?: number; reasoning?: number }; truncated?: boolean; streamEnded?: boolean }>;
 }
 
 /**
@@ -409,6 +409,9 @@ export class AgentRunner {
    * keep the derived title rather than writing a bad one.
    */
   async suggestTitle(messages: ChatMessage[], signal?: AbortSignal): Promise<TitleSuggestion | undefined> {
+    // Keep the locally derived title for subscription-backed Codex. Starting
+    // another full coding-agent session merely to name a chat wastes allowance.
+    if (this.config.model.api === "codex") return undefined;
     if (!hasNameableContent(messages)) return undefined;
     const controller = new AbortController();
     const abort = () => controller.abort(signal?.reason ?? new Error("aborted"));
@@ -552,7 +555,7 @@ export class AgentRunner {
           : shouldThink(lastUserQuestion(messages)) || currentTurnHasToolError(messages))
         : this.config.enableThinking;
       const options: ModelRequestOptions | undefined = mainRequest
-        ? { enableThinking: thinking, ...(automatic && !thinking ? {
+        ? { enableThinking: thinking, ...(automatic && !thinking && this.config.model.api !== "codex" ? {
           maxTokens: Math.min(this.config.maxTokens, 8_192),
           timeoutMs: Math.min(this.config.timeoutMs, 45_000),
           thinkingTimeoutMs: Math.min(this.config.thinkingTimeoutMs ?? 600_000, 45_000),
@@ -562,7 +565,9 @@ export class AgentRunner {
       // Clients retry connection failures before a stream starts. A stream that
       // opens but produces no output can still time out: retry that model call
       // here, where no tool has run and there is no partial answer to duplicate.
-      const silentRetries = Math.min(2, Math.max(0, this.config.maxRetries ?? 3));
+      // Codex owns transport retries and may already be generating a billed
+      // response without emitting user-visible text. Never replay its turn.
+      const silentRetries = this.config.model.api === "codex" ? 0 : Math.min(2, Math.max(0, this.config.maxRetries ?? 3));
       for (let attempt = 0; ; attempt += 1) {
         modelCalls += 1;
         onEvent({ type: "model-call", index: modelCalls });
@@ -570,6 +575,7 @@ export class AgentRunner {
         const requestStarted = Date.now();
         let firstOutputMs: number | undefined;
         let requestOk = false;
+        let requestUsage: RunMetrics["requests"][number]["usage"];
         try {
           const response = await this.client.complete(callMessages, callTools, callSignal, (text, kind) => {
             if (text) { receivedOutput = true; firstOutputMs ??= Date.now() - requestStarted; }
@@ -580,13 +586,15 @@ export class AgentRunner {
             }
           }, options);
           requestOk = true;
+          requestUsage = response.usage;
           return response;
         } catch (error) {
           if (callSignal.aborted || receivedOutput || !isModelTimeoutError(error) || attempt >= silentRetries) throw error;
         } finally {
           const elapsedMs = Date.now() - requestStarted;
           metrics.modelMs += elapsedMs;
-          metrics.requests.push({ index: modelCalls, purpose: mainRequest ? "task" : String(callMessages[0]?.content).startsWith("Compress prior") ? "compaction" : "handoff", elapsedMs, firstOutputMs, ok: requestOk });
+          metrics.requests.push({ index: modelCalls, purpose: mainRequest ? "task" : String(callMessages[0]?.content).startsWith("Compress prior") ? "compaction" : "handoff", elapsedMs, firstOutputMs, ok: requestOk,
+            ...(requestUsage ? { usage: requestUsage } : {}) });
         }
       }
     };
@@ -635,7 +643,7 @@ export class AgentRunner {
                 { role: "system", content: "Compress prior coding-agent history. Preserve concrete requirements, decisions, file paths, code changes, command results, archived output UUIDs, errors, and unfinished work. Omit chatter. Do not continue the task." },
                 { role: "user", content: String(summary.content) },
               ], [], signal);
-              onEvent({ type: "usage", input: semantic.usage.input, output: semantic.usage.output });
+              onEvent({ type: "usage", ...semantic.usage });
               if (semantic.content.trim()) summary.content = `[luban context summary]\n${clipContextText(semantic.content.trim(), Math.max(0, String(summary.content).length - 25))}`;
             } catch (error) {
               if (signal.aborted) throw signal.reason ?? error;
@@ -695,7 +703,7 @@ export class AgentRunner {
       }
       totalSteps += 1;
       this.budgetUsed = totalSteps;
-      onEvent({ type: "usage", input: completion.usage.input, output: completion.usage.output });
+      onEvent({ type: "usage", ...completion.usage });
       // Running out of output budget is a property of the provider's cap, not a
       // broken request, so the run keeps going instead of dying with the partial
       // text thrown away: keep what arrived and ask the model to continue.
@@ -1012,7 +1020,7 @@ export class AgentRunner {
         { role: "system", content: "The runtime step budget is exhausted. Do not call tools. Give a concise user-facing handoff: what was completed, what was verified, what remains unfinished, and the exact next action to continue. Do not claim unverified success." },
       ], [], signal);
       signal.throwIfAborted();
-      onEvent({ type: "usage", input: final.usage.input, output: final.usage.output });
+      onEvent({ type: "usage", ...final.usage });
       const summary = enforceAgentIdentity(lastUserQuestion(messages), extractFinalAnswer(final.content));
       if (summary.trim()) {
         text = summary;
