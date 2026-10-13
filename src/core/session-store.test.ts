@@ -42,6 +42,15 @@ describe("SessionStore", () => {
     expect(latest?.title).toBe("fix the parser");
   });
 
+  it("persists raw input history even for sessions containing only commands", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-input-history-"));
+    const store = new SessionStore(home);
+    const record = store.create("demo", home, "auto", "local/coder", [{ role: "system", content: "sys" }]);
+    record.inputHistory = ["/plan", "/pending", "/status"];
+    await store.save(record);
+    expect((await store.load(record.id, "demo"))?.inputHistory).toEqual(record.inputHistory);
+  });
+
   it("forks a session and repairs cuts inside tool batches", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-branch-"));
     const store = new SessionStore(home);
