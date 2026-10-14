@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
 import { codexInvocation } from "./codex-command.js";
+import { PLAN_MARKER, VERIFICATION_MARKER } from "./plan.js";
 
 const OUTPUT_SCHEMA = {
   type: "object",
@@ -30,9 +31,13 @@ function wireMessages(messages: ChatMessage[]): string[] {
     JSON.stringify({ role, content, name, tool_call_id, tool_calls }));
 }
 
-function promptFor(messages: string[], tools: string, incremental = false): string {
+function promptFor(messages: string[], tools: string, incremental = false, state?: string[]): string {
   if (incremental) return [
     "Continue as the model for luban using the existing output schema and tools. Do not use your own tools.",
+    ...(state ? [
+      "Current authoritative luban plan/verification state (JSON). This replaces the previous plan/verification state, including when empty:",
+      `[${state.join(",")}]`,
+    ] : []),
     "New authoritative luban messages (JSON); tool call IDs and execution results come from luban:",
     `[${messages.join(",")}]`,
   ].join("\n\n");
@@ -45,11 +50,27 @@ function promptFor(messages: string[], tools: string, incremental = false): stri
   ].join("\n\n");
 }
 
+interface CodexThread {
+  id: string;
+  messages: string[];
+  state: string[];
+  tools: string;
+  model: string;
+  usage: CompletionResult["usage"];
+}
+
+function runtimeState(message: ChatMessage): boolean {
+  return message.role === "system" && [PLAN_MARKER, VERIFICATION_MARKER]
+    .some(marker => String(message.content).startsWith(marker));
+}
+
 /** Uses the official Codex CLI and its ChatGPT login cache, never an API key. */
 export class CodexClient {
-  // Array identity isolates conversations and auxiliary compaction/handoff calls.
-  // Snapshots detect in-place edits and compaction before reusing a thread.
-  private readonly threads = new WeakMap<ChatMessage[], { id: string; messages: string[]; tools: string; model: string }>();
+  // AgentRunner supplies a stable identity across TUI transcript copies. Direct
+  // and auxiliary callers retain array isolation. Real history edits, changed
+  // instructions, tool schemas and compaction still invalidate a thread.
+  private readonly threads = new WeakMap<ChatMessage[], CodexThread>();
+  private readonly conversations = new Map<string, CodexThread>();
   constructor(private readonly config: LubanConfig) {}
 
   async complete(messages: ChatMessage[], tools: Array<Record<string, unknown>>, signal: AbortSignal,
@@ -61,17 +82,22 @@ export class CodexClient {
     const dir = await mkdtemp(join(tmpdir(), "luban-codex-"));
     const schema = join(dir, "response.schema.json");
     const output = join(dir, "response.json");
-    const snapshot = wireMessages(messages);
+    const snapshot = wireMessages(messages.filter(message => !runtimeState(message)));
+    const state = wireMessages(messages.filter(runtimeState));
     const toolSchema = JSON.stringify(tools);
-    const prior = this.threads.get(messages);
+    const conversationId = options?.conversationId;
+    const prior = conversationId ? this.conversations.get(conversationId) : this.threads.get(messages);
     const resume = prior && prior.tools === toolSchema && prior.model === this.config.model.model
       && snapshot.length > prior.messages.length
       && prior.messages.every((message, index) => snapshot[index] === message) ? prior : undefined;
     // Failed or cancelled turns must never be reused: Codex may have accepted
     // the input even when no valid completion reached luban.
-    this.threads.delete(messages);
+    if (conversationId) this.conversations.delete(conversationId);
+    else this.threads.delete(messages);
     let threadId: string | undefined;
     let usage: CompletionResult["usage"] = { input: 0, output: 0 };
+    // exec resume reports cumulative thread totals, not just the resumed call.
+    let totalUsage: CompletionResult["usage"] = resume?.usage ?? { input: 0, output: 0 };
     let reportedUsage = false;
     try {
       await writeFile(schema, JSON.stringify(OUTPUT_SCHEMA), { mode: 0o600 });
@@ -101,9 +127,13 @@ export class CodexClient {
             const values = event.usage as Record<string, unknown>;
             const tokens = (key: string): number => typeof values[key] === "number" && Number.isFinite(values[key])
               ? Math.max(0, values[key] as number) : 0;
-            usage = { input: usage.input + tokens("input_tokens"), output: usage.output + tokens("output_tokens"),
-              cached: (usage.cached ?? 0) + tokens("cached_input_tokens"),
-              reasoning: (usage.reasoning ?? 0) + tokens("reasoning_output_tokens") };
+            const next = { input: tokens("input_tokens"), output: tokens("output_tokens"),
+              cached: tokens("cached_input_tokens"), reasoning: tokens("reasoning_output_tokens") };
+            usage = { input: usage.input + Math.max(0, next.input - totalUsage.input),
+              output: usage.output + Math.max(0, next.output - totalUsage.output),
+              cached: (usage.cached ?? 0) + Math.max(0, next.cached - (totalUsage.cached ?? 0)),
+              reasoning: (usage.reasoning ?? 0) + Math.max(0, next.reasoning - (totalUsage.reasoning ?? 0)) };
+            totalUsage = next;
             reportedUsage = true;
           }
           if (event.type === "turn.failed" || event.type === "error") {
@@ -137,7 +167,8 @@ export class CodexClient {
         const timer = setTimeout(() => { timedOut = true; abort(); }, timeoutMs);
         child.on("close", () => clearTimeout(timer));
         child.stdin.on("error", () => {});
-        child.stdin.end(promptFor(resume ? snapshot.slice(resume.messages.length) : snapshot, toolSchema, Boolean(resume)));
+        const changedState = resume && JSON.stringify(state) !== JSON.stringify(resume.state) ? state : undefined;
+        child.stdin.end(promptFor(resume ? snapshot.slice(resume.messages.length) : wireMessages(messages), toolSchema, Boolean(resume), changedState));
       });
       if (signal.aborted) throw signal.reason ?? new Error("aborted");
       if (result.code !== 0) throw new Error(`Codex CLI failed: ${result.stderr.trim() || `exit ${result.code}`}. Run codex login with your ChatGPT Plus account.`);
@@ -151,7 +182,14 @@ export class CodexClient {
         return { id: `codex_${randomUUID()}`, type: "function", function: { name: call.name, arguments: call.arguments } };
       });
       const completedThread = threadId ?? resume?.id;
-      if (completedThread) this.threads.set(messages, { id: completedThread, messages: snapshot, tools: toolSchema, model: this.config.model.model });
+      if (completedThread) {
+        const thread: CodexThread = { id: completedThread, messages: snapshot, state, tools: toolSchema,
+          model: this.config.model.model, usage: totalUsage };
+        if (conversationId) {
+          this.conversations.set(conversationId, thread);
+          if (this.conversations.size > 8) this.conversations.delete(this.conversations.keys().next().value!);
+        } else this.threads.set(messages, thread);
+      }
       if (!reportedUsage) onNotice?.("Codex CLI 未返回 token 用量；请更新 Codex CLI，当前统计不完整。");
       if (raw.content) onDelta?.(raw.content, "content");
       return { content: raw.content, reasoning: "", toolCalls, usage };

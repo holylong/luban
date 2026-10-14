@@ -57,6 +57,33 @@ const liveLabels = (events: AgentEvent[]): string[] =>
   events.flatMap((event) => event.type === "status" && event.progress ? [event.text] : []);
 
 describe("compaction notices", () => {
+  it("does not reserve luban's unsent max_tokens or invoke compaction for a fitting Codex request", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-codex-reserve-"));
+    const settings = config(workspace);
+    settings.model.api = "codex";
+    settings.maxTokens = 64_000;
+    settings.contextWindow = 128_000;
+    settings.contextReserve = 16_384;
+    settings.semanticCompaction = true;
+    let calls = 0;
+    const runner = new AgentRunner(settings, {
+      async complete(messages: ChatMessage[]) {
+        calls++;
+        expect(messages.some(message => String(message.content).startsWith("retained " + "x".repeat(100)))).toBe(true);
+        return { content: "done", toolCalls: [], usage: { input: 1, output: 1 } };
+      },
+    });
+    try {
+      const result = await runner.run([
+        ...initialMessages(workspace), { role: "user", content: "retained " + "x".repeat(180_000) },
+        { role: "assistant", content: "previous answer" }, { role: "user", content: "continue" },
+      ], "agent", new AbortController().signal, () => undefined, async () => "once");
+      expect(result.ok).toBe(true);
+      expect(result.metrics?.compactions).toBe(0);
+      expect(calls).toBe(1);
+    } finally { runner.close(); }
+  });
+
   it("uses the provider output cap when reserving context for a long task", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-output-reserve-"));
     const runnerConfig = config(workspace);
