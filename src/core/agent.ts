@@ -8,6 +8,7 @@ import { OpenAiClient, MAX_OUTPUT_TOKENS, type ModelRequestOptions } from "./ope
 import { AnthropicClient } from "./anthropic.js";
 import { ResponsesClient } from "./responses.js";
 import { CodexClient } from "./codex.js";
+import { isZenFreeModel, OpenCodeZenClient } from "./opencode-zen.js";
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactForRequest, compactMessages, estimateMessagesTokens } from "./context.js";
 import { isContextOverflowError, isModelTimeoutError } from "./model-errors.js";
@@ -288,10 +289,8 @@ export class AgentRunner {
     const outputTool = this.outputs.tool();
     this.tools.set(outputTool.name, outputTool);
     this.mcp = new McpManager(config);
-    // The Responses API shares the Chat Completions transport here; provider
-    // gateways that require native /responses payloads should set a dedicated
-    // baseUrl and file an issue with a recorded request/response pair.
-    this.client = client ?? (config.model.api === "codex" ? new CodexClient(config) : config.model.api === "anthropic"
+    this.client = client ?? (isZenFreeModel(config.model) ? new OpenCodeZenClient(config)
+      : config.model.api === "codex" ? new CodexClient(config) : config.model.api === "anthropic"
       ? new AnthropicClient(config)
       : config.model.api === "responses" ? new ResponsesClient(config) : new OpenAiClient(config));
     if (depth < 2) {
@@ -412,6 +411,8 @@ export class AgentRunner {
     // Keep the locally derived title for subscription-backed Codex. Starting
     // another full coding-agent session merely to name a chat wastes allowance.
     if (this.config.model.api === "codex") return undefined;
+    // Zen's free tier requires coding tools; the title-only request has none.
+    if (isZenFreeModel(this.config.model)) return undefined;
     if (!hasNameableContent(messages)) return undefined;
     const controller = new AbortController();
     const abort = () => controller.abort(signal?.reason ?? new Error("aborted"));
@@ -457,8 +458,8 @@ export class AgentRunner {
     askUser?: AskUser,
   ): Promise<RunResult> {
     if (this.running) throw new Error("AgentRunner already has an active run");
-    if (this.config.model.provider === "opencode-zen" && !this.config.model.apiKey) {
-      throw new Error("OpenCode Zen 尚未连接：设置 OPENCODE_ZEN_API_KEY，或先在 OpenCode 中连接 Zen，然后重启 luban。");
+    if (this.config.model.provider === "opencode-zen" && !this.config.model.apiKey && !isZenFreeModel(this.config.model)) {
+      throw new Error("OpenCode Zen 尚未连接：在 OpenCode 里执行 opencode auth login（或设置 OPENCODE_ZEN_API_KEY），然后重启 luban。");
     }
     this.running = true;
     this.inbox = inbox;

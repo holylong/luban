@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeModelError, isContextOverflowError, isModelTimeoutError, retryableModelError } from "./model-errors.js";
+import { describeModelError, isContextOverflowError, isFreeTierError, isModelTimeoutError, retryableModelError } from "./model-errors.js";
 
 describe("model error classification", () => {
   it("detects context overflow without marking it retryable", () => {
@@ -14,6 +14,14 @@ describe("model error classification", () => {
     expect(retryableModelError(new Error("model HTTP 503: overloaded"))).toBe(true);
     expect(retryableModelError(new Error("fetch failed"))).toBe(true);
     expect(retryableModelError(new Error("TOOL ERROR: permission denied"))).toBe(false);
+  });
+
+  it("treats the OpenCode Zen free-tier gate as terminal, not retryable", () => {
+    const body = 'model HTTP 403: {"type":"error","error":{"type":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}';
+    expect(isFreeTierError(new Error(body))).toBe(true);
+    expect(retryableModelError(new Error(body))).toBe(false);
+    // A plain 403 without the free-tier marker stays a normal failure.
+    expect(isFreeTierError(new Error("model HTTP 403: forbidden"))).toBe(false);
   });
 });
 

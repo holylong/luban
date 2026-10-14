@@ -11,6 +11,15 @@ export function isTruncationError(error: unknown): boolean {
   return /truncated by output token limit|response truncated/i.test(text);
 }
 
+/**
+ * Zen rejects an incompatible client/session/tool payload with FreeTierError.
+ * This is not evidence that the API key needs replacing or OAuth is required.
+ */
+export function isFreeTierError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /FreeTierError|free tier can only be used from within OpenCode/i.test(text);
+}
+
 /** A stalled model request can be retried without repeating any tool effect. */
 export function isModelTimeoutError(error: unknown): boolean {
   return /timed out|timeout|ETIMEDOUT|超时|没有任何输出/i.test(describeModelError(error));
@@ -19,6 +28,9 @@ export function isModelTimeoutError(error: unknown): boolean {
 /** Tool effects already happened once; only model-transport calls may retry, never tool.execute. */
 export function retryableModelError(error: unknown): boolean {
   if (isContextOverflowError(error)) return false;
+  // The free-tier gate is a policy decision, not a transient failure: retrying
+  // only burns the retry budget and hides the real cause.
+  if (isFreeTierError(error)) return false;
   const text = error instanceof Error ? error.message : String(error);
   return /model HTTP (408|409|425|429|529|5\d\d)|timed out|idle timeout|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|overloaded|rate[ -]?limit|temporarily unavailable|try again|service unavailable|bad gateway|gateway timeout/i.test(text);
 }

@@ -41,21 +41,24 @@ npm link
 
 ### OpenCode Go / Zen
 
-先登录 OpenCode 控制台，开通 Go 或启用 Zen 并复制 API key。[Go](https://opencode.ai/docs/go/) 是订阅服务，[Zen](https://opencode.ai/docs/zen/) 按量计费，也提供部分免费模型。
+先登录 OpenCode 控制台，开通 Go 或启用 Zen 并复制 API key。[Go](https://opencode.ai/docs/go/) 是订阅服务，[Zen](https://opencode.ai/docs/zen/) 按量计费。
 
 luban 已内置这两个服务，设置对应密钥即可使用（下面命令适用于 Bash / Zsh）：
 
 ```bash
-# Go
+# Go（含免费模型）
 export OPENCODE_API_KEY="你的 Go API key"
-luban --model opencode-go/kimi-k3
+luban --model opencode-go/cat-jam-free
 
-# Zen
+# Zen（含免费模型，支持读取 OpenCode 已保存的 API key 或 Console 登录）
+opencode auth login          # 可选：已有 OpenCode 凭据时 luban 会自动读取
 export OPENCODE_ZEN_API_KEY="你的 Zen API key"
-luban --model opencode-zen/ling-3.1-flash-free
+luban --model opencode-zen/gpt-6-luna
 ```
 
-也可以启动后用 `/models` 选择。已在 OpenCode 中连接服务时，luban 会读取本机保存的对应凭据。Go 与 Zen 的密钥分别配置；模型和免费额度以官方页面为准。
+也可以启动后用 `/models` 选择。已在 OpenCode 中连接服务时，luban 会读取本机保存的对应凭据。Go 与 Zen 的密钥分别配置；模型和额度以官方页面为准。
+
+> **Zen 免费模型始终显示在 `/models` 里。** 可以直接选择 `opencode-zen/ling-3.1-flash-free`、`opencode-zen/space-bunny-free` 等。luban 读取已有 Zen API key 或 Console 登录，并自动处理 Zen 所需的客户端版本、会话标识和编码工具名称；无需为了 `FreeTierError` 重新进行 OAuth 登录。Go 订阅端也提供 `opencode-go/cat-jam-free` 等免费模型。详见[参考文档](docs/reference.md#免费模型zen-或-go)。
 
 如需保存默认模型，在配置文件中设置：
 
@@ -65,7 +68,7 @@ luban --model opencode-zen/ling-3.1-flash-free
 }
 ```
 
-使用 Zen 时把 `active` 换成 `opencode-zen/ling-3.1-flash-free`；付费模型可在 `providers.opencode-zen.models` 中添加，配置方式见下方 API 示例。Go 地址为 `https://opencode.ai/zen/go/v1`，Zen 地址为 `https://opencode.ai/zen/v1`，内置服务无需重复填写地址。
+使用 Zen 时把 `active` 换成 `opencode-zen/gpt-6-luna`；其余 Zen 模型可在 `providers.opencode-zen.models` 中添加，配置方式见下方 API 示例。Go 地址为 `https://opencode.ai/zen/go/v1`，Zen 地址为 `https://opencode.ai/zen/v1`，内置服务无需重复填写地址。
 
 ### OpenAI API / 兼容接口
 
