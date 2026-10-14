@@ -348,20 +348,59 @@ GPT Luna 这类推理模型不接受显式 `temperature`，内置定义用
 自己配置时照 `config.example.json` 写上即可。要退回自己的 key，直接在 `providers`
 里定义同名 `opencode-go`，它会覆盖内置定义。
 
-### OpenCode Zen 免费模型
+### 免费模型：Zen 或 Go
 
-luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或先在 OpenCode 中连接
-OpenCode Zen（luban 会读取 `$XDG_DATA_HOME/opencode/auth.json` 中 `opencode` 的 key）。
+Zen 免费模型支持已有 Zen API key，也可使用 Console 登录。`HTTP 403 FreeTierError`
+会在客户端版本、会话标识或编码工具列表不符合服务端要求时出现，不表示 API key 必然
+不可用或必须重新 OAuth 登录。luban 为 Zen 免费模型使用 OpenCode 1.19.0 兼容请求格式，
+同时标注 `x-opencode-client: luban`：携带合法的 `ses_` 会话标识，文件工具在请求中
+使用 `read`、`write`、`edit`、`glob`、`grep` 名称，返回后映射回 luban 的实际工具；
+工具参数、权限检查、执行记录及会话中的工具名称仍由 luban 管理。
+请求使用流式接口；未配置凭据时使用匿名 `public` 凭据，实际额度由服务端决定。
+免费模型的会话标题使用本地生成结果，避免发送没有编码工具的额外标题请求。
+
+已有 OpenCode 登录时 luban 会自动读取。需要连接 Console 时可以这样做：
+
+1. 在 OpenCode 里登录 Console（device flow，需要浏览器里确认一次）：
+
+   ```bash
+   opencode auth login      # 完成后 opencode auth list 里应出现 OpenCode（oauth）
+   ```
+
+2. 重启 luban。luban 会像读取 Codex 登录那样去读这份凭据：依次找
+   `$XDG_DATA_HOME/opencode/auth.json` 的 `opencode` 条目、旧版 `account.json` 的
+   `accounts[serviceID=opencode]`，以及新版 OpenCode 的 sqlite 存储
+   `$XDG_DATA_HOME/opencode/opencode.db` 的 `credential` 表；只认 OAuth 的
+   `access`/`refresh`，`type: "api"` 的 key 不算会话。凭据过期时会用
+   `refresh_token` 到 `https://opencode.ai/console/auth/device/token` 换新的，轮换后的
+   token 缓存在 `~/.luban/opencode-console.json`（权限 600），不会写回 OpenCode 的库。
+
+3. 有了会话，`opencode-zen` 就优先使用这个 token 作凭据。`/models` 始终显示
+   `opencode-zen/ling-3.1-flash-free`、`opencode-zen/space-bunny-free`、
+   `opencode-zen/exo-free` 等免费模型；没有会话也可以选择，配置中的免费模型条目
+   同样保留。实际请求是否可用由服务端凭据和额度决定。
+
+另一条路是 **Go 订阅端点**，它自己就提供免费模型，不需要 Console 登录：
+`opencode-go/cat-jam-free`、`opencode-go/step-5-preview-free`、
+`opencode-go/longcat-2.5-preview-free`，走 `https://opencode.ai/zen/go/v1` 并带上
+`x-opencode-session` 头（内置 provider 已自动附上）。
+
+如果仍然出现 `FreeTierError`，检查自定义 headers 是否覆盖了客户端版本或会话标识。
+API key 和 Go/Zen 凭据仍分别读取；本地存在 OAuth 会话时优先使用该会话。
+
+### OpenCode Zen（按量计费）
+
+luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或在 OpenCode 中执行
+`opencode auth login`（luban 读取已有的 Zen API key 或 Console 登录）。
 luban 既有的 `OPENCODE_API_KEY` 仍对应 Go；单独使用 Zen 时请设
-`OPENCODE_ZEN_API_KEY`。免费模型始终会出现在 `/models` / `Ctrl+P` 列表中；
-未连接时会标注所需凭据，运行前也会提示设置方法。连接后选择
-`opencode-zen/ling-3.1-flash-free`、`opencode-zen/nemotron-3-ultra-free` 等免费模型；
-`muse-spark-1.3-contributor-free` 自动走 Responses，其余内置免费聊天模型走 Chat Completions。
-Zen 与 Go 的本地凭据分别读取，不会把 Go 登录误当作 Zen 登录。免费模型名单和可用期限
-会变化，以 [Zen 官方列表](https://opencode.ai/docs/zen) 为准；Jev 免费版使用独立的
-System One 决策接口，不能在聊天模型选择器中使用。配置里显式写了 `opencode-zen` 也
-不会隐藏内置模型表：自定义的 endpoint、key 和模型条目优先，其余内置免费模型继续
-出现；若只想保留自己的清单，把 `models` 写成数组（如 `["exo-free"]`）即可完全覆盖。
+`OPENCODE_ZEN_API_KEY`。Zen 的模型始终会出现在 `/models` / `Ctrl+P` 列表中；
+未连接时会标注所需凭据，运行前也会提示设置方法。Zen 是按 token 计费的付费端点，
+内置付费和免费模型表，不按 Console 登录状态过滤；`gpt-6-luna` 等 GPT 模型走 Responses，`claude-sonnet-5`
+等走 Messages，其余走 Chat Completions。Zen 与 Go 的本地凭据分别读取，不会把 Go
+登录误当作 Zen 登录。模型名单会变化，以 [Zen 官方列表](https://opencode.ai/docs/zen)
+为准。配置里显式写了 `opencode-zen` 也不会隐藏内置模型表：自定义的 endpoint、key
+和模型条目优先，其余内置模型继续出现；若只想保留自己的清单，把 `models` 写成数组
+（如 `["deepseek-v4-flash"]`）即可完全覆盖。
 
 ## 日常交互
 

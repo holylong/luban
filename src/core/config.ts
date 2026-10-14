@@ -3,6 +3,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { ConflictPolicy, LubanConfig, McpServerSettings, MeshContact, ModelRef, SyncMode } from "./types.js";
+import { consoleAccessToken } from "./opencode-console.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -182,14 +183,19 @@ function opencodeAuthKey(service: "opencode" | "opencode-go" = "opencode-go"): s
   return "";
 }
 
-function resolveKey(providerName: string, provider: JsonObject, fallback: JsonObject): string {
+/**
+ * Prefer an available Console session on Zen, otherwise use the configured
+ * or saved Zen API key. Go credentials remain separate.
+ */
+function resolveKey(providerName: string, provider: JsonObject, fallback: JsonObject, session = ""): string {
   const options = record(provider.options);
   const keyEnv = text(provider.api_key_env, provider.apiKeyEnv);
   if (providerName === "opencode-zen") return text(
-    provider.api_key, provider.apiKey, options.api_key, options.apiKey,
+    session, provider.api_key, provider.apiKey, options.api_key, options.apiKey,
     keyEnv ? process.env[keyEnv] : "", process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"),
   );
   return text(
+    providerName === "opencode-zen" ? session : "",
     provider.api_key,
     provider.apiKey,
     options.api_key,
@@ -223,14 +229,17 @@ const OPENCODE_GO_MODELS: Record<string, { name: string; api: "openai" | "anthro
   "hy3": { name: "Hy3", api: "openai", vision: false },
   "hy4-preview": { name: "Hy4 preview", api: "openai", vision: false },
   "longcat-2.0": { name: "LongCat-2.0", api: "openai", vision: false },
-  "longcat-2.5-preview-free": { name: "LongCat 2.5 Preview Free", api: "openai", vision: true },
+  // The Go endpoint also offers free models with its own subscription key.
+  "longcat-2.5-preview-free": { name: "LongCat 2.5 Preview · Free", api: "openai", vision: true },
+  "step-5-preview-free": { name: "Step 5 Preview · Free", api: "openai", vision: true },
+  "cat-jam-free": { name: "Cat Jam · Free", api: "openai", vision: false },
   "mimo-v2.6-pro": { name: "MiMo-V2.6-Pro", api: "openai", vision: true },
   "mimo-v2.6-flash": { name: "MiMo-V2.6-Flash", api: "openai", vision: true },
   "mimo-v2.5": { name: "MiMo V2.5", api: "openai", vision: true },
   "mimo-v2.5-pro": { name: "MiMo V2.5 Pro", api: "openai", vision: false },
   "qwen3.8-max": { name: "Qwen3.8 Max", api: "openai", vision: true },
   "qwen3.7-plus": { name: "Qwen3.7 Plus", api: "openai", vision: true },
-  "space-bunny-free": { name: "Space Bunny Free", api: "openai", vision: true },
+  "space-bunny": { name: "Space Bunny", api: "openai", vision: false },
   "qwen3.8-flash": { name: "Qwen3.8 Flash", api: "anthropic", vision: true },
   "minimax-m3": { name: "MiniMax-M3", api: "anthropic", vision: true },
   "minimax-m2.7": { name: "MiniMax-M2.7", api: "anthropic", vision: false },
@@ -242,17 +251,38 @@ const OPENCODE_GO_MODELS: Record<string, { name: string; api: "openai" | "anthro
   "muse-spark-1.2-contributor": { name: "Muse Spark 1.2 Contributor", api: "responses", vision: true },
 };
 
-/** Free chat models listed by OpenCode Zen; Jev uses /systemone and is not a chat model. */
-const OPENCODE_ZEN_FREE_MODELS: Record<string, { name: string; api: "openai" | "responses" }> = {
+/**
+ * Zen paid models. The free catalog below is also always available for
+ * selection; credentials are resolved separately from catalog visibility.
+ */
+const OPENCODE_ZEN_MODELS: Record<string, { name: string; api: "openai" | "responses" | "anthropic"; vision: boolean; temperature?: boolean }> = {
+  "deepseek-v4.1-flash": { name: "DeepSeek V4.1 Flash", api: "openai", vision: true },
+  "glm-5.3-flash": { name: "GLM-5.3-Flash", api: "openai", vision: true },
+  "kimi-k2.7-code": { name: "Kimi K2.7 Code", api: "openai", vision: true, temperature: false },
+  "claude-haiku-5-5": { name: "Claude Haiku 5.5", api: "anthropic", vision: true },
+  "qwen3.8-flash": { name: "Qwen3.8 Flash", api: "anthropic", vision: true },
+  "claude-sonnet-5": { name: "Claude Sonnet 5", api: "anthropic", vision: true },
+  "claude-opus-5": { name: "Claude Opus 5", api: "anthropic", vision: true },
+  "gpt-6-luna": { name: "GPT-6 Luna", api: "responses", vision: true, temperature: false },
+  "gpt-5.6-luna": { name: "GPT-5.6 Luna", api: "responses", vision: true, temperature: false },
+  "grok-4.7": { name: "Grok 4.7", api: "responses", vision: true },
+};
+
+/**
+ * Zen free chat models remain visible regardless of local login state.
+ * OpenCode Console credentials are read through opencode-console.ts when
+ * available. Jev uses /systemone and is not a chat model.
+ */
+const OPENCODE_ZEN_FREE_MODELS: Record<string, { name: string; api: "openai" | "responses"; vision?: boolean; temperature?: boolean }> = {
   "big-pickle": { name: "Big Pickle · Free", api: "openai" },
   "space-bunny-free": { name: "Space Bunny · Free", api: "openai" },
   "longcat-2.5-preview-free": { name: "LongCat 2.5 Preview · Free", api: "openai" },
   "exo-free": { name: "Exo · Free", api: "openai" },
   "fledge-alpha-free": { name: "Fledge Alpha · Free", api: "openai" },
-  "mimo-v2.6-flash-free": { name: "MiMo V2.6 Flash · Free", api: "openai" },
-  "mimo-v2.5-free": { name: "MiMo V2.5 · Free", api: "openai" },
   "ling-3.1-flash-free": { name: "Ling 3.1 Flash · Free", api: "openai" },
   "ling-3.0-flash-fin-free": { name: "Ling 3.0 Flash Fin · Free", api: "openai" },
+  "mimo-v2.6-flash-free": { name: "MiMo V2.6 Flash · Free", api: "openai" },
+  "mimo-v2.5-free": { name: "MiMo V2.5 · Free", api: "openai" },
   "nemotron-3-ultra-free": { name: "Nemotron 3 Ultra · Free", api: "openai" },
   "nemotron-3.5-lightning-free": { name: "Nemotron 3.5 Lightning · Free", api: "openai" },
   "muse-spark-1.3-contributor-free": { name: "Muse Spark 1.3 Contributor · Free", api: "responses" },
@@ -262,11 +292,16 @@ const OPENCODE_ZEN_FREE_MODELS: Record<string, { name: string; api: "openai" | "
  * Providers luban knows without any config file. Subscription providers are
  * offered only after login or explicit selection.
  */
-function builtinProviders(includeCodex = false): Record<string, JsonObject> {
+function builtinProviders(includeCodex = false, session = ""): Record<string, JsonObject> {
   const goKey = text(process.env.OPENCODE_GO_API_KEY, process.env.OPENCODE_API_KEY, opencodeAuthKey());
   // OPENCODE_API_KEY has historically selected Go in luban; only a Zen-specific
   // credential may auto-register Zen, so an existing Go setup keeps its models.
-  const zenKey = text(process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"));
+  const zenKey = text(session, process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"));
+  // Keep model visibility independent of whether a Console login was found.
+  const zenCatalog = {
+    ...OPENCODE_ZEN_MODELS,
+    ...OPENCODE_ZEN_FREE_MODELS,
+  };
   return {
     ...(includeCodex ? { codex: {
       api: "codex",
@@ -292,10 +327,15 @@ function builtinProviders(includeCodex = false): Record<string, JsonObject> {
     "opencode-zen": {
       api_key: zenKey,
       base_url: "https://opencode.ai/zen/v1",
-      models: Object.fromEntries(Object.entries(OPENCODE_ZEN_FREE_MODELS).map(([id, model]) => [id, {
+      models: Object.fromEntries(Object.entries(zenCatalog).map(([id, model]) => [id, {
         name: model.name,
         api: model.api,
-        capabilities: { vision: false, thinking: true, tools: true, ...(model.api === "responses" ? { temperature: false } : {}) },
+        capabilities: {
+          vision: "vision" in model ? model.vision : false,
+          thinking: true,
+          tools: true,
+          ...(model.temperature === false ? { temperature: false } : {}),
+        },
       }])),
     },
   };
@@ -333,14 +373,14 @@ function resolveBaseUrl(provider: JsonObject, fallback: JsonObject): string {
   );
 }
 
-function collectModels(raw: JsonObject): ModelRef[] {
+function collectModels(raw: JsonObject, session = ""): ModelRef[] {
   const providers = record(raw.providers);
   const modelConfig = record(raw.model);
   const result: ModelRef[] = [];
   for (const [providerName, value] of Object.entries(providers)) {
     const provider = record(value);
     const baseUrl = resolveBaseUrl(provider, modelConfig);
-    const apiKey = resolveKey(providerName, provider, modelConfig);
+    const apiKey = resolveKey(providerName, provider, modelConfig, session);
     const providerApi = text(provider.api, provider.type, providerName === "anthropic" ? "anthropic" : "openai").toLowerCase();
     const providerHeaders = headerMap(provider.headers);
     for (const model of providerModels(provider)) {
@@ -455,7 +495,9 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const codexModelId = [options.model, process.env.LUBAN_MODEL, preferences.model, mergedModel.active]
     .find((value) => typeof value === "string" && value.toLowerCase().startsWith("codex/")) as string | undefined;
   const codexEnabled = preferences.codexEnabled === true || Boolean(codexModelId);
-  const builtins = wantsBuiltin || codexEnabled ? builtinProviders(codexEnabled) : {};
+  // Read the Console session once: a refresh can cost a network round trip.
+  const consoleSession = consoleAccessToken();
+  const builtins = wantsBuiltin || codexEnabled ? builtinProviders(codexEnabled, consoleSession) : {};
   // User providers stay first (and win) so defaults and ordering do not shift;
   // built-ins are appended only when the user has not defined that provider.
   const providers: JsonObject = { ...explicitProviders };
@@ -507,8 +549,8 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   // an unconnected Zen catalog is visible in /models but cannot be the default.
   const fallbackModels = !hasExplicitProviders && Object.keys(providers).length === 1
     && "opencode-zen" in providers && !text(record(providers["opencode-zen"]).api_key)
-    ? collectModels({ model: mergedModel }) : [];
-  const models = [...fallbackModels, ...collectModels(raw)].map((model) => {
+    ? collectModels({ model: mergedModel }, consoleSession) : [];
+  const models = [...fallbackModels, ...collectModels(raw, consoleSession)].map((model) => {
     if (model.api !== "codex") return model;
     const stored = storedEfforts[model.id];
     const effort = forcedEffort ?? (stored === "" ? undefined : codexEffort(stored) ?? configuredEffort);

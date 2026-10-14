@@ -100,7 +100,7 @@ describe("AgentRunner", () => {
   it("explains how to connect Zen before an uncredentialed model request", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-zen-unconnected-"));
     const settings = config(workspace);
-    settings.model = { ...settings.model, id: "opencode-zen/exo-free", provider: "opencode-zen", model: "exo-free" };
+    settings.model = { ...settings.model, id: "opencode-zen/gpt-6-luna", provider: "opencode-zen", model: "gpt-6-luna" };
     const runner = new AgentRunner(settings, { async complete() { throw new Error("model should not be called"); } });
     try {
       await expect(runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
