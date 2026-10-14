@@ -17,6 +17,7 @@ import { runHistory } from "./core/history-command.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
 import { App } from "./ui/app.js";
 import { windowsOutput } from "./ui/windows-output.js";
+import { mascotOutput } from "./ui/mascot-background.js";
 import { applyTheme, resolveThemeId, themeIds } from "./ui/theme.js";
 import { LubanWebServer } from "./web/server.js";
 import { ApprovalBroker } from "./web/approval.js";
@@ -696,7 +697,7 @@ async function main(): Promise<number> {
     // ansiEscapes.eraseLines(previousLineCount), whose count includes that
     // trailing newline, so it redraws in place. On Windows, windowsOutput turns
     // fixed-height frame erases into row updates without requiring DECSET 2026.
-    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { stdout: windowsOutput(process.stdout), exitOnCtrlC: false, incrementalRendering: false });
+    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { stdout: mascotOutput(windowsOutput(process.stdout)), exitOnCtrlC: false, incrementalRendering: false });
     await instance.waitUntilExit();
     return 0;
   } catch (error) {
