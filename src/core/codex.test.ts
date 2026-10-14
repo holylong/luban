@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, savePreferredModel } from "./config.js";
 import { CodexClient } from "./codex.js";
+import { AgentRunner, initialMessages } from "./agent.js";
+import { planTools } from "./plan.js";
 import type { ChatMessage } from "./types.js";
 
 async function recordingClient() {
@@ -27,7 +29,11 @@ process.stdin.on('end', () => {
   process.stdout.write(started.slice(11));
   const output = args[args.indexOf('--output-last-message') + 1];
   fs.writeFileSync(output, JSON.stringify({content:'done', tool_calls:[]}));
-  process.stdout.write(JSON.stringify({type:'turn.completed', usage:{input_tokens:120, cached_input_tokens:100, output_tokens:30, reasoning_output_tokens:20}}));
+  const usageFile = ${JSON.stringify(join(home, "thread-usage.json"))};
+  const counts = fs.existsSync(usageFile) ? JSON.parse(fs.readFileSync(usageFile, 'utf8')) : {};
+  const count = counts[id] = (counts[id] || 0) + 1;
+  fs.writeFileSync(usageFile, JSON.stringify(counts));
+  process.stdout.write(JSON.stringify({type:'turn.completed', usage:{input_tokens:120*count, cached_input_tokens:100*count, output_tokens:30*count, reasoning_output_tokens:20*count}}));
 });
 `, { mode: 0o755 });
   process.env.LUBAN_CODEX_BIN = fake;
@@ -35,7 +41,7 @@ process.stdin.on('end', () => {
   const config = loadConfig({ workspace: home, model: "codex/gpt-6.1-sol" });
   const requests = async () => (await readFile(log, "utf8")).trim().split("\n")
     .map(line => JSON.parse(line) as { args: string[]; input: string });
-  return { client: new CodexClient(config), requests };
+  return { client: new CodexClient(config), config, requests };
 }
 
 const originalBin = process.env.LUBAN_CODEX_BIN;
@@ -48,6 +54,70 @@ afterEach(() => {
 });
 
 describe("CodexClient", () => {
+  it("resumes across TUI-style copied transcripts on consecutive user turns", async () => {
+    const { client, config, requests } = await recordingClient();
+    const runner = new AgentRunner(config, client);
+    const messages: ChatMessage[] = [...initialMessages(config.workspace), { role: "user", content: "FIRST_USER_TASK" }];
+    try {
+      const result = await runner.run(messages, "agent", new AbortController().signal, () => undefined, async () => "once");
+      const copied: ChatMessage[] = [...structuredClone(result.messages), { role: "user", content: "SECOND_USER_TASK" }];
+      await runner.run(copied, "agent", new AbortController().signal, () => undefined, async () => "once");
+      const [first, next] = await requests();
+      expect(first!.args).not.toContain("resume");
+      expect(next!.args).toContain("resume");
+      expect(next!.input).toContain("SECOND_USER_TASK");
+      expect(next!.input).not.toContain("FIRST_USER_TASK");
+      expect(next!.input).not.toContain("Available luban tools");
+    } finally { runner.close(); }
+  });
+
+  it("resumes after inserting or updating plans and sends the current authoritative state", async () => {
+    const { client, requests } = await recordingClient();
+    const messages: ChatMessage[] = [{ role: "system", content: "stable rules" }, { role: "user", content: "ORIGINAL_TASK" }];
+    const tools = [{ name: "update_plan" }];
+    const signal = new AbortController().signal;
+    await client.complete(messages, tools, signal);
+    messages.push({ role: "assistant", content: "done" });
+    const update = planTools(messages).find(tool => tool.name === "update_plan")!;
+    await update.execute({ plan: [{ step: "UNIQUE_PLAN_STEP", status: "in_progress" }] }, signal);
+    messages.push({ role: "tool", content: "plan saved" });
+    await client.complete(messages, tools, signal);
+    await update.execute({ plan: [{ step: "UNIQUE_PLAN_STEP", status: "completed" }] }, signal);
+    messages.push({ role: "tool", content: "plan completed" });
+    await client.complete(messages, tools, signal);
+    const recorded = await requests();
+    expect(recorded.map(request => request.args.includes("resume"))).toEqual([false, true, true]);
+    expect(recorded[1]!.input).toContain("UNIQUE_PLAN_STEP");
+    const state = JSON.parse(recorded[2]!.input.split("\n\n")[2]!) as ChatMessage[];
+    expect(state[0]!.content).toContain('"status":"completed"');
+    expect(state[0]!.content).not.toContain('"status":"in_progress"');
+    expect(recorded[1]!.input).not.toContain("ORIGINAL_TASK");
+    expect(recorded[2]!.input).not.toContain("ORIGINAL_TASK");
+    const verification = planTools(messages).find(tool => tool.name === "record_verification")!;
+    await verification.execute({ command: "npm test", status: "passed" }, signal);
+    messages.push({ role: "tool", content: "verification recorded" });
+    await client.complete(messages, tools, signal);
+    const checked = (await requests())[3]!;
+    expect(checked.args).toContain("resume");
+    const verifiedState = JSON.parse(checked.input.split("\n\n")[2]!) as ChatMessage[];
+    expect(verifiedState.some(message => String(message.content).includes('"command":"npm test"'))).toBe(true);
+    expect(checked.input).not.toContain("ORIGINAL_TASK");
+  });
+
+  it("isolates explicit conversations and resets a failed thread even after the transcript is copied", async () => {
+    const { client, requests } = await recordingClient();
+    const signal = new AbortController().signal;
+    const messages: ChatMessage[] = [{ role: "user", content: "task" }];
+    await client.complete(messages, [], signal, undefined, undefined, { conversationId: "main" });
+    const other = [...messages, { role: "user" as const, content: "other task" }];
+    await client.complete(other, [], signal, undefined, undefined, { conversationId: "other" });
+    const copied = [...messages, { role: "tool" as const, content: "FAIL_THIS_TURN" }];
+    await expect(client.complete(copied, [], signal, undefined, undefined, { conversationId: "main" })).rejects.toThrow("exit 7");
+    copied.at(-1)!.content = "retry after failure";
+    await client.complete([...copied], [], signal, undefined, undefined, { conversationId: "main" });
+    expect((await requests()).map(request => request.args.includes("resume"))).toEqual([false, false, true, false]);
+  });
+
   it("resumes the exact thread, sends only appended messages, and parses chunked usage events", async () => {
     const { client, requests } = await recordingClient();
     const messages: ChatMessage[] = [{ role: "user", content: "original request" }];
@@ -55,7 +125,8 @@ describe("CodexClient", () => {
     const first = await client.complete(messages, [{ name: "read_file" }], signal, undefined, undefined, { enableThinking: false });
     expect(first.usage).toEqual({ input: 120, output: 30, cached: 100, reasoning: 20 });
     messages.push({ role: "assistant", content: "done" }, { role: "tool", tool_call_id: "executed", content: "new result" });
-    await client.complete(messages, [{ name: "read_file" }], signal);
+    const next = await client.complete(messages, [{ name: "read_file" }], signal);
+    expect(next.usage).toEqual({ input: 120, output: 30, cached: 100, reasoning: 20 });
     const [start, resumed] = await requests();
     expect(start!.args).toContain('model_reasoning_effort="medium"');
     expect(resumed!.args).toContain("resume");

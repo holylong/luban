@@ -26,6 +26,18 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 
 `codex/default` 使用 `~/.codex/config.toml` 中的默认模型；未在 luban 中设置 `reasoning_effort` 时，也使用其中的默认推理强度，例如 `model_reasoning_effort = "high"`。`LUBAN_CODEX_EFFORT=xhigh luban` 可覆盖本次进程的推理强度。这个后端复用 Codex CLI 的登录状态，无需 OpenAI API key；登录失效时重新运行 `luban login codex`。当前每次模型调用会启动一次 CLI，回答在调用完成后显示，暂不支持图片附件。
 
+同一运行器内，Codex 会复用已完成的 CLI 线程并只发送新增消息；TUI 复制会话数组、
+更新计划或记录验证不会再触发全量重发。计划和验证状态发生变化时，增量请求会明确
+替换线程中的旧状态。更改工具清单、模型、历史或项目规则，实际压缩历史，以及失败或
+取消的调用仍会使线程失效；重新启动 luban 或更换运行器后也需要重新建立线程。
+Codex 自行管理输出长度，luban 的 `max_tokens` 不会传给 CLI，也不会被当作额外上下文
+预留；本地上下文预算仍使用 `context_window` 和 `context_reserve`。
+Codex 不执行额外的会话标题请求，不会由 luban 重试已经发出的超时调用。
+CLI 返回的线程累计 token 用量会先与上次成功调用的累计值作差，再计入当前请求，
+避免续接时把之前的输入、缓存和输出用量重复相加。
+JSON 工具转接和 luban 指令仍有额外上下文开销，因此不能保证订阅消耗与直接使用
+Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例。
+
 在 TUI 中，`/status` 显示当前模型、会话上下文估计和 ChatGPT Codex 额度剩余比例、重置时间、可用重置卡数量；`/status <peer>` 查询 mesh 节点。`/usage` 显示额度和每日 token 活动，`/usage weekly` 和 `/usage cumulative` 可切换统计周期。`/usage reset` 会先显示确认界面；按 Enter 才尝试使用一张可用重置卡，Esc 取消。请求完成后会重新读取额度。额度、用量和重置卡通过官方 Codex App Server 获取，不读取或复制本地登录令牌。
 
 ## 目录

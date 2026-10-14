@@ -273,6 +273,7 @@ export class AgentRunner {
   private activeController?: AbortController;
   private readonly trustedTools = new Set<string>();
   private budgetUsed = 0;
+  private readonly codexConversationId = randomUUID();
 
   constructor(readonly config: LubanConfig, client?: ModelClient, mesh?: MeshRuntime, private readonly depth = 0) {
     this.tools = createTools(config, mesh);
@@ -556,7 +557,9 @@ export class AgentRunner {
           : shouldThink(lastUserQuestion(messages)) || currentTurnHasToolError(messages))
         : this.config.enableThinking;
       const options: ModelRequestOptions | undefined = mainRequest
-        ? { enableThinking: thinking, ...(automatic && !thinking && this.config.model.api !== "codex" ? {
+        ? { enableThinking: thinking,
+          ...(this.config.model.api === "codex" ? { conversationId: this.codexConversationId } : {}),
+          ...(automatic && !thinking && this.config.model.api !== "codex" ? {
           maxTokens: Math.min(this.config.maxTokens, 8_192),
           timeoutMs: Math.min(this.config.timeoutMs, 45_000),
           thinkingTimeoutMs: Math.min(this.config.thinkingTimeoutMs ?? 600_000, 45_000),
@@ -626,11 +629,12 @@ export class AgentRunner {
       if (await promote()) { step = 0; lastText = ""; lastToolSignature = ""; repeatCount = 0; }
       // Refresh startup rules for resumed sessions and edits to root instructions.
       if (String(messages[0]?.content).startsWith(SYSTEM_PROMPT.split("\n")[0]!)) messages[0] = initialMessages(this.config.workspace, this.config.model.name, this.config.planning ?? "auto", this.config.kev?.mode ?? "model")[0]!;
-      // The network clients cap the actual output request at MAX_OUTPUT_TOKENS.
-      // Reserving the larger configured value discards usable input context and
-      // can trigger another model call for compaction on a long task.
+      // Codex CLI owns its output budget; luban never sends max_tokens to it.
+      // Use contextReserve for Codex instead of reserving an unsent 64K budget,
+      // which causes premature summaries and fresh threads with full history.
+      // Network clients cap their actual output at MAX_OUTPUT_TOKENS.
       const outputReserve = this.config.model.api === "codex"
-        ? this.config.maxTokens : Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS);
+        ? 0 : Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS);
       const inputBudget = (this.config.contextWindow ?? 128_000)
         - Math.max(this.config.contextReserve ?? 16_384, outputReserve) - schemaTokens;
       const compacted = compactForRequest(messages, inputBudget, this.config.maxHistoryMessages ?? 80);

@@ -57,6 +57,8 @@ export type NoticeHandler = (text: string) => void;
 
 /** Per-request speed controls. The configured thinking budget remains available to other tasks. */
 export interface ModelRequestOptions {
+  /** Stable conversation identity for stateful CLI backends; auxiliary calls omit it. */
+  conversationId?: string;
   enableThinking?: boolean;
   reasoningEffort?: LubanConfig["model"]["reasoningEffort"];
   maxTokens?: number;
