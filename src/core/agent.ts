@@ -9,6 +9,7 @@ import { AnthropicClient } from "./anthropic.js";
 import { ResponsesClient } from "./responses.js";
 import { CodexClient } from "./codex.js";
 import { isZenFreeModel, OpenCodeZenClient } from "./opencode-zen.js";
+import { modelRetryDelay, recoverableGoStreamError, waitForModelRetry } from "./opencode-go.js";
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactForRequest, compactMessages, estimateMessagesTokens } from "./context.js";
 import { isContextOverflowError, isModelTimeoutError } from "./model-errors.js";
@@ -273,7 +274,7 @@ export class AgentRunner {
   private activeController?: AbortController;
   private readonly trustedTools = new Set<string>();
   private budgetUsed = 0;
-  private readonly codexConversationId = randomUUID();
+  private readonly modelConversationId = randomUUID();
 
   constructor(readonly config: LubanConfig, client?: ModelClient, mesh?: MeshRuntime, private readonly depth = 0) {
     this.tools = createTools(config, mesh);
@@ -421,6 +422,7 @@ export class AgentRunner {
     else signal?.addEventListener("abort", abort, { once: true });
     try {
       const completion = await this.client.complete(titlePrompt(messages), [], controller.signal, undefined, undefined, {
+        ...(this.config.model.provider === "opencode-go" ? { conversationId: this.modelConversationId } : {}),
         maxTokens: 64,
         timeoutMs: Math.min(this.config.timeoutMs, 20_000),
         maxRetries: 1,
@@ -540,6 +542,7 @@ export class AgentRunner {
     let modelCalls = 0;
     const callModel: typeof this.client.complete = async (callMessages, callTools, callSignal, onDelta) => {
       const mainRequest = callMessages === messages;
+      const go = this.config.model.provider === "opencode-go";
       const automatic = this.config.enableThinking === undefined;
       // SOTA pattern (opencode parity): think once to plan the turn, then run
       // the following execution calls fast. A complex request used to think on
@@ -558,14 +561,16 @@ export class AgentRunner {
         : this.config.enableThinking;
       const options: ModelRequestOptions | undefined = mainRequest
         ? { enableThinking: thinking,
-          ...(this.config.model.api === "codex" ? { conversationId: this.codexConversationId } : {}),
+          ...(this.config.model.api === "codex" || go ? { conversationId: this.modelConversationId } : {}),
           ...(automatic && !thinking && this.config.model.api !== "codex" ? {
           maxTokens: Math.min(this.config.maxTokens, 8_192),
-          timeoutMs: Math.min(this.config.timeoutMs, 45_000),
-          thinkingTimeoutMs: Math.min(this.config.thinkingTimeoutMs ?? 600_000, 45_000),
-          maxRetries: Math.min(this.config.maxRetries ?? 3, 1),
+          ...(!go ? {
+            timeoutMs: Math.min(this.config.timeoutMs, 45_000),
+            thinkingTimeoutMs: Math.min(this.config.thinkingTimeoutMs ?? 600_000, 45_000),
+          } : {}),
+          maxRetries: go ? this.config.maxRetries ?? 3 : Math.min(this.config.maxRetries ?? 3, 1),
         } : {}) }
-        : undefined;
+        : go ? { conversationId: this.modelConversationId } : undefined;
       // Clients retry connection failures before a stream starts. A stream that
       // opens but produces no output can still time out: retry that model call
       // here, where no tool has run and there is no partial answer to duplicate.
@@ -593,7 +598,12 @@ export class AgentRunner {
           requestUsage = response.usage;
           return response;
         } catch (error) {
-          if (callSignal.aborted || receivedOutput || !isModelTimeoutError(error) || attempt >= silentRetries) throw error;
+          if (callSignal.aborted || receivedOutput || !(isModelTimeoutError(error) || go && recoverableGoStreamError(error)) || attempt >= silentRetries) throw error;
+          if (go) {
+            const backoff = modelRetryDelay(undefined, attempt, "opencode-go");
+            onEvent({ type: "status", text: `Go 模型连接未返回完整输出，${(backoff / 1000).toFixed(1)}s 后重试模型请求；已完成的工具操作保留` });
+            await waitForModelRetry(backoff, callSignal);
+          }
         } finally {
           const elapsedMs = Date.now() - requestStarted;
           metrics.modelMs += elapsedMs;

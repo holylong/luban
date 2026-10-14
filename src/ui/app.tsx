@@ -9,7 +9,7 @@ import { AgentInbox } from "../core/inbox.js";
 import type { UserQuestion } from "../core/question.js";
 import { planVerificationStatus, readPlan, readVerifications } from "../core/plan.js";
 import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
-import { isFreeTierError, isModelTimeoutError } from "../core/model-errors.js";
+import { isFreeTierError, isModelTimeoutError, isUpstreamUnavailableError } from "../core/model-errors.js";
 import { isZenFreeModel } from "../core/opencode-zen.js";
 import { estimateMessagesTokens } from "../core/context.js";
 import { savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
@@ -1341,7 +1341,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setRunOutcome({
         status: controller.signal.aborted ? "cancelled" : "failed",
         text: message,
-        ...(!controller.signal.aborted ? { detail: `原因：${isFreeTierError(error) ? "OpenCode Zen 拒绝了客户端请求格式（HTTP 403 FreeTierError）" : isModelTimeoutError(error) ? "模型请求重试后仍超时" : oneLine(message, 180)}\n${isFreeTierError(error) ? "请检查自定义请求头是否覆盖了 Zen 客户端版本或会话标识；免费模型请求需要携带 read、bash 等编码工具。此错误不表示必须更换 API key 或使用 Console OAuth 登录。" : ""}${isFreeTierError(error) ? "\n" : ""}${saved ? "当前执行记录已保留" : "当前执行记录未能保存"}；请检查原因后发送“继续”接着处理。` } : {}),
+        ...(!controller.signal.aborted ? { detail: `原因：${isFreeTierError(error) ? "OpenCode Zen 拒绝了客户端请求格式（HTTP 403 FreeTierError）" : isUpstreamUnavailableError(error) ? "模型服务返回上游端点暂不可用（Endpoint is unavailable）" : isModelTimeoutError(error) ? "模型请求重试后仍超时" : oneLine(message, 180)}\n${isFreeTierError(error) ? "请检查自定义请求头是否覆盖了 Zen 客户端版本或会话标识；免费模型请求需要携带 read、bash 等编码工具。此错误不表示必须更换 API key 或使用 Console OAuth 登录。\n" : isUpstreamUnavailableError(error) ? "这条错误不能直接判定为额度耗尽；可稍后继续，或在 /models 切换模型。\n" : ""}${saved ? "当前执行记录已保留" : "当前执行记录未能保存"}；请检查原因后发送“继续”接着处理。` } : {}),
       });
       setMessages([...nextMessages]);
       resetDraft();

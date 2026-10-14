@@ -25,12 +25,17 @@ export function isModelTimeoutError(error: unknown): boolean {
   return /timed out|timeout|ETIMEDOUT|超时|没有任何输出/i.test(describeModelError(error));
 }
 
+export function isUpstreamUnavailableError(error: unknown): boolean {
+  return /(?:upstream request failed:\s*)?endpoint is unavailable/i.test(describeModelError(error));
+}
+
 /** Tool effects already happened once; only model-transport calls may retry, never tool.execute. */
 export function retryableModelError(error: unknown): boolean {
   if (isContextOverflowError(error)) return false;
   // The free-tier gate is a policy decision, not a transient failure: retrying
   // only burns the retry budget and hides the real cause.
   if (isFreeTierError(error)) return false;
+  if (isUpstreamUnavailableError(error)) return true;
   const text = error instanceof Error ? error.message : String(error);
   return /model HTTP (408|409|425|429|529|5\d\d)|timed out|idle timeout|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|overloaded|rate[ -]?limit|temporarily unavailable|try again|service unavailable|bad gateway|gateway timeout/i.test(text);
 }

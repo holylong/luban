@@ -7,6 +7,8 @@ import { modelThinkingFields } from "./model-controls.js";
 import { parseModelEvent, sseData, validateCompletion } from "./sse.js";
 import { parseToolArguments } from "./json-args.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
+import { randomUUID } from "node:crypto";
+import { goRequestHeaders, modelRetryDelay, recoverableGoStreamError } from "./opencode-go.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -75,6 +77,7 @@ async function delay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export class AnthropicClient {
+  private readonly sessionId = randomUUID();
   constructor(private readonly config: LubanConfig) {}
 
   async complete(messages: ChatMessage[], tools: Array<Record<string, unknown>>, signal: AbortSignal, onDelta?: DeltaHandler, onNotice?: NoticeHandler, options?: ModelRequestOptions): Promise<CompletionResult> {
@@ -101,7 +104,7 @@ export class AnthropicClient {
             "content-type": "application/json",
             "anthropic-version": "2023-06-01",
             ...(this.config.model.apiKey ? { "x-api-key": this.config.model.apiKey } : {}),
-            ...this.config.model.headers,
+            ...goRequestHeaders(this.config.model, options?.conversationId ?? this.sessionId),
           },
           body: JSON.stringify({
             model: this.config.model.model,
@@ -118,7 +121,7 @@ export class AnthropicClient {
         if (!response.ok) {
           const body = await response.text();
           if (retryableAnthropicBody(response.status, body) && attempt < retries) {
-            const backoff = Math.min(10_000, 500 * (2 ** attempt)) + Math.floor(Math.random() * 250);
+            const backoff = modelRetryDelay(response, attempt, this.config.model.provider);
             onNotice?.(`模型返回 HTTP ${response.status}，${(backoff / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
             await delay(backoff, signal);
             continue;
@@ -200,7 +203,7 @@ export class AnthropicClient {
       // the text it already produced and lets the runner ask for the rest.
       const declared = failure instanceof Error
         && /model stream error|model returned malformed|model returned invalid|model SSE event exceeds/u.test(failure.message);
-      if (declared) throw failure;
+      if (declared && !(this.config.model.provider === "opencode-go" && recoverableGoStreamError(failure))) throw failure;
       if (content || reasoning || toolSlots.size) {
         onNotice?.("模型连接在输出中途中断，已保留已收到的内容并继续");
         return { content, reasoning, toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };
