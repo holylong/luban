@@ -4,6 +4,8 @@ import { parseModelEvent, sseData, validateCompletion, type CompletionCheck } fr
 import { recoverTextToolCalls } from "./tool-call-text.js";
 import { describeModelError } from "./model-errors.js";
 import { modelThinkingFields } from "./model-controls.js";
+import { randomUUID } from "node:crypto";
+import { goRequestHeaders, modelRetryDelay, recoverableGoStreamError } from "./opencode-go.js";
 
 /**
  * Ceiling for one response's output, matching OpenCode's default. A larger cap
@@ -124,17 +126,6 @@ export async function openAiWireMessages(messages: ChatMessage[], workspace = ""
   return system ? [{ role: "system", content: system }, ...conversation] : conversation;
 }
 
-function retryDelay(response: Response | undefined, attempt: number): number {
-  const header = response?.headers.get("retry-after");
-  if (header) {
-    const seconds = Number(header);
-    if (Number.isFinite(seconds)) return Math.min(60_000, Math.max(0, seconds * 1_000));
-    const date = Date.parse(header);
-    if (Number.isFinite(date)) return Math.min(60_000, Math.max(0, date - Date.now()));
-  }
-  return Math.min(10_000, 500 * (2 ** attempt)) + Math.floor(Math.random() * 250);
-}
-
 async function wait(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) throw signal.reason ?? new Error("aborted");
   await new Promise<void>((resolve, reject) => {
@@ -152,6 +143,7 @@ async function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export class OpenAiClient {
+  private readonly sessionId = randomUUID();
   constructor(private readonly config: LubanConfig) {}
 
   async complete(
@@ -184,6 +176,7 @@ export class OpenAiClient {
       const abort = () => controller.abort(signal.reason ?? new Error("aborted"));
       signal.addEventListener("abort", abort, { once: true });
       let response: Response | undefined;
+      let backoff: number | undefined;
       try {
         response = await fetch(endpoint(this.config.model.baseUrl), {
           method: "POST",
@@ -191,7 +184,7 @@ export class OpenAiClient {
             "content-type": "application/json",
             accept: "text/event-stream, application/json",
             ...(this.config.model.apiKey ? { authorization: `Bearer ${this.config.model.apiKey}` } : {}),
-            ...this.config.model.headers,
+            ...goRequestHeaders(this.config.model, options?.conversationId ?? this.sessionId),
           },
           body,
           signal: controller.signal,
@@ -200,7 +193,8 @@ export class OpenAiClient {
           const responseBody = await response.text();
           const error = new Error(`model HTTP ${response.status}: ${responseBody.slice(0, 4000)}`);
           if (!retryableBody(response.status, responseBody) || attempt >= retries) throw error;
-          onNotice?.(`模型返回 HTTP ${response.status}，${(retryDelay(response, attempt) / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
+          backoff = modelRetryDelay(response, attempt, this.config.model.provider);
+          onNotice?.(`模型返回 HTTP ${response.status}，${(backoff / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
         } else {
           const type = response.headers.get("content-type") || "";
           if (!type.includes("text/event-stream")) {
@@ -222,7 +216,7 @@ export class OpenAiClient {
         clearTimeout(timeout);
         signal.removeEventListener("abort", abort);
       }
-      await wait(retryDelay(response, attempt), signal);
+      await wait(backoff ?? modelRetryDelay(response, attempt, this.config.model.provider), signal);
     }
   }
 
@@ -304,7 +298,7 @@ export class OpenAiClient {
       // a long answer away. Provider-declared errors still surface as errors.
       const declared = failure instanceof Error
         && /model stream error|model returned malformed|model returned invalid|model SSE event exceeds/u.test(failure.message);
-      if (declared) throw failure;
+      if (declared && !(this.config.model.provider === "opencode-go" && recoverableGoStreamError(failure))) throw failure;
       if (content || reasoning || calls.length) {
         onNotice?.(failure
           ? `模型连接在输出中途中断（${describeModelError(failure)}），已保留已收到的内容并继续`

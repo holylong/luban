@@ -356,9 +356,20 @@ Messages，`@ai-sdk/openai` 模型（GPT / Grok / Muse Spark）走 Responses。l
 自动选择，配置里给单个模型写 `"api": "anthropic" | "responses" | "openai"` 也能覆盖。
 GPT Luna 这类推理模型不接受显式 `temperature`，内置定义用
 `"capabilities": { "temperature": false }` 标注，luban 会省略该字段；自己配置模型时
-同样可以这样写。请求还需要带上 `x-opencode-session` 头，内置 provider 已自动附上；
-自己配置时照 `config.example.json` 写上即可。要退回自己的 key，直接在 `providers`
+同样可以这样写。Go 的三个协议适配器会自动发送 `User-Agent: luban/<版本>` 和每个
+对话独立、稳定的 `x-opencode-session`；同一对话的主请求、总结和标题请求复用该
+标识。旧配置中的固定占位值 `luban` 会自动替换为对话标识，无需手动填写；显式
+自定义的其他请求头仍优先。要退回自己的 key，直接在 `providers`
 里定义同名 `opencode-go`，它会覆盖内置定义。
+
+Go 自动模式保留配置的 `max_retries`、请求超时和流空闲超时，不再只重试一次或强制
+使用 45 秒超时。失败后按 2、4、8、16、30 秒上限退避（带少量随机抖动），优先读取
+服务端 `Retry-After`（单次最多等待 60 秒）。仅重试模型请求，不重放已完成的工具操作；
+空流和尚未产生输出的临时流错误可继续尝试，收到部分文本后则保留文本并请求续写，
+丢弃未完成的工具调用。用户取消会立即中止等待；用尽重试预算后仍会保存执行记录。
+`429` 携带 `Endpoint is unavailable` 表示上游端点不可用，不能仅凭这个错误认定额度
+耗尽。客户端无法保证恢复持续不可用的上游；可稍后继续或手动切换模型，luban 不会
+自动切换到付费模型。
 
 ### 免费模型：Zen 或 Go
 

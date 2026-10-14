@@ -313,7 +313,7 @@ function builtinProviders(includeCodex = false, session = ""): Record<string, Js
     ...(goKey ? { "opencode-go": {
       api_key_env: "OPENCODE_API_KEY",
       base_url: "https://opencode.ai/zen/go/v1",
-      headers: { "x-opencode-session": "luban" },
+      headers: { "x-opencode-client": "luban" },
       models: Object.fromEntries(Object.entries(OPENCODE_GO_MODELS).map(([id, model]) => [id, {
         name: model.name,
         api: model.api,

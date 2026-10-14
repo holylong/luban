@@ -6,6 +6,8 @@ import { modelThinkingFields } from "./model-controls.js";
 import { parseModelEvent, sseData } from "./sse.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
 import { describeModelError } from "./model-errors.js";
+import { randomUUID } from "node:crypto";
+import { goRequestHeaders, modelRetryDelay, recoverableGoStreamError } from "./opencode-go.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -124,6 +126,7 @@ function outputItemsToResult(output: unknown, onDelta?: DeltaHandler): { content
 
 /** Native OpenAI Responses API client (streaming SSE + JSON fallback). */
 export class ResponsesClient {
+  private readonly sessionId = randomUUID();
   constructor(private readonly config: LubanConfig) {}
 
   async complete(
@@ -163,7 +166,7 @@ export class ResponsesClient {
             "content-type": "application/json",
             accept: "text/event-stream, application/json",
             ...(this.config.model.apiKey ? { authorization: `Bearer ${this.config.model.apiKey}` } : {}),
-            ...this.config.model.headers,
+            ...goRequestHeaders(this.config.model, options?.conversationId ?? this.sessionId),
           },
           body,
           signal: controller.signal,
@@ -194,8 +197,8 @@ export class ResponsesClient {
         clearTimeout(timeout);
         signal.removeEventListener("abort", abort);
       }
-      const backoff = Math.min(10_000, 500 * (2 ** attempt)) + Math.floor(Math.random() * 250);
-      onNotice?.(`模型请求中断（${describeModelError(failure)}），${(backoff / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
+      const backoff = modelRetryDelay(response, attempt, this.config.model.provider);
+      onNotice?.(`${response ? `模型返回 HTTP ${response.status}` : `模型请求中断（${describeModelError(failure)}）`}，${(backoff / 1000).toFixed(1)}s 后重试（第 ${attempt + 2}/${retries + 1} 次）`);
       await wait(backoff, signal);
     }
   }
@@ -309,7 +312,7 @@ export class ResponsesClient {
       // the text it already produced and lets the runner ask for the rest.
       const declared = failure instanceof Error
         && /model stream error|model returned malformed|model returned invalid|model SSE event exceeds/u.test(failure.message);
-      if (declared) throw failure;
+      if (declared && !(this.config.model.provider === "opencode-go" && recoverableGoStreamError(failure))) throw failure;
       if (content || argBuffers.size) {
         onNotice?.("模型连接在输出中途中断，已保留已收到的内容并继续");
         return { content, reasoning: "", toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };

@@ -261,7 +261,7 @@ describe("config", () => {
     expect(config.model.baseUrl).toBe("https://opencode.ai/zen/go/v1");
     expect(config.model.apiKey).toBe("sk-go-test");
     expect(config.model.api).toBe("openai");
-    expect(config.model.headers).toEqual({ "x-opencode-session": "luban" });
+    expect(config.model.headers).toEqual({ "x-opencode-client": "luban" });
     // Each model is routed to the protocol the gateway expects.
     expect(config.models.find((item) => item.id === "opencode-go/qwen3.8-flash")?.api).toBe("anthropic");
     const luna = config.models.find((item) => item.id === "opencode-go/gpt-6-luna");
@@ -306,7 +306,7 @@ describe("config", () => {
     const config = loadConfig({ workspace, model: "opencode-go/cat-jam-free" });
     expect(config.model.id).toBe("opencode-go/cat-jam-free");
     expect(config.model.baseUrl).toBe("https://opencode.ai/zen/go/v1");
-    expect(config.model.headers["x-opencode-session"]).toBe("luban");
+    expect(config.model.headers["x-opencode-client"]).toBe("luban");
     for (const id of ["cat-jam-free", "step-5-preview-free", "longcat-2.5-preview-free"]) {
       expect(config.models.some(item => item.id === `opencode-go/${id}`)).toBe(true);
     }

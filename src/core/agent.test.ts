@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,105 @@ function config(workspace: string): LubanConfig {
 }
 
 describe("AgentRunner", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("retains Go's configured retry budget and stable routing after a tool already ran", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-go-retry-tool-"));
+    const settings = config(workspace);
+    settings.model = { ...settings.model, provider: "opencode-go", model: "cat-jam-free", api: "openai" };
+    settings.maxRetries = 3;
+    let requests = 0;
+    let executions = 0;
+    const headers: Headers[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      headers.push(new Headers(init.headers));
+      requests++;
+      if (requests === 1) return Response.json({ choices: [{ message: { content: "", tool_calls: [{
+        id: "read-once", type: "function", function: { name: "read_file", arguments: '{"path":"probe.txt"}' },
+      }] }, finish_reason: "tool_calls" }] });
+      if (requests < 5) return new Response('{"error":{"type":"server_error","message":"Upstream request failed: Endpoint is unavailable."}}',
+        { status: 429, headers: { "retry-after": "0" } });
+      return Response.json({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] });
+    });
+    const runner = new AgentRunner(settings);
+    runner.tools.set("read_file", { name: "read_file", description: "read", risk: "read", parameters: {},
+      async execute() { executions++; return "read result"; } });
+    try {
+      const result = await runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once");
+      expect(result.ok).toBe(true);
+      expect(requests).toBe(5);
+      expect(executions).toBe(1);
+      expect(new Set(headers.map(value => value.get("x-opencode-session"))).size).toBe(1);
+      expect(headers[0]!.get("x-opencode-session")).not.toBe("luban");
+    } finally { runner.close(); }
+  });
+
+  it("lets the user cancel a Go empty-stream retry without issuing another request", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-go-retry-cancel-"));
+    const settings = config(workspace);
+    settings.model.provider = "opencode-go";
+    settings.maxRetries = 2;
+    let calls = 0;
+    const runner = new AgentRunner(settings, { async complete() {
+      calls++; throw new Error("model stream ended before completion");
+    } });
+    const controller = new AbortController();
+    try {
+      await expect(runner.run([...initialMessages(workspace), { role: "user", content: "hi" }], "agent", controller.signal,
+        event => { if (event.type === "status" && event.text.startsWith("Go 模型连接")) controller.abort(new Error("cancelled")); },
+        async () => "once")).rejects.toThrow("cancelled");
+      expect(calls).toBe(1);
+    } finally { runner.close(); }
+  });
+
+  it("recovers a Go stream that closes before output without replaying tools", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-go-empty-stream-"));
+    const settings = config(workspace);
+    settings.model = { ...settings.model, provider: "opencode-go", api: "openai" };
+    settings.maxRetries = 1;
+    let requests = 0;
+    vi.stubGlobal("fetch", async () => {
+      requests++;
+      return requests === 1 ? new Response("", { headers: { "content-type": "text/event-stream" } })
+        : Response.json({ choices: [{ message: { content: "recovered" }, finish_reason: "stop" }] });
+    });
+    const runner = new AgentRunner(settings);
+    try {
+      const result = await runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once");
+      expect(result).toMatchObject({ ok: true, text: "recovered", modelCalls: 2 });
+      expect(requests).toBe(2);
+    } finally { runner.close(); }
+  });
+
+  it("honors max_retries zero and keeps earlier Go tool results when the endpoint stays unavailable", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-go-retry-zero-"));
+    const settings = config(workspace);
+    settings.model = { ...settings.model, provider: "opencode-go", api: "openai" };
+    settings.maxRetries = 0;
+    let requests = 0;
+    let executions = 0;
+    vi.stubGlobal("fetch", async () => {
+      requests++;
+      return requests === 1 ? Response.json({ choices: [{ message: { content: "", tool_calls: [{
+        id: "once", type: "function", function: { name: "read_file", arguments: '{"path":"probe.txt"}' },
+      }] }, finish_reason: "tool_calls" }] })
+        : new Response('{"error":{"message":"Upstream request failed: Endpoint is unavailable."}}', { status: 429 });
+    });
+    const runner = new AgentRunner(settings);
+    runner.tools.set("read_file", { name: "read_file", description: "read", risk: "read", parameters: {},
+      async execute() { executions++; return "saved tool result"; } });
+    const messages: ChatMessage[] = [...initialMessages(workspace), { role: "user", content: "hi" }];
+    try {
+      await expect(runner.run(messages, "agent", new AbortController().signal, () => undefined, async () => "once"))
+        .rejects.toThrow("model HTTP 429");
+      expect(requests).toBe(2);
+      expect(executions).toBe(1);
+      expect(messages.some(message => message.role === "tool" && message.content === "saved tool result")).toBe(true);
+    } finally { runner.close(); }
+  });
+
   it("keeps Codex's configured timeout, records usage, and avoids automatic title calls", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-codex-controls-"));
     const settings = config(workspace);
