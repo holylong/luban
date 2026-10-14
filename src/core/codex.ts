@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
+import { codexInvocation } from "./codex-command.js";
 
 const OUTPUT_SCHEMA = {
   type: "object",
@@ -83,9 +84,8 @@ export class CodexClient {
       const effort = options?.reasoningEffort ?? this.config.model.reasoningEffort;
       if (effort) args.push("-c", `model_reasoning_effort="${effort}"`);
       args.push("-");
-      const command = process.env.LUBAN_CODEX_BIN || "codex";
       const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
-        const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+        const child = spawn(...codexInvocation(args), { stdio: ["pipe", "pipe", "pipe"] });
         let stderr = "";
         let pending = "";
         let timedOut = false;
