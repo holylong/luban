@@ -52,7 +52,27 @@ export function transcriptLines(blocks: TranscriptBlock[], width: number): Trans
   return lines;
 }
 
-export function TranscriptLineView({ line, selected = false }: { line: TranscriptLine; selected?: boolean }) {
+/** One current-history cache per mounted view. Replace the history array when
+ * its contents change. Old sessions/widths are released instead of accumulated. */
+export function createTranscriptLayout() {
+  let previous: TranscriptBlock[] | undefined;
+  let previousWidth = Number.NaN;
+  let prepared: TranscriptLine[] = [];
+  return (history: TranscriptBlock[], tail: TranscriptBlock[], width: number): TranscriptLine[] => {
+    if (history !== previous || width !== previousWidth) {
+      prepared = transcriptLines(history, width);
+      previous = history;
+      previousWidth = width;
+    }
+    return tail.length ? prepared.concat(transcriptLines(tail, width)) : prepared;
+  };
+}
+
+// The palette is mutable module state; its revision explicitly invalidates
+// memoization when a theme changes while the row itself stays the same.
+export const TranscriptLineView = React.memo(function TranscriptLineView({ line, selected = false }: {
+  line: TranscriptLine; selected?: boolean; themeRevision?: number;
+}) {
   if (line.execution) return <ExecutionRowView row={line.execution} />;
   if (line.kind === "code") return <HighlightedCodeLine line={line.text || " "} backgroundColor={selected ? theme.selected : theme.codeBackground} />;
   const color = line.kind === "heading" ? theme.accent
@@ -60,4 +80,4 @@ export function TranscriptLineView({ line, selected = false }: { line: Transcrip
       : theme.text;
   return <Text wrap="truncate-end" color={color} bold={line.kind === "heading"}
     backgroundColor={selected ? theme.selected : line.kind === "user" ? theme.panel : undefined}>{line.text || " "}</Text>;
-}
+});

@@ -75,13 +75,13 @@ export function tokenize(line: string, language = ""): Token[] {
   return tokens;
 }
 
-export function HighlightedLine({ line, language }: { line: string; language?: string }): React.ReactElement {
+export const HighlightedLine = React.memo(function HighlightedLine({ line, language }: { line: string; language?: string }): React.ReactElement {
   if (!line) return <>{""}</>;
   const tokens = tokenize(line, language);
   return <>{tokens.map((token, index) => token.kind === "plain"
     ? <React.Fragment key={index}>{token.text}</React.Fragment>
     : <span key={index} className={CLASS_NAMES[token.kind]}>{token.text}</span>)}</>;
-}
+});
 
 /* Markdown ------------------------------------------------------------- */
 
@@ -133,7 +133,7 @@ function codeBlock(code: string, language: string, key: string): React.ReactElem
  * Everything is escaped by construction: no `dangerouslySetInnerHTML` is used,
  * so untrusted model or file content can never inject markup.
  */
-export function Markdown({ text }: { text: string }): React.ReactElement {
+export const Markdown = React.memo(function Markdown({ text }: { text: string }): React.ReactElement {
   const lines = (text ?? "").replaceAll("\r\n", "\n").split("\n");
   const blocks: React.ReactNode[] = [];
   let index = 0;
@@ -219,4 +219,4 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
   }
 
   return <div className="md">{blocks}</div>;
-}
+});
