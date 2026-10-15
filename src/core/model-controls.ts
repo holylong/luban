@@ -1,6 +1,24 @@
 import type { LubanConfig, ModelRef } from "./types.js";
 import type { ModelRequestOptions } from "./openai.js";
 
+/** Recovery must change what the provider actually receives. Unknown models
+ * may ignore thinking options, so only a real budget increase helps those. */
+export function reasoningRecoveryOptions(config: LubanConfig, current: ModelRequestOptions | undefined,
+  outputLimit: number): ModelRequestOptions | undefined {
+  if (config.model.api === "codex") return undefined;
+  const maxTokens = Math.min(config.maxTokens, outputLimit);
+  const previousMax = Math.min(current?.maxTokens ?? config.maxTokens, maxTokens);
+  const next: ModelRequestOptions = {
+    ...current, maxTokens, enableThinking: false, reasoningEffort: "low",
+    timeoutMs: config.timeoutMs,
+    thinkingTimeoutMs: config.thinkingTimeoutMs ?? Math.max(config.timeoutMs, 600_000),
+    maxRetries: config.maxRetries ?? 3,
+  };
+  const previousFields = modelThinkingFields(config, current, previousMax);
+  const nextFields = modelThinkingFields(config, next, maxTokens);
+  return maxTokens > previousMax || JSON.stringify(previousFields) !== JSON.stringify(nextFields) ? next : undefined;
+}
+
 /** Send native controls only for recognized models or an explicit gateway override. */
 export function modelThinkingFields(config: LubanConfig, options: ModelRequestOptions | undefined, maxTokens: number): Record<string, unknown> {
   const model = config.model;

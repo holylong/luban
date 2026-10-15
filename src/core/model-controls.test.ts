@@ -1,9 +1,28 @@
 import { expect, it } from "vitest";
-import { modelThinkingFields } from "./model-controls.js";
+import { modelThinkingFields, reasoningRecoveryOptions } from "./model-controls.js";
 import { AnthropicClient } from "./anthropic.js";
 import { ResponsesClient } from "./responses.js";
 import type { LubanConfig, ModelRef } from "./types.js";
 const config = (model: Partial<ModelRef>) => ({ model: { id: "test/model", provider: "test", model: "test", name: "test", apiKey: "", baseUrl: "https://example.test/v1", ...model }, maxTokens: 8000, timeoutMs: 5000, maxRetries: 3, temperature: 0.2 } as LubanConfig);
+it.each([
+  [{ model: "gpt-5", api: "responses" }, { reasoning: { effort: "low" } }],
+  [{ model: "claude-sonnet-4-6", api: "anthropic" }, { thinking: { type: "disabled" } }],
+  [{ id: "test/qwen3", api: "openai" }, { chat_template_kwargs: { enable_thinking: false } }],
+] as const)("uses the native recovery control for %j without changing preferences", (model, expected) => {
+  const settings = config(model);
+  settings.enableThinking = true;
+  const recovery = reasoningRecoveryOptions(settings, { enableThinking: true }, 8000);
+  expect(recovery).toBeDefined();
+  expect(modelThinkingFields(settings, recovery, 8000)).toEqual(expected);
+  expect(settings.enableThinking).toBe(true);
+});
+
+it("requires a real wire change and does not override Codex CLI or explicit output limits", () => {
+  const unknown = config({ thinkingControl: "none" });
+  expect(reasoningRecoveryOptions(unknown, { enableThinking: false }, 8000)).toBeUndefined();
+  expect(reasoningRecoveryOptions(unknown, { maxTokens: 2000 }, 32000)?.maxTokens).toBe(8000);
+  expect(reasoningRecoveryOptions(config({ api: "codex" }), { maxTokens: 2000 }, 8000)).toBeUndefined();
+});
 it("uses native controls and permits explicit gateway overrides", () => {
   expect(modelThinkingFields(config({ id: "test/qwen3" }), { enableThinking: false }, 8000)).toEqual({ chat_template_kwargs: { enable_thinking: false } });
   expect(modelThinkingFields(config({ model: "deepseek-v4-flash" }), { enableThinking: true }, 8000)).toEqual({ thinking: { type: "enabled" } });

@@ -490,13 +490,13 @@ describe("AgentRunner", () => {
     expect(result.text).toContain("连接");
   });
 
-  it("stops with something actionable when reasoning eats the whole output budget", async () => {
+  it("does not replay an identical request when reasoning controls and budget cannot change", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-starved-"));
     let calls = 0;
     const client = {
       async complete() {
         calls += 1;
-        // No prose at all: every token went to reasoning, so a retry repeats it.
+        // No native controls and already using the configured cap.
         return { content: "", reasoning: "思考".repeat(200), toolCalls: [], usage: { input: 1, output: 400 }, truncated: true };
       },
     };
@@ -508,8 +508,82 @@ describe("AgentRunner", () => {
     runner.close();
     expect(result.ok).toBe(false);
     expect(result.stopReason).toBe("truncated");
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
     expect(result.text).toContain("reasoning_effort");
+  });
+
+  it("restores the full wire budget after reasoning starves fast mode without replaying a completed tool", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-reasoning-budget-"));
+    const settings = config(workspace);
+    settings.maxTokens = 32_000;
+    settings.model = { ...settings.model, api: "openai" };
+    const bodies: Record<string, unknown>[] = [];
+    let executions = 0;
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      const index = bodies.length;
+      const message = index === 1 ? { content: "", tool_calls: [{ id: "read-once", type: "function", function: { name: "read_file", arguments: "{}" } }] }
+        : index === 2 ? { content: "", reasoning_content: "推理".repeat(200) } : { content: "完成" };
+      return Response.json({ choices: [{ message, finish_reason: index === 1 ? "tool_calls" : index === 2 ? "length" : "stop" }] });
+    });
+    const runner = new AgentRunner(settings);
+    runner.tools.set("read_file", { name: "read_file", description: "read", risk: "read", parameters: {},
+      async execute() { executions++; return "saved result"; } });
+    try {
+      const result = await runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once");
+      expect(result.ok).toBe(true);
+      expect(executions).toBe(1);
+      expect(bodies.map(body => body.max_tokens)).toEqual([32_000, 8192, 32_000]);
+      expect((bodies[2]!.messages as ChatMessage[]).some(message => message.role === "tool" && message.content === "saved result")).toBe(true);
+      expect(bodies[2]).not.toHaveProperty("reasoning_effort");
+      expect(settings.enableThinking).toBeUndefined();
+    } finally { runner.close(); }
+  });
+
+  it.each([false, true])("changes native thinking once, then %s repeated starvation stays bounded", async persistent => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-reasoning-control-"));
+    const settings = config(workspace);
+    settings.enableThinking = true;
+    settings.model = { ...settings.model, api: "openai", model: "deepseek-v4-flash" };
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      const truncated = persistent || bodies.length === 1;
+      return Response.json({ choices: [{ message: truncated ? { content: "", reasoning_content: "推理" } : { content: "完成" }, finish_reason: truncated ? "length" : "stop" }] });
+    });
+    const runner = new AgentRunner(settings);
+    try {
+      const result = await runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once");
+      expect(result.ok).toBe(!persistent);
+      expect(bodies).toHaveLength(2);
+      expect(bodies.map(body => body.thinking)).toEqual([{ type: "enabled" }, { type: "disabled" }]);
+      expect(bodies.map(body => body.max_tokens)).toEqual([1000, 1000]);
+      expect(settings.enableThinking).toBe(true);
+    } finally { runner.close(); }
+  });
+
+  it("does not accumulate truncations separated by successful tool rounds", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-truncation-rounds-"));
+    let requests = 0, executions = 0;
+    const client = { async complete() {
+      requests++;
+      if (requests === 9) return { content: "done", toolCalls: [], usage: { input: 1, output: 1 } };
+      if (requests % 2) return { content: `partial-${requests}`, toolCalls: [], usage: { input: 1, output: 1 }, truncated: true };
+      return { content: "", toolCalls: [{ id: `tool-${requests}`, type: "function" as const,
+        function: { name: "read_file", arguments: JSON.stringify({ round: requests }) } }], usage: { input: 1, output: 1 } };
+    } };
+    const runner = new AgentRunner(config(workspace), client);
+    runner.tools.set("read_file", { name: "read_file", description: "read", risk: "read", parameters: {},
+      async execute() { executions++; return "ok"; } });
+    try {
+      const result = await runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
+        "agent", new AbortController().signal, () => undefined, async () => "once");
+      expect(result.ok).toBe(true);
+      expect(requests).toBe(9);
+      expect(executions).toBe(4);
+    } finally { runner.close(); }
   });
 
   it("executes a tool with permission and returns the final answer", async () => {
