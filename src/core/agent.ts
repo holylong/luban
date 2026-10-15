@@ -13,6 +13,7 @@ import { modelRetryDelay, recoverableGoStreamError, waitForModelRetry } from "./
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactForRequest, compactMessages, estimateMessagesTokens } from "./context.js";
 import { isContextOverflowError, isModelTimeoutError } from "./model-errors.js";
+import { reasoningRecoveryOptions } from "./model-controls.js";
 import { parseToolArguments } from "./json-args.js";
 import { repairToolHistory } from "./history.js";
 import { cleanTitle, hasNameableContent, titlePrompt } from "./session-title.js";
@@ -540,6 +541,8 @@ export class AgentRunner {
     // the user waits for just the same.
     const runStartedAt = Date.now();
     let modelCalls = 0;
+    let reasoningRecovery: ModelRequestOptions | undefined;
+    let lastMainOptions: ModelRequestOptions | undefined;
     const callModel: typeof this.client.complete = async (callMessages, callTools, callSignal, onDelta) => {
       const mainRequest = callMessages === messages;
       const go = this.config.model.provider === "opencode-go";
@@ -559,7 +562,7 @@ export class AgentRunner {
         ? (mainRequest && !firstCallThisTurn ? currentTurnHasToolError(messages)
           : shouldThink(lastUserQuestion(messages)) || currentTurnHasToolError(messages))
         : this.config.enableThinking;
-      const options: ModelRequestOptions | undefined = mainRequest
+      let options: ModelRequestOptions | undefined = mainRequest
         ? { enableThinking: thinking,
           ...(this.config.model.api === "codex" || go ? { conversationId: this.modelConversationId } : {}),
           ...(automatic && !thinking && this.config.model.api !== "codex" ? {
@@ -571,6 +574,10 @@ export class AgentRunner {
           maxRetries: go ? this.config.maxRetries ?? 3 : Math.min(this.config.maxRetries ?? 3, 1),
         } : {}) }
         : go ? { conversationId: this.modelConversationId } : undefined;
+      if (mainRequest) {
+        if (reasoningRecovery) options = { ...options, ...reasoningRecovery };
+        lastMainOptions = options;
+      }
       // Clients retry connection failures before a stream starts. A stream that
       // opens but produces no output can still time out: retry that model call
       // here, where no tool has run and there is no partial answer to duplicate.
@@ -728,16 +735,22 @@ export class AgentRunner {
         const reasoningChars = (completion.reasoning ?? "").length;
         const consumed = `推理 ${reasoningChars} 字 / 正文 ${partial.length} 字`;
         // A dropped connection and a provider output cap both arrive as partial
-        // output; only the provider cap is the model's own doing, so the advice
-        // to the user differs and a reasoning-starved answer is not retried.
+        // output. Only a provider cap warrants changing reasoning/output
+        // controls; dropped streams keep the separate network recovery path.
         const dropped = completion.streamEnded === true;
         truncationContinues += 1;
-        // Reasoning that consumed the whole budget will consume it again; only
-        // say so after a retry proved that it repeats.
         const starvedByReasoning = !dropped && !partial && reasoningChars > 0;
-        if (truncationContinues > MAX_TRUNCATION_CONTINUES || (starvedByReasoning && truncationContinues > 1)) {
+        if (starvedByReasoning && !reasoningRecovery) {
+          const recovery = reasoningRecoveryOptions(this.config, lastMainOptions, Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS));
+          if (recovery) {
+            reasoningRecovery = recovery;
+            onEvent({ type: "status", text: `模型推理耗尽本轮输出预算（${consumed}），本次任务临时降低可控推理并恢复输出预算至 ${recovery.maxTokens} token 后重试；已完成操作保留` });
+            continue;
+          }
+        }
+        if (truncationContinues > MAX_TRUNCATION_CONTINUES || starvedByReasoning) {
           const text = starvedByReasoning
-            ? `模型的推理占满了输出上限（${consumed}），没有留下正文，继续重试只会重复截断。请降低 reasoning_effort/thinking，或提高 max_tokens。`
+            ? `模型推理耗尽输出预算（${consumed}），尚未生成正文${reasoningRecovery ? "；调整预算/推理参数后仍被截断" : "；当前参数已无可自动调整空间"}。请检查该模型原生 reasoning_effort/thinking 控制和服务端输出上限；max_tokens 在 luban 中最高为 ${MAX_OUTPUT_TOKENS}。`
             : dropped
               ? `模型连接连续 ${truncationContinues} 次在输出中途中断（${consumed}）。请检查网络与模型服务稳定性，或换用更稳定的 provider 后重试。`
               : `模型输出连续 ${truncationContinues} 次被输出上限截断（${consumed}）。请提高 max_tokens，或把任务拆小后继续。`;
@@ -759,6 +772,9 @@ export class AgentRunner {
         if (!dropped) onEvent({ type: "status", text: `模型输出被输出上限截断（${consumed}），已保留并继续` });
         continue;
       }
+      // These are consecutive failures of one output, not failures accumulated
+      // across successful tool rounds throughout a long task.
+      truncationContinues = 0;
       signal.throwIfAborted();
       const ids = new Set<string>();
       const expanded = completion.toolCalls.flatMap((call) => {
