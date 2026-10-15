@@ -17,6 +17,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs"
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { patchInk } from "./patch-ink.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -48,6 +49,7 @@ if (!existsSync(tsc)) {
 }
 
 try {
+  patchInk(root);
   run("server (tsc)", process.execPath, [tsc, "-p", "tsconfig.json"]);
   mkdirSync(join(root, "dist", "assets"), { recursive: true });
   copyFileSync(join(root, "assets", "luban-mascot.png"), join(root, "dist", "assets", "luban-mascot.png"));
