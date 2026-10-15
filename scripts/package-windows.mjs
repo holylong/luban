@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { patchInk } from "./patch-ink.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
@@ -40,10 +41,14 @@ function copyRuntime(payload, kind) {
   mkdirSync(app, { recursive: true });
   cpSync(join(root, "dist"), join(app, "dist"), { recursive: true });
   cpSync(join(root, "plugins"), join(app, "plugins"), { recursive: true });
+  mkdirSync(join(app, "scripts", "lib"), { recursive: true });
+  copyFileSync(join(root, "scripts", "patch-ink.mjs"), join(app, "scripts", "patch-ink.mjs"));
+  copyFileSync(join(root, "scripts", "lib", "ink-text-cache.mjs"), join(app, "scripts", "lib", "ink-text-cache.mjs"));
   for (const name of ["package.json", "package-lock.json", "README.md"]) {
     copyFileSync(join(root, name), join(app, name));
   }
   run(`Install ${kind} runtime dependencies`, process.execPath, [npmCli(), "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], app);
+  patchInk(app);
   copyFileSync(process.execPath, join(payload, "node.exe"));
   const nodeLicense = resolve(dirname(process.execPath), "LICENSE");
   if (existsSync(nodeLicense)) copyFileSync(nodeLicense, join(payload, "NODE-LICENSE"));

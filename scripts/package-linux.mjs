@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, re
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { patchInk } from "./patch-ink.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
@@ -34,8 +35,12 @@ function packageVariant(kind) {
     mkdirSync(bin, { recursive: true });
     cpSync(join(root, "dist"), join(app, "dist"), { recursive: true });
     cpSync(join(root, "plugins"), join(app, "plugins"), { recursive: true });
+    mkdirSync(join(app, "scripts", "lib"), { recursive: true });
+    copyFileSync(join(root, "scripts", "patch-ink.mjs"), join(app, "scripts", "patch-ink.mjs"));
+    copyFileSync(join(root, "scripts", "lib", "ink-text-cache.mjs"), join(app, "scripts", "lib", "ink-text-cache.mjs"));
     for (const name of ["package.json", "package-lock.json", "README.md"]) copyFileSync(join(root, name), join(app, name));
     run(`Install ${kind} runtime dependencies`, "npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], app);
+    patchInk(app);
     copyFileSync(process.execPath, join(payload, "node"));
     chmodSync(join(payload, "node"), 0o755);
     copyFileSync(nodeLicense, join(payload, "NODE-LICENSE"));

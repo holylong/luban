@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "1.16.99",
+  "version": "1.16.100",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -10,6 +10,8 @@
     "dist",
     "assets/luban-mascot.png",
     "assets/luban-mascot.prompt.md",
+    "scripts/patch-ink.mjs",
+    "scripts/lib/ink-text-cache.mjs",
     "docs",
     "plugins",
     "README.md"
@@ -18,6 +20,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-ink.mjs",
     "dev": "tsx src/cli.tsx",
     "web": "tsx src/cli.tsx web",
     "build": "node scripts/build.mjs",
