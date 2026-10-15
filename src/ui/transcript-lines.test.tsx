@@ -1,13 +1,41 @@
 ﻿import React from "react";
 import { renderToString, Box } from "ink";
 import { describe, expect, it } from "vitest";
-import { transcriptLines, TranscriptLineView } from "./transcript-lines.js";
+import { createTranscriptLayout, transcriptLines, TranscriptLineView } from "./transcript-lines.js";
 import { buildTranscript } from "./transcript-blocks.js";
 import { listWindow } from "./scroll.js";
 import { displayWidth } from "./input-layout.js";
 
 const options = { expanded: true, width: 30 };
 describe("physical transcript rows", () => {
+  it("reuses history rows while re-parsing the growing Markdown tail", () => {
+    const history = buildTranscript([{ role: "assistant", content: "历史中文\n```ts\nconst old = 1;\n```" }], options);
+    const layout = createTranscriptLayout();
+    const prepared = layout(history, [], 30);
+    for (const text of ["正在输出 **", "正在输出 **加粗**", "```ts\nconst live = 2;", "```ts\nconst live = 2;\n```\n结束"]) {
+      const tail = [{ id: "streaming", kind: "assistant" as const, text, lines: 1 }];
+      const result = layout(history, tail, 30);
+      expect(result).toEqual(transcriptLines([...history, ...tail], 30));
+      for (let i = 0; i < prepared.length; i++) expect(result[i]).toBe(prepared[i]);
+    }
+    expect(layout(history, [], 30)).toBe(prepared);
+  });
+
+  it("invalidates prepared rows on width, session and execution-detail changes", () => {
+    const layout = createTranscriptLayout();
+    const history = buildTranscript([{ role: "user", content: "中文内容".repeat(10) }], options);
+    const wide = layout(history, [], 30);
+    const narrow = layout(history, [], 15);
+    expect(narrow).toEqual(transcriptLines(history, 15));
+    expect(narrow).not.toBe(wide);
+    const preview = "Edited a.ts (+1 -1)\n     1 -old\n     1 +new";
+    const restored = buildTranscript([], { ...options, edits: [{ id: "e", name: "edit_file", preview }] });
+    expect(layout(restored, [], 30)).toEqual(transcriptLines(restored, 30));
+    const empty = layout([], [], 30);
+    expect(empty).toEqual([]);
+    expect(layout(history, [], 30)).not.toBe(wide);
+  });
+
   it("scrolls inside a long reply instead of repeating its tail", () => {
     const text = Array.from({ length: 80 }, (_, index) => `line-${index}`).join("\n");
     const rows = transcriptLines(buildTranscript([{ role: "assistant", content: text }], options), 30);

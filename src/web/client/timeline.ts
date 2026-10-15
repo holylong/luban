@@ -1,5 +1,23 @@
 import type { JobStreamRecord, MeshJob, TimelineItem, ToolRun } from "./types";
 
+/** Event replay makes fresh row objects. Compare their visible data so completed
+ * rows can keep their DOM, code tokens and local expansion state on each delta. */
+export function sameTimelineItem(left: TimelineItem, right: TimelineItem): boolean {
+  if (left === right) return true;
+  if (left.kind !== right.kind || left.id !== right.id || left.at !== right.at) return false;
+  if (left.kind === "tool" && right.kind === "tool") {
+    const a = left.run, b = right.run;
+    return a.callId === b.callId && a.name === b.name && a.args === b.args && a.summary === b.summary
+      && a.status === b.status && a.elapsedMs === b.elapsedMs && a.preview === b.preview
+      && a.editPreview === b.editPreview && a.seq === b.seq;
+  }
+  if (!("text" in left) || !("text" in right) || left.text !== right.text) return false;
+  if (left.kind === "user" && right.kind === "user") return left.mode === right.mode && left.jobId === right.jobId;
+  if (left.kind === "result" && right.kind === "result") return left.status === right.status;
+  if (left.kind === "assistant" && right.kind === "assistant") return left.streaming === right.streaming;
+  return true;
+}
+
 /**
  * Project a job's structured event stream onto transcript rows.
  *

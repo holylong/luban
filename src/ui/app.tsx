@@ -38,7 +38,7 @@ import { toolLabel } from "./tool-labels.js";
 import { Spinner, ThinkingLine, type LivePhase } from "./thinking-line.js";
 import { currentStreamLine } from "./transcript.js";
 import { displayWidth, layoutInput } from "./input-layout.js";
-import { transcriptLines, TranscriptLineView } from "./transcript-lines.js";
+import { createTranscriptLayout, TranscriptLineView } from "./transcript-lines.js";
 import { selectedTranscriptText, selectionSpan, type SelectionPoint, type TranscriptSelection } from "./transcript-selection.js";
 import { TextArea } from "./text-area.js";
 import { DiffLine as CodeDiffLine } from "./execution-view.js";
@@ -58,7 +58,7 @@ import {
   type MouseReport,
   type ScreenRect,
 } from "./mouse-input.js";
-import { buildTranscript, estimateLines } from "./transcript-blocks.js";
+import { buildTranscript, estimateLines, type TranscriptBlock } from "./transcript-blocks.js";
 import { outcomeNote, type RunOutcome } from "./run-outcome.js";
 import { verificationHeadline, verificationLine, verificationSummary, visibleVerifications } from "./verification-view.js";
 import { workspaceDiff } from "../core/workspace-diff.js";
@@ -709,7 +709,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [dialogQuery, setDialogQuery] = useState("");
   /** Counts palette swaps: the colors live outside React, so a change needs a frame. */
-  const [, setThemeRevision] = useState(0);
+  const [themeRevision, setThemeRevision] = useState(0);
   /** Theme that was active when the picker opened, so Esc can put it back. */
   const themeDialogOriginRef = useRef<string | null>(null);
   /**
@@ -2276,15 +2276,20 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     if (!focusedActive || !focusedRecords?.length) return undefined;
     return jobPhase(focusedRecords) ?? undefined;
   }, [focusedActive, focusedRecords, meshStreamRevision]);
-  const streamBlocks = useMemo(() => {
-    if (showMesh) return [...meshChatBlocks, ...remoteBlocks];
-    const blocks = buildTranscript(messages, {
-      expanded: showDetails,
-      width: streamTextWidth,
-      edits: sessionRef.current.edits,
-      executions: executionLog,
-      notes: activity.map(({ id, text, tone, at, after }) => ({ id, text, tone, at, after })),
-    });
+  // Streaming changes only the tail. Keep committed Markdown and edit rows
+  // prepared until their source, detail mode or terminal width changes.
+  const localHistoryBlocks = useMemo(() => buildTranscript(messages, {
+    expanded: showDetails,
+    width: streamTextWidth,
+    edits: sessionRef.current.edits,
+    executions: executionLog,
+    notes: activity.map(({ id, text, tone, at, after }) => ({ id, text, tone, at, after })),
+  }), [messages, executionLog, showDetails, streamTextWidth, activity]);
+  const historyBlocks = useMemo(() => showMesh ? [...meshChatBlocks, ...remoteBlocks] : localHistoryBlocks,
+    [showMesh, meshChatBlocks, remoteBlocks, localHistoryBlocks]);
+  const tailBlocks = useMemo(() => {
+    if (showMesh) return [];
+    const blocks: TranscriptBlock[] = [];
     if (pendingInputs.length) {
       for (const item of pendingInputs) {
         blocks.push({
@@ -2296,17 +2301,19 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     if (draft) blocks.push({ id: "streaming", kind: "assistant", text: draft, lines: estimateLines(draft, streamTextWidth - 4) + 1 });
     if (!running && runOutcome) blocks.push(outcomeNote(runOutcome));
     return blocks;
-  }, [showMesh, messages, executionLog, showDetails, streamTextWidth, pendingInputs, running, draft, runOutcome, activity, meshChatBlocks, remoteBlocks]);
+  }, [showMesh, streamTextWidth, pendingInputs, running, draft, runOutcome]);
   // The viewport is the pane between the app header and the composer; the
   // scrollbar and the wheel both work in this one line space.
   const scrollTrackHeight = Math.max(1, transcriptSize.height || rows - 12);
-  const renderedLines = useMemo(() => transcriptLines(streamBlocks, streamTextWidth), [streamBlocks, streamTextWidth]);
+  const layoutTranscript = useMemo(() => createTranscriptLayout(), []);
+  const renderedLines = useMemo(() => layoutTranscript(historyBlocks, tailBlocks, streamTextWidth), [layoutTranscript, historyBlocks, tailBlocks, streamTextWidth]);
+  const selectionTextLines = useMemo(() => renderedLines.map(line => line.text), [renderedLines]);
   const streamView = listWindow(renderedLines.length, scrollTrackHeight, scrollOffset);
   const visibleLines = renderedLines.slice(streamView.start, streamView.end);
   // Snapshot for the mouse handler: which physical rows are on screen, so a
   // drag can be mapped back to line/column offsets.
   selectionRowsRef.current = { rect: screenRect(transcriptNode.current), first: streamView.start,
-    visible: visibleLines.length, lines: renderedLines.map((line) => line.text) };
+    visible: visibleLines.length, lines: selectionTextLines };
   const scrolledBack = streamView.offset > 0;
   streamMetricsRef.current = { totalLines: streamView.total, viewport: scrollTrackHeight };
   scrollOffsetRef.current = streamView.offset;
@@ -2335,7 +2342,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const lastVerification = verifications.at(-1);
   const verificationStatus = planVerificationStatus(sessionRef.current.messages);
   const pendingCount = pendingInputs.length;
-  const hasActivity = streamBlocks.length > 0 || (showMesh ? focusedActive : running);
+  const hasActivity = historyBlocks.length + tailBlocks.length > 0 || (showMesh ? focusedActive : running);
   const meshActiveCount = meshRows.filter(({ job }) => ACTIVE_JOB_STATUS.has(job.status)).length;
   const defaultNotice = "Describe a goal, ask a question, or type / for commands.";
   const contextTokens = useMemo(() => estimateMessagesTokens(messages), [messages]);
@@ -2389,7 +2396,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           {visibleLines.map((line, index) => {
             const span = selectionSpan(line.text, streamView.start + index, selection);
             return <Box key={line.id} height={1} flexShrink={0} backgroundColor={span ? theme.selected : undefined}>
-              <TranscriptLineView line={line} selected={Boolean(span)} />
+              <TranscriptLineView line={line} selected={Boolean(span)} themeRevision={themeRevision} />
             </Box>;
           })}
         </Box> : null}

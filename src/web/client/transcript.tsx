@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { Markdown } from "./markdown";
 import { ToolCard } from "./tool-card";
-import { deriveTimeline, formatClock, withOutcome } from "./timeline";
+import { deriveTimeline, formatClock, sameTimelineItem, withOutcome } from "./timeline";
 import type { MeshJob, TimelineItem } from "./types";
 
 function Avatar({ kind }: { kind: "user" | "agent" | "err" }): React.ReactElement {
   return <div className={`avatar ${kind}`}>{kind === "user" ? "Y" : kind === "err" ? "!" : "◈"}</div>;
 }
 
-function ItemView({ item }: { item: TimelineItem }): React.ReactElement | null {
+const ItemView = React.memo(function ItemView({ item }: { item: TimelineItem }): React.ReactElement | null {
   switch (item.kind) {
     case "user":
       return (
@@ -54,7 +54,7 @@ function ItemView({ item }: { item: TimelineItem }): React.ReactElement | null {
     default:
       return null;
   }
-}
+}, (previous, next) => sameTimelineItem(previous.item, next.item));
 
 export function Transcript({ job, events, onCancel, onResume }: {
   job?: MeshJob;
