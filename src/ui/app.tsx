@@ -68,6 +68,22 @@ import { buildCopyText, osc52CopySequence, writeSystemClipboard } from "./clipbo
 import { buildSessionMarkdown, collectExportedEdits, defaultExportFilename, expandExportPath, summarizeEdits } from "./session-export.js";
 
 const MODES: AgentMode[] = ["auto", "agent", "ask"];
+
+/** Keep long Python/SSH payloads reviewable without pushing approval keys off screen. */
+function ApprovalCommand({ command, width, height }: { command: string; width: number; height: number }): React.ReactElement {
+  const lines = useMemo(() => layoutInput(command, 0, width, height).rows, [command, width, height]);
+  const [offset, setOffset] = useState(0);
+  const last = Math.max(0, lines.length - height);
+  const first = Math.min(offset, last);
+  useInput((_input, key) => {
+    if (key.pageDown || key.downArrow) setOffset(value => Math.min(last, value + (key.pageDown ? height : 1)));
+    if (key.pageUp || key.upArrow) setOffset(value => Math.max(0, value - (key.pageUp ? height : 1)));
+  });
+  return <Box flexDirection="column">
+    {lines.slice(first, first + height).map((line, index) => <Text key={first + index} wrap="truncate-end">{line.text || " "}</Text>)}
+    {lines.length > height ? <Text color={theme.dim}>命令 {first + 1}–{Math.min(lines.length, first + height)}/{lines.length} 行 · ↑↓ / PgUp PgDn 查看完整命令</Text> : null}
+  </Box>;
+}
 const CODEX_EFFORTS: Array<{ value: ModelRef["reasoningEffort"]; title: string; detail: string }> = [
   { value: undefined, title: "CLI default", detail: "Use Codex config.toml" },
   { value: "low", title: "Low", detail: "low" },
@@ -1990,8 +2006,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     }
     if (approval) {
       if (character.toLowerCase() === "y") { approval.resolve("once"); setApproval(null); }
-      if (character.toLowerCase() === "t") { approval.resolve("tool"); setApproval(null); }
-      if (character.toLowerCase() === "a") { approval.resolve("always"); setApproval(null); }
+      if (!approval.tool.approvalOnceOnly && character.toLowerCase() === "t") { approval.resolve("tool"); setApproval(null); }
+      if (!approval.tool.approvalOnceOnly && character.toLowerCase() === "a") { approval.resolve("always"); setApproval(null); }
       if (character.toLowerCase() === "n" || key.escape) { approval.resolve("deny"); setApproval(null); }
       return;
     }
@@ -2449,7 +2465,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       {approval ? (
         <Box flexDirection="column" backgroundColor={theme.panel} paddingX={2} paddingY={1} flexShrink={0}>
           <Text color={theme.primary} bold>Permission required · {approval.tool.risk}</Text>
+          {approval.tool.approvalReason ? <Text color={theme.yellow}>{approval.tool.approvalReason}</Text> : null}
           <Text><Text color={theme.accent}>{toolLabel(approval.tool.name)}</Text><Text color={theme.muted}>  {summarizeToolArgs(approval.tool.name, approval.args)}</Text></Text>
+          {approval.tool.approvalOnceOnly ? <ApprovalCommand key={String(approval.args.command)} command={String(approval.args.command ?? "")} width={Math.max(1, terminalSize.columns - 4)} height={Math.max(1, Math.min(6, rows - 17))} /> : null}
           {typeof approval.args.path === "string" ? <Text color={theme.dim} wrap="truncate-end">path · {String(approval.args.path).slice(0, 100)}</Text> : null}
           {typeof approval.args.old_text === "string" || typeof approval.args.new_text === "string" || typeof approval.args.content === "string" ? (
             <Box flexDirection="column" marginTop={1}>
@@ -2460,8 +2478,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           ) : null}
           <Text>
             <Text color={theme.primary}>y</Text><Text color={theme.muted}> 允许一次   </Text>
-            <Text color={theme.primary}>t</Text><Text color={theme.muted}> 本任务信任该工具   </Text>
-            <Text color={theme.primary}>a</Text><Text color={theme.accent}> 本次会话不再询问</Text><Text color={theme.muted}>   </Text>
+            {!approval.tool.approvalOnceOnly ? <><Text color={theme.primary}>t</Text><Text color={theme.muted}> 本任务信任该工具   </Text>
+            <Text color={theme.primary}>a</Text><Text color={theme.accent}> 本次会话不再询问</Text><Text color={theme.muted}>   </Text></> : null}
             <Text color={theme.primary}>n</Text><Text color={theme.muted}> 拒绝</Text>
           </Text>
         </Box>

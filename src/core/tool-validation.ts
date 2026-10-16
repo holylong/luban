@@ -31,9 +31,9 @@ export function validateToolArguments(tool: ToolDefinition, args: Record<string,
 
 /** Also guard direct calls from integrations, outside the agent dispatcher. */
 export function guardTool(tool: ToolDefinition): ToolDefinition {
-  return { ...tool, async execute(args, signal) {
+  return { ...tool, async execute(args, signal, context) {
     signal.throwIfAborted();
     validateToolArguments(tool, args);
-    return tool.execute(args, signal);
+    return tool.execute(args, signal, context);
   } };
 }

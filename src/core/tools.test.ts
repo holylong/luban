@@ -19,6 +19,22 @@ async function setup(overrides: Partial<LubanConfig> = {}) {
 }
 
 describe("workspace tools", () => {
+  it("binds restart permission to the exact command, including background execution", async () => {
+    const { tools, signal } = await setup();
+    const bash = tools.get("bash")!;
+    // Harmless output with a compound form deliberately triggers the warning.
+    const command = "printf reboot; printf approved";
+    try {
+      expect(bash.confirmationReason?.({ command })).toContain("重启");
+      await expect(bash.execute({ command, confirmedRestartCommand: command }, signal)).rejects.toThrow();
+      await expect(bash.execute({ command }, signal, { confirmedRestartCommand: "reboot" })).rejects.toThrow(/blocked/);
+      expect(await bash.execute({ command }, signal, { confirmedRestartCommand: command })).toBe("rebootapproved");
+      await expect(bash.execute({ command }, signal)).rejects.toThrow(/blocked/);
+      await expect(bash.execute({ command, background: true }, signal)).rejects.toThrow(/blocked/);
+      expect(await bash.execute({ command, background: true }, signal, { confirmedRestartCommand: command })).toMatch(/background task/);
+    } finally { bash.close?.(); }
+  });
+
   it("reads, searches, edits and runs commands", async () => {
     const { workspace, tools, signal } = await setup();
     expect(await tools.get("read_file")!.execute({ path: "src/a.ts" }, signal)).toContain("answer = 41");

@@ -8,6 +8,7 @@ export interface ApprovalRequestView {
   job_id: string;
   tool: string;
   description: string;
+  once_only?: boolean;
   risk: string;
   args: Record<string, unknown>;
   created_at: number;
@@ -37,6 +38,7 @@ export class ApprovalBroker {
       const view: ApprovalRequestView = {
         id, job_id: jobId, tool: tool.name,
         description: tool.description || tool.name,
+        once_only: tool.approvalOnceOnly,
         risk: tool.risk, args,
         created_at: Date.now() / 1000,
       };
@@ -58,6 +60,7 @@ export class ApprovalBroker {
 
   /** Resolve one request. Returns false for an unknown or already settled id. */
   decide(id: string, decision: ApprovalDecision): boolean {
+    if (this.waiters.get(id)?.view.once_only && decision !== "once" && decision !== "deny") return false;
     if (!this.waiters.has(id)) return false;
     this.settle(id, decision);
     return true;

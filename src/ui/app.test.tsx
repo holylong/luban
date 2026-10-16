@@ -239,6 +239,58 @@ it("accepts a clicked model question option without inserting mouse bytes", asyn
   }
 }, 10000);
 
+it("pages a long restart command and accepts only a single approval", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-restart-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const config = loadConfig({ workspace });
+  let answer = "";
+  const command = ["python3 - <<'PY'", ...Array.from({ length: 20 }, (_, i) => `# review line ${i}`), "# reboot target: robot", "PY"].join("\n");
+  const run = vi.spyOn(AgentRunner.prototype, "run").mockImplementation(async (messages, _mode, _signal, _events, approve) => {
+    answer = await approve({ name: "bash", description: "shell", risk: "execute", parameters: {}, approvalOnceOnly: true,
+      approvalReason: "重启操作仅可允许本次执行", async execute() { return "unused"; } }, { command });
+    return { ok: true, text: "approved", steps: 1, modelCalls: 1, elapsedMs: 1, messages };
+  });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 110, rows: 30, isTTY: true });
+  let frame = "";
+  stdout.on("data", data => { frame = stripVTControlCharacters(String(data)); });
+  const app = render(<App config={config} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: true, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame).toContain("Message luban");
+    stdin.write("test restart");
+    await expect.poll(() => frame).toContain("test restart");
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("重启操作仅可允许本次执行");
+    expect(frame).toContain("1–6/23");
+    expect(frame).toContain("允许一次");
+    expect(frame).not.toContain("本次会话不再询问");
+    stdin.write("t");
+    stdin.write("a");
+    await new Promise(resolve => setTimeout(resolve, 80));
+    expect(answer).toBe("");
+    for (let page = 0; page < 3; page++) {
+      stdin.write("\u001b[6~");
+      await new Promise(resolve => setTimeout(resolve, 60));
+    }
+    await expect.poll(() => frame).toContain("# reboot target: robot");
+    expect(frame.split("\n").length).toBeLessThanOrEqual(31);
+    stdin.write("y");
+    await expect.poll(() => answer).toBe("once");
+  } finally {
+    app.unmount();
+    app.cleanup();
+    run.mockRestore();
+    if (oldHome === undefined) delete process.env.LUBAN_HOME;
+    else process.env.LUBAN_HOME = oldHome;
+  }
+}, 10000);
+
 it("shows a saved, actionable conclusion when a model run still times out", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-timeout-ui-"));
   const workspace = join(home, "workspace");

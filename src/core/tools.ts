@@ -5,7 +5,7 @@ import { lstat, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promis
 import { basename, dirname, join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { terminateProcessTree } from "./process-tree.js";
-import { assessShellCommand, defaultSandboxSettings, wrapWithBackend } from "./sandbox.js";
+import { assessShellCommand, defaultSandboxSettings, restartConfirmationReason, wrapWithBackend } from "./sandbox.js";
 import { codeIntelligenceTool } from "./code-intelligence.js";
 import { languageOfPath } from "./lsp.js";
 import { resolveInside } from "./paths.js";
@@ -119,10 +119,10 @@ class BackgroundTasks {
     return task.id;
   }
 
-  start(workspace: string, command: string, signal: AbortSignal, config?: LubanConfig): string {
+  start(workspace: string, command: string, signal: AbortSignal, config?: LubanConfig, confirmedRestart = false): string {
     signal.throwIfAborted();
     if (config) {
-      const blocked = assessShellCommand(command, workspace, config.sandbox ?? defaultSandboxSettings());
+      const blocked = assessShellCommand(command, workspace, config.sandbox ?? defaultSandboxSettings(), confirmedRestart);
       if (blocked) throw new Error(`TOOL ERROR: ${blocked}`);
     }
     if ([...this.tasks.values()].filter((task) => task.status === "running" || task.status === "stopping").length >= 16) throw new Error("background task limit reached (16)");
@@ -248,10 +248,10 @@ async function fetchText(url: string, signal: AbortSignal, timeoutSeconds: numbe
 }
 
 
-async function runShell(workspace: string, command: string, signal: AbortSignal, timeoutSeconds: number, config: LubanConfig | undefined, usePty = false, background?: BackgroundTasks, autoBackground = true): Promise<string> {
+async function runShell(workspace: string, command: string, signal: AbortSignal, timeoutSeconds: number, config: LubanConfig | undefined, usePty = false, background?: BackgroundTasks, autoBackground = true, confirmedRestart = false): Promise<string> {
   signal.throwIfAborted();
   if (config) {
-    const blocked = assessShellCommand(command, workspace, config.sandbox ?? defaultSandboxSettings());
+    const blocked = assessShellCommand(command, workspace, config.sandbox ?? defaultSandboxSettings(), confirmedRestart);
     if (blocked) throw new Error(blocked);
   }
   const windows = process.platform === "win32";
@@ -548,6 +548,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
     },
     {
       name: "bash",
+      confirmationReason: args => restartConfirmationReason(stringArg(args, "command"), workspace, config.sandbox ?? defaultSandboxSettings()),
       close: () => background.close(),
       description: "Run a shell command in the workspace. Git works from a nested workspace; do not cd to the repo parent. Omit timeout to detach after 15s; set timeout to wait for a finite build/test; background: true detaches now.",
       risk: "execute",
@@ -558,13 +559,15 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
         independent: { type: "boolean", description: "Run alongside other independent calls in this response. Set only for commands with no shared writes or ordering dependencies." },
         pty: { type: "boolean", description: "Run under a real PTY via script(1) so curses/progress output and tty detection work. Foreground only." },
       }, ["command"]),
-      async execute(args, signal) {
+      async execute(args, signal, context) {
+        const command = stringArg(args, "command");
+        const confirmedRestart = context?.confirmedRestartCommand === command;
         if (args.background === true) {
           if (args.pty === true) throw new Error("pty mode is foreground-only; use send_background_input for interactive background tasks");
-          const id = background.start(workspace, stringArg(args, "command"), signal, config);
+          const id = background.start(workspace, command, signal, config, confirmedRestart);
           return Promise.resolve(`background task ${id} started`);
         }
-        return runShell(workspace, stringArg(args, "command"), signal, Math.min(600, numberArg(args, "timeout", 120)), config, args.pty === true, background, args.timeout === undefined);
+        return runShell(workspace, command, signal, Math.min(600, numberArg(args, "timeout", 120)), config, args.pty === true, background, args.timeout === undefined, confirmedRestart);
       },
     },
     {
