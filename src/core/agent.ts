@@ -132,7 +132,7 @@ const PLANNING_RULES: Record<PlanningMode, string> = {
 const PROMPT_FOOTER = `6. If a tool fails, diagnose it and change strategy. Do not repeat identical calls indefinitely. A bash result ending in [exit code: N] is not a tool failure: many commands exit non-zero by design (grep with no match, git diff --quiet, test -f, command -v). Read the code and the output, and only treat it as an error when the command was supposed to succeed. Builds, test suites and installs often exceed the bash timeout: give them a larger timeout when you know they are slow, or start them with background: true and poll with get_background_task instead of retrying a killed command.
 6a. When a consequential choice or missing requirement cannot be inferred from the user's instructions or workspace, call ask_user with 2–4 concrete options, then continue with the answer. Do not interrupt for routine implementation choices; resolve those yourself. If ask_user is unavailable, state the unresolved choice in your final answer.
 7. End with a concise outcome: what changed, verification, and any real blocker. Hard cap 8 lines, no code blocks; details live in files, not chat.
-8. Paths are workspace-relative. Bash already starts in the workspace. If the workspace is a subdirectory of a Git repository, run Git commands from that directory (for example, git status --short or git add -- .); do not cd to the repository parent or prefix file paths with the parent directory. Use write_file, edit_file, or apply_patch with workspace-relative paths for file changes. The bash tool is soft-sandboxed: destructive host commands, writes outside the workspace, and denied patterns are rejected before execution. This is not an OS container; do not run untrusted payloads to probe it. Screenshots arrive as native vision parts when the user @-attaches them; describe what you see and cite the file name.
+8. Paths are workspace-relative. Bash already starts in the workspace. If the workspace is a subdirectory of a Git repository, run Git commands from that directory (for example, git status --short or git add -- .); do not cd to the repository parent or prefix file paths with the parent directory. Use write_file, edit_file, or apply_patch with workspace-relative paths for file changes. The bash tool is soft-sandboxed: destructive host commands, writes outside the workspace, and denied patterns are rejected before execution. In soft mode, restart/shutdown warnings require explicit approval of the exact command, even with session trust; strict mode still blocks them. Submit the intended command for approval, never disguise it to evade checks. This is not an OS container; do not run untrusted payloads to probe it. Screenshots arrive as native vision parts when the user @-attaches them; describe what you see and cite the file name.
 9. Never expose chain-of-thought, policy analysis, system reminders, or other internal reasoning in assistant content. Return only the user-facing result. Use a separate reasoning channel when the runtime supports one.
 10. Create a checkpoint before broad or risky multi-file edits when the workspace is a Git repository.
 11. Identity: your product name is luban. If the user asks your name or who you are, say you are luban, the coding agent working in their workspace. Never claim to be the underlying model (for example Qwen or Claude). If the user asks which model or LLM powers you, answer honestly with the configured model name.
@@ -890,10 +890,15 @@ export class AgentRunner {
               throw new Error(`blocked by permission rule for ${tool.name}`);
             }
             const configuredAllow = rules.allow.some((rule) => permissionRuleMatches(rule, tool, args));
+            const confirmationReason = tool.confirmationReason?.(args);
+            const confirmedRestartCommand = confirmationReason ? String(args.command) : undefined;
+            const approvalTool = confirmationReason
+              ? { ...tool, approvalReason: confirmationReason, approvalOnceOnly: true, description: confirmationReason }
+              : tool;
             // Reads never ask; in edits mode file edits never ask either. Only
             // shell/network-style tools keep prompting unless explicitly trusted.
             const autoAllowed = tool.risk === "read" || (tool.risk === "write" && this.config.permissionMode === "edits");
-            if (!autoAllowed && !configuredAllow && this.config.permissionMode !== "allow" && !this.trustSession && !this.trustedTools.has(tool.name)) {
+            if (confirmationReason || (!autoAllowed && !configuredAllow && this.config.permissionMode !== "allow" && !this.trustSession && !this.trustedTools.has(tool.name))) {
               // An unanswered prompt used to park the whole run indefinitely:
               // only Esc released it, so a task left alone looked like it was
               // "working" while it was really waiting for a keypress.
@@ -911,7 +916,7 @@ export class AgentRunner {
                   timer?.unref?.();
                   Promise.resolve().then(() => {
                     signal.throwIfAborted();
-                    return approve(tool, args);
+                    return approve(approvalTool, structuredClone(args));
                   }).then(resolveApproval, reject).finally(() => {
                     if (timer) clearTimeout(timer);
                     signal.removeEventListener("abort", abort);
@@ -921,6 +926,7 @@ export class AgentRunner {
             }
             signal.throwIfAborted();
             if (decision === "deny") throw new Error("permission denied by user");
+            if (confirmationReason && decision !== "once") throw new Error("restart requires explicit approval for this command only; session/tool trust cannot authorize it");
             if (decision === "tool") this.trustedTools.add(tool.name);
             if (decision === "always") {
               this.trustSession = true;
@@ -936,7 +942,7 @@ export class AgentRunner {
               throw new Error("Not executed: new or changed subdirectory instructions have been loaded. Read the scoped instructions, then revise or retry this edit.");
             }
             if (await this.inbox?.hasSteering()) throw new Error("Not executed: a new user instruction is pending; reconsider this call after reading it");
-            run = () => tool.execute(args, signal);
+            run = () => tool.execute(args, signal, confirmationReason ? { confirmedRestartCommand } : undefined);
           } catch (error) {
             ok = false;
             output = `TOOL ERROR: ${error instanceof Error ? error.message : String(error)}`;

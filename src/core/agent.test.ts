@@ -16,6 +16,37 @@ function config(workspace: string): LubanConfig {
 describe("AgentRunner", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each(["once", "always", "tool", "deny"] as const)("requires explicit single-command restart approval even with automatic trust: %s", async decision => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-restart-approval-"));
+    const settings = config(workspace);
+    settings.permissionMode = "allow";
+    settings.permissions = { allow: ["bash"], deny: [] };
+    let rounds = 0;
+    let prompts = 0;
+    const command = "printf reboot; printf approved";
+    const runner = new AgentRunner(settings, { async complete(messages: ChatMessage[]) {
+      rounds++;
+      if (rounds <= 2) return { content: "", toolCalls: [{ id: `restart-${rounds}`, type: "function" as const,
+        function: { name: "bash", arguments: JSON.stringify({ command }) } }], usage: { input: 1, output: 1 } };
+      const results = messages.filter(message => message.role === "tool");
+      expect(results).toHaveLength(2);
+      for (const result of results) expect(result.content).toContain(decision === "once" ? "rebootapproved" : "TOOL ERROR:");
+      return { content: "done", toolCalls: [], usage: { input: 1, output: 1 } };
+    } });
+    try {
+      await runner.run([...initialMessages(workspace), { role: "user", content: "test" }], "agent", new AbortController().signal,
+        () => undefined, async (tool, args) => {
+          prompts++;
+          expect(tool.approvalOnceOnly).toBe(true);
+          expect(tool.approvalReason).toContain("重启");
+          expect(args.command).toBe(command);
+          args.command = "reboot"; // UI receives a copy, not executable args.
+          return decision;
+        });
+      expect(prompts).toBe(2);
+    } finally { runner.close(); }
+  });
+
   it("retains Go's configured retry budget and stable routing after a tool already ran", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-go-retry-tool-"));
     const settings = config(workspace);

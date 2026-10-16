@@ -516,11 +516,12 @@ export function MobileApp(): React.ReactElement {
               <div className="m-approval" key={item.id}>
                 <h3>{toolLabel(item.tool)}</h3>
                 <div className="risk">风险：{item.risk} · 任务 {item.job_id}</div>
+                {item.once_only && <p>{item.description}</p>}
                 <pre>{JSON.stringify(item.args, null, 2)}</pre>
                 <div className="m-approval-actions">
                   <button className="m-btn primary" onClick={() => void decide(item.id, "once")}>允许一次</button>
-                  <button className="m-btn ok" onClick={() => void decide(item.id, "always")}>本会话允许</button>
-                  <button className="m-btn" onClick={() => void decide(item.id, "tool")}>该工具都允许</button>
+                  {!item.once_only && <><button className="m-btn ok" onClick={() => void decide(item.id, "always")}>本会话允许</button>
+                  <button className="m-btn" onClick={() => void decide(item.id, "tool")}>该工具都允许</button></>}
                   <button className="m-btn danger" onClick={() => void decide(item.id, "deny")}>拒绝</button>
                 </div>
               </div>

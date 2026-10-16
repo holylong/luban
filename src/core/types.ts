@@ -246,7 +246,11 @@ export interface ToolDefinition {
   /** Safe to execute alongside other calls carrying the same flag. */
   parallelSafe?: boolean;
   parameters: Record<string, unknown>;
-  execute(args: Record<string, unknown>, signal: AbortSignal): Promise<string>;
+  /** Runtime-only approval metadata, never exposed as model arguments. */
+  approvalReason?: string;
+  approvalOnceOnly?: boolean;
+  confirmationReason?(args: Record<string, unknown>): string | undefined;
+  execute(args: Record<string, unknown>, signal: AbortSignal, context?: { confirmedRestartCommand?: string }): Promise<string>;
   /** Release runtime-owned resources when the session runner is closed. */
   close?(): void;
 }

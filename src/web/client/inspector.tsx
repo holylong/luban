@@ -50,8 +50,8 @@ export function Approvals({ store }: { store: WorkbenchStore }): React.ReactElem
           <pre className="args">{JSON.stringify(request.args, null, 2)}</pre>
           <div className="row">
             <button className="action allow" onClick={() => void store.decide(request.id, "once")}>允许一次</button>
-            <button className="action" onClick={() => void store.decide(request.id, "tool")}>本任务内允许 {request.tool}</button>
-            <button className="action primary wide" onClick={() => void store.decide(request.id, "always")}>本次会话全部放行</button>
+            {!request.once_only && <><button className="action" onClick={() => void store.decide(request.id, "tool")}>本任务内允许 {request.tool}</button>
+            <button className="action primary wide" onClick={() => void store.decide(request.id, "always")}>本次会话全部放行</button></>}
             <button className="action deny wide" onClick={() => void store.decide(request.id, "deny")}>拒绝</button>
           </div>
         </div>

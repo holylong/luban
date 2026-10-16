@@ -53,6 +53,7 @@ export interface MeshJob {
 }
 
 export interface ApprovalView {
+  once_only?: boolean;
   id: string;
   job_id: string;
   tool: string;

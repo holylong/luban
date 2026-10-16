@@ -130,11 +130,18 @@ export function shellPathTokens(command: string): string[] {
 }
 
 /** Best-effort static assessment. Returns a block reason, or null when allowed. */
-export function assessShellCommand(command: string, workspace: string, sandbox: SandboxSettings): string | null {
+export function assessShellCommand(command: string, workspace: string, sandbox: SandboxSettings, confirmedRestart = false): string | null {
   const trimmed = command.trim();
   if (!trimmed) return "command is empty";
   if (sandbox.mode === "off") return null;
   for (const pattern of DESTRUCTIVE_PATTERNS) {
+    if (pattern.source === "\\breboot\\b" || pattern.source === "\\bshutdown\\b") {
+      // Only complete, simple literal queries are exempt. Never strip script
+      // bodies, substitutions or remote payloads: those may execute commands.
+      const literalQuery = /^(?:grep|rg|echo|printf)(?:[ \t]+(?:-[nirlwFvsch]+|[a-zA-Z0-9_./:%=,@+][a-zA-Z0-9_./:%=,@+\-]*|'[^'\r\n]*'|"[^"$`\\\r\n]*"))*[ \t]*$/u.test(trimmed)
+        && !/(?:^|[ \t])['"]--/u.test(trimmed);
+      if (literalQuery || (confirmedRestart && sandbox.mode === "soft")) continue;
+    }
     if (pattern.test(trimmed)) return `blocked by sandbox: destructive pattern matched (${pattern.source.slice(0, 48)}…)`;
   }
   for (const raw of sandbox.denyPatterns) {
@@ -186,6 +193,14 @@ export function assessShellCommand(command: string, workspace: string, sandbox: 
     }
   }
   return null;
+}
+
+/** Only restart warnings can be explicitly reviewed; all other restrictions stay in force. */
+export function restartConfirmationReason(command: string, workspace: string, sandbox: SandboxSettings): string | undefined {
+  if (sandbox.mode !== "soft") return undefined;
+  const blocked = assessShellCommand(command, workspace, sandbox);
+  if (!blocked || !/reboot|shutdown/u.test(blocked) || assessShellCommand(command, workspace, sandbox, true)) return undefined;
+  return "命令包含重启或关机操作，可能影响本机或远程设备。请核对完整命令和目标；仅可允许本次执行。";
 }
 
 export function sandboxBackendAvailable(backend: SandboxSettings["backend"]): boolean {

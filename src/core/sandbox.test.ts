@@ -1,9 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { assessShellCommand, defaultSandboxSettings, resolveSandboxBackend, shellPathTokens, wrapWithBackend } from "./sandbox.js";
+import { assessShellCommand, defaultSandboxSettings, resolveSandboxBackend, restartConfirmationReason, shellPathTokens, wrapWithBackend } from "./sandbox.js";
 
 const soft = defaultSandboxSettings();
 
 describe("sandbox soft policy", () => {
+  it("allows literal restart queries without exempting executable payloads", () => {
+    for (const command of ["grep reboot history.log", "rg -n 'shutdown' log.txt", "printf '%s\\n' reboot", 'echo "reboot"']) {
+      expect(assessShellCommand(command, "/tmp/ws", soft), command).toBeNull();
+    }
+    for (const command of ["grep reboot log; reboot", 'echo "$(reboot)"', "echo `reboot`", "rg --pre reboot log", "rg '--pre=reboot' log", "python3 - <<'PY'\nimport os; os.system('reboot')\nPY"]) {
+      expect(assessShellCommand(command, "/tmp/ws", soft), command).toMatch(/blocked/);
+    }
+  });
+
+  it("offers single-command restart approval only when every other rule permits execution", () => {
+    for (const command of ["reboot", "ssh robot@host reboot", "python3 - <<'PY'\nclient.exec_command('reboot')\nPY"]) {
+      expect(restartConfirmationReason(command, "/tmp/ws", soft)).toContain("仅可允许本次");
+      expect(assessShellCommand(command, "/tmp/ws", soft, true)).toBeNull();
+      expect(assessShellCommand(command, "/tmp/ws", soft)).toMatch(/blocked/);
+    }
+    for (const command of ["reboot; mkfs /dev/sda", "reboot; rm -rf /", "echo reboot > /etc/x"]) {
+      expect(restartConfirmationReason(command, "/tmp/ws", soft)).toBeUndefined();
+      expect(assessShellCommand(command, "/tmp/ws", soft, true)).toMatch(/blocked/);
+    }
+    expect(restartConfirmationReason("reboot", "/tmp/ws", { ...soft, mode: "strict" })).toBeUndefined();
+    expect(assessShellCommand("reboot", "/tmp/ws", { ...soft, mode: "strict" }, true)).toMatch(/blocked/);
+    expect(restartConfirmationReason("reboot", "/tmp/ws", { ...soft, denyPatterns: ["reboot"] })).toBeUndefined();
+    expect(restartConfirmationReason("ssh robot@host reboot", "/tmp/ws", { ...soft, allowNetwork: false })).toBeUndefined();
+  });
+
   it("blocks destructive host commands on linux and windows", () => {
     expect(assessShellCommand("rm -rf /", "/tmp/ws", soft)).toMatch(/blocked/);
     expect(assessShellCommand("rm -rf ~/docs", "/tmp/ws", soft)).toMatch(/blocked/);
