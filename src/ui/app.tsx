@@ -34,6 +34,7 @@ import type {
 import { HighlightedCodeLine } from "./markdown.js";
 import { activeTheme, activeThemeId, applyTheme, findTheme, THEMES, theme, themeHasOverrides, themeIds } from "./theme.js";
 import { sessionColor } from "./session-color.js";
+import { sessionChoices } from "./session-picker.js";
 import { toolLabel } from "./tool-labels.js";
 import { Spinner, ThinkingLine, type LivePhase } from "./thinking-line.js";
 import { currentStreamLine } from "./transcript.js";
@@ -1484,10 +1485,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   };
 
   const openSessions = async () => {
-    const entries = await store.list(undefined, config.workspace);
+    const entries = sessionChoices(await store.list(undefined, config.workspace), sessionRef.current.id);
     setSessions(entries);
     setDialogQuery("");
-    if (!entries.length) setNotice("No saved sessions");
+    if (!entries.length) setNotice("没有其他可恢复的会话（已隐藏当前会话和空会话）");
     else setDialog({ type: "sessions", index: 0 });
   };
 
@@ -2112,9 +2113,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       const visibleModels = needle
         ? config.models.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(needle))
         : config.models;
-      const visibleSessions = needle
-        ? sessions.filter((item) => `${item.title} ${item.project}`.toLowerCase().includes(needle))
-        : sessions;
+      const visibleSessions = sessionChoices(sessions, sessionRef.current.id, needle);
       const visibleCount = dialog.type === "models" ? visibleModels.length : dialog.type === "sessions" ? visibleSessions.length : 1;
       const count = Math.max(1, visibleCount);
       if (key.upArrow) setDialog({ ...dialog, index: (dialog.index - 1 + count) % count });
@@ -2263,13 +2262,13 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const dialogNeedle = dialogQuery.trim().toLowerCase();
   const filterDialogRows = <T extends { title: string; detail: string }>(items: T[]): T[] =>
     dialogNeedle ? items.filter((item) => `${item.title} ${item.detail}`.toLowerCase().includes(dialogNeedle)) : items;
-  const sessionRows = filterDialogRows(sessions.map((record, index) => ({
+  const sessionRows = sessionChoices(sessions, sessionRef.current.id, dialogQuery).map((record, index) => ({
     key: record.id, title: record.title, project: record.project,
     color: sessionColor(index, activeTheme().mode),
     date: record.updatedAt.slice(0, 16).replace("T", " "),
     turns: record.messages.filter((message) => message.role === "user").length,
     detail: `${record.project} · ${record.updatedAt.slice(0, 16).replace("T", " ")}`,
-  })));
+  }));
   const modelRows = filterDialogRows(config.models.map((model) => ({ key: model.id, title: model.name,
     detail: `${model.id}${model.provider === "opencode-zen" && !model.apiKey && !isZenFreeModel(model) ? " · 需连接 Zen / 设置 OPENCODE_ZEN_API_KEY" : ""}${model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}` })));
   const rows = terminalSize.rows;
@@ -2396,7 +2395,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       >
         {dialog?.type === "models" ? <SelectDialog title="Models" rows={modelRows} index={Math.min(dialog.index, Math.max(0, modelRows.length - 1))} query={dialogQuery} /> : null}
         {dialog?.type === "codex-effort" ? <SelectDialog title={`Reasoning · ${config.models.find((item) => item.id === dialog.modelId)?.name ?? "Codex"}`} rows={CODEX_EFFORTS.filter((item) => item.value !== "ultra" || config.models.find((model) => model.id === dialog.modelId)?.model !== "gpt-6-luna").map((item) => ({ key: item.value ?? "default", title: item.title, detail: item.detail }))} index={dialog.index} query="" /> : null}
-        {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} activeKey={sessionRef.current.id} /> : null}
+        {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} /> : null}
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
         {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} /> : null}

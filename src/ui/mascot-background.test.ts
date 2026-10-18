@@ -2,7 +2,7 @@ import { PassThrough } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
 import { expect, it } from "vitest";
 import { createMascotFrameWriter, mascotOutput } from "./mascot-background.js";
-import { createWindowsFrameWriter } from "./windows-output.js";
+import { createTerminalFrameWriter } from "./terminal-output.js";
 
 const image = { width: 2, height: 2, data: Uint8Array.from([
   255, 255, 255, 255, 255, 255, 255, 0,
@@ -54,9 +54,9 @@ it("recomputes the raster for light themes and terminal resizing and supports 25
   expect(output).not.toContain("48;2;");
 });
 
-it("keeps Windows row updates stable after applying the background", () => {
+it("keeps terminal row updates stable after applying the background", () => {
   const decorate = createMascotFrameWriter(image);
-  const windows = createWindowsFrameWriter();
+  const windows = createTerminalFrameWriter();
   windows(decorate(frame(), 80, 24));
   const output = windows(decorate(erase(24) + frame(), 80, 24));
   expect(output).toBe("\u001b[23A\u001b[G" + "\u001b[E".repeat(23));

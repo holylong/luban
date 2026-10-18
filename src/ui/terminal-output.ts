@@ -1,7 +1,8 @@
 // Ink's standard renderer erases the entire frame before repainting. Consoles
-// without DECSET 2026 show that empty frame. Keep Ink's standard cursor model
-// (including its trailing newline), but overwrite only changed rows on Windows.
-export function createWindowsFrameWriter(): (chunk: string) => string {
+// without DECSET 2026 show that empty frame, especially during reasoning streams.
+// Keep Ink's standard cursor model (including its trailing newline), but
+// overwrite only changed rows on every interactive terminal.
+export function createTerminalFrameWriter(): (chunk: string) => string {
   let previous: string[] | undefined;
   const erasePrefix = /^(?:\u001b\[2K\u001b\[1A)*\u001b\[2K\u001b\[G/;
   return (chunk) => {
@@ -33,10 +34,13 @@ export function createWindowsFrameWriter(): (chunk: string) => string {
   };
 }
 
-export function windowsOutput(stdout: NodeJS.WriteStream, platform = process.platform): NodeJS.WriteStream {
-  if (platform !== "win32" || !stdout.isTTY || process.env.INK_SCREEN_READER === "true") return stdout;
-  const transform = createWindowsFrameWriter();
+export function terminalOutput(stdout: NodeJS.WriteStream): NodeJS.WriteStream {
+  if (!stdout.isTTY || process.env.INK_SCREEN_READER === "true") return stdout;
+  const transform = createTerminalFrameWriter();
   const write: NodeJS.WriteStream["write"] = (chunk: string | Uint8Array, ...args: unknown[]) => {
+    // A binary/external write may move the cursor. Re-establish the frame on
+    // the next render rather than applying a diff against stale terminal state.
+    if (typeof chunk !== "string") transform("");
     const output = typeof chunk === "string" ? transform(chunk) : chunk;
     return Reflect.apply(stdout.write, stdout, [output, ...args]) as boolean;
   };

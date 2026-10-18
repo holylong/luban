@@ -8,12 +8,12 @@ import { render } from "ink";
 import { expect, it } from "vitest";
 import { App } from "./app.js";
 import { loadConfig } from "../core/config.js";
-import { createWindowsFrameWriter, windowsOutput } from "./windows-output.js";
+import { createTerminalFrameWriter, terminalOutput } from "./terminal-output.js";
 
 const erase = (rows: number) => Array.from({ length: rows }, (_, i) => `\u001b[2K${i < rows - 1 ? "\u001b[1A" : "\u001b[G"}`).join("");
 
 it("overwrites changed rows without blanking the frame and restores the trailing cursor row", () => {
-  const write = createWindowsFrameWriter();
+  const write = createTerminalFrameWriter();
   expect(write("header\nlong input\nfooter\n")).toBe("header\nlong input\nfooter\n");
   write("\u001b[?2026h");
   const result = write(erase(4) + "header\nx\nfooter\n");
@@ -25,7 +25,7 @@ it("overwrites changed rows without blanking the frame and restores the trailing
 });
 
 it("falls back on resize and external logs, then resumes row updates", () => {
-  const write = createWindowsFrameWriter();
+  const write = createTerminalFrameWriter();
   write("a\nb\n");
   const resized = erase(3) + "c\n";
   expect(write(resized)).toBe(resized);
@@ -36,14 +36,34 @@ it("falls back on resize and external logs, then resumes row updates", () => {
   expect(write(erase(2) + "e\n")).not.toContain("\u001b[2K");
 });
 
-it("leaves non-Windows and redirected output untouched", () => {
+it("wraps TTY output on every platform and leaves redirected output untouched", () => {
   const stream = Object.assign(new PassThrough(), { isTTY: true }) as unknown as NodeJS.WriteStream;
-  expect(windowsOutput(stream, "linux")).toBe(stream);
+  expect(terminalOutput(stream)).not.toBe(stream);
   stream.isTTY = false;
-  expect(windowsOutput(stream, "win32")).toBe(stream);
+  expect(terminalOutput(stream)).toBe(stream);
 });
 
-it("keeps the Windows composer in place without frame erases while typing and after resize", async () => {
+it("invalidates cached rows after binary writes and keeps screen-reader streams untouched", () => {
+  const stream = Object.assign(new PassThrough(), { isTTY: true }) as unknown as NodeJS.WriteStream;
+  let raw = "";
+  stream.on("data", data => { raw += String(data); });
+  const output = terminalOutput(stream);
+  output.write("header\na\n");
+  output.write(Buffer.from("external log\n"));
+  raw = "";
+  const frame = erase(3) + "header\nb\n";
+  output.write(frame);
+  expect(raw).toBe(frame);
+  const old = process.env.INK_SCREEN_READER;
+  process.env.INK_SCREEN_READER = "true";
+  try { expect(terminalOutput(stream)).toBe(stream); }
+  finally {
+    if (old === undefined) delete process.env.INK_SCREEN_READER;
+    else process.env.INK_SCREEN_READER = old;
+  }
+});
+
+it("keeps the composer in place without frame erases while typing and after resize", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-windows-output-"));
   const oldHome = process.env.LUBAN_HOME;
   process.env.LUBAN_HOME = home;
@@ -62,7 +82,7 @@ it("keeps the Windows composer in place without frame erases while typing and af
   });
   const app = render(<App config={loadConfig({ workspace })} />, {
     stdin: stdin as unknown as NodeJS.ReadStream,
-    stdout: windowsOutput(stdout as unknown as NodeJS.WriteStream, "win32"),
+    stdout: terminalOutput(stdout as unknown as NodeJS.WriteStream),
     patchConsole: false, exitOnCtrlC: false, incrementalRendering: false,
   });
   // Replay row movements rather than merely checking raw frame strings.

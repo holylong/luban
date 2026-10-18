@@ -118,7 +118,7 @@ export function createMascotFrameWriter(image: MascotImage, trueColor = true) {
   };
 }
 
-/** A stream proxy keeps Ink's resize events, callbacks and Windows row-diff
+/** A stream proxy keeps Ink's resize events, callbacks and terminal row-diff
  * adapter intact. Headless runs never pass through this wrapper. */
 export function mascotOutput(stdout: NodeJS.WriteStream, env = process.env): NodeJS.WriteStream {
   if (!stdout.isTTY || env.LUBAN_MASCOT === "0" || env.INK_SCREEN_READER === "true"
