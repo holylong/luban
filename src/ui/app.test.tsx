@@ -180,6 +180,7 @@ it("starts the TUI with the drift-free renderer", async () => {
   const cli = await readFile(new URL("../cli.tsx", import.meta.url), "utf8");
   expect(cli).toContain("incrementalRendering: false");
   expect(cli).not.toContain("incrementalRendering: true");
+  expect(cli).toContain("stdout: mascotOutput(terminalOutput(process.stdout))");
 });
 
 it("accepts a clicked model question option without inserting mouse bytes", async () => {
