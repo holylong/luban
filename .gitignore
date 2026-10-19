@@ -31,6 +31,11 @@ config.exp.json
 # personal scratch output (e.g. screenshot base64 dump)
 *.b64
 
+# session transcripts and exports (contain local paths, node names, session ids)
+session-*.md
+luban-export-*.md
+*-export-*.md
+
 # local Kev decision-server scratch (launch script, logs, config backup with keys)
 .kev/
 
