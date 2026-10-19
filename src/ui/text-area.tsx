@@ -139,10 +139,17 @@ export function TextArea({ value, onChange, onSubmit, focus, historyActive = fal
   if (value.length === 0) {
     // An empty box used to render only the placeholder, so there was nothing
     // to say where the caret was or whether the box had focus at all.
+    //
+    // The placeholder must never wrap. This branch used to be a `flexGrow`
+    // Box, so its real width was whatever the composer row had left rather
+    // than the `width` the layout wraps at, and the unwrapped `<Text>` let
+    // Ink soft-wrap it: a placeholder wider than the box painted two or three
+    // rows in an otherwise empty single-line draft. Pin the box to `width` and
+    // truncate, so an untouched box is always exactly one row.
     return (
-      <Box ref={(node) => { measureRef?.(node); }} flexGrow={1} overflow="hidden">
+      <Box ref={(node) => { measureRef?.(node); }} width={width} flexShrink={0} flexDirection="row" overflow="hidden">
         {focus ? <Text backgroundColor={theme.accent} color={theme.background}> </Text> : null}
-        <Text color={theme.dim}>{placeholder}</Text>
+        <Text color={theme.dim} wrap="truncate-end">{placeholder}</Text>
       </Box>
     );
   }
