@@ -2511,7 +2511,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             onChange={(value) => { setInput(stripMouseReports(value)); setHistoryIndex(null); setCommandIndex(0); }}
             onSubmit={(value) => { void submit(value); }}
             focus={!dialog && !approval && !questionRequest && !showHelp}
-            placeholder={running ? "补充指令 / /queue 排队 / 只读命令即时执行（/status /models…）· Esc 中断" : "Message luban…（Ctrl+J 换行 · @ 文件 · / 命令）"}
+            placeholder={running ? "补充指令 · /queue 排队 · Esc 中断" : "Message luban… · Ctrl+J 换行 · @ 文件"}
             width={inputWidth}
             maxRows={inputMaxRows}
             mouseGuard={mouseGuardRef.current}
