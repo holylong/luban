@@ -284,6 +284,62 @@ describe("config", () => {
     expect(model?.apiKey).toBe("sk-file-test");
   });
 
+  it("shares one configured OpenCode key between Go and Zen", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-shared-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      model: { active: "opencode-go/deepseek-v4.1-flash" },
+      providers: {
+        "opencode-zen": {
+          base_url: "https://opencode.ai/zen/v1",
+          api_key: "oc_sk_shared",
+        },
+      },
+    }));
+    const config = loadConfig({ workspace });
+    // A single key in either OpenCode block serves both endpoints.
+    expect(config.model.id).toBe("opencode-go/deepseek-v4.1-flash");
+    expect(config.model.apiKey).toBe("oc_sk_shared");
+    expect(config.models.find(item => item.id === "opencode-zen/deepseek-v4.1-flash")?.apiKey).toBe("oc_sk_shared");
+    // Go's full catalog registers from the shared credential.
+    expect(config.models.some(item => item.id === "opencode-go/kimi-k3")).toBe(true);
+  });
+
+  it("lets a configured Go key serve Zen too", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-shared-go-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { "opencode-go": { api_key: "sk-go-shared" } },
+    }));
+    const config = loadConfig({ workspace, model: "opencode-zen/deepseek-v4.1-flash" });
+    expect(config.model.id).toBe("opencode-zen/deepseek-v4.1-flash");
+    expect(config.model.apiKey).toBe("sk-go-shared");
+    expect(config.models.find(item => item.id === "opencode-go/kimi-k3")?.apiKey).toBe("sk-go-shared");
+  });
+
+  it("merges the built-in Go catalog into an explicit provider", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opencode-go-merge-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { "opencode-go": {
+        api_key: "sk-go-merge",
+        models: { "deepseek-v4.1-flash": { name: "My Go Flash" } },
+      } },
+    }));
+    const config = loadConfig({ workspace, model: "opencode-go/deepseek-v4.1-flash" });
+    const go = config.models.filter((item) => item.provider === "opencode-go");
+    expect(go.find((item) => item.id === "opencode-go/deepseek-v4.1-flash")?.name).toBe("My Go Flash");
+    expect(go.every((item) => item.apiKey === "sk-go-merge")).toBe(true);
+    expect(go.some((item) => item.id === "opencode-go/kimi-k3")).toBe(true);
+    expect(go.find((item) => item.id === "opencode-go/qwen3.8-flash")?.api).toBe("anthropic");
+  });
+
   it("registers Zen metered models from its own key without enabling Go", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-"));
     const workspace = join(home, "project");
