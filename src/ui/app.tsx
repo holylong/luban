@@ -19,6 +19,7 @@ import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
 import { chatBlocks, jobBlocks } from "./mesh-transcript.js";
 import { SessionStore } from "../core/session-store.js";
 import { sharedHistory } from "../core/session-history.js";
+import { exportWorkReport, type ReportPeriod } from "../core/work-report.js";
 import { summarizeToolArgs } from "../core/tools.js";
 import type {
   AgentEvent,
@@ -125,6 +126,7 @@ const COMMANDS = [
   ["/pending", "show saved pending messages"],
   ["/copy", "copy last answer to clipboard"],
   ["/export", "export session to markdown"],
+  ["/report", "日报/周报/月报/年报：daily|weekly|monthly|yearly [日期] [路径]"],
   ["/plan", "show current task plan"],
   ["/verify", "verification records"],
   ["/theme", "terminal color scheme"],
@@ -145,6 +147,7 @@ const RUN_IMMEDIATE_COMMANDS = new Set([
 ]);
 
 const COMMAND_USAGE: Record<string, string> = {
+  "/report": "/report daily|weekly|monthly|yearly [YYYY-MM-DD] [输出路径] — 汇总本机所有项目会话",
   "/mode": "/mode auto|agent|ask",
   "/theme": "/theme [名称] — 不带参数列出全部配色，带名称即时切换并保存",
   "/permissions": "/permissions ask|edits|allow",
@@ -566,7 +569,7 @@ export function argumentMatches(input: string): string[] {
   const match = /^(\/\S+)\s+(\S*)$/u.exec(input);
   if (!match) return [];
   const command = match[1]!.toLowerCase();
-  const options = command === "/mode" ? MODES
+  const options = command === "/report" ? ["daily", "weekly", "monthly", "yearly"] : command === "/mode" ? MODES
     : command === "/permissions" ? ["ask", "edits", "allow"]
       : command === "/theme" ? THEMES.map((item) => item.id)
         : command === "/sync" ? ["push", "pull"] : [];
@@ -1682,6 +1685,16 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
    * `meshAction` decides whether a mesh query joins the transcript (idle) or
    * answers in a detached dialog so an active run is never disturbed. */
   const handleSlashCommand = async (command: string, argument: string, value: string, meshAction: typeof runMeshAction) => {
+    if (command === "/report") {
+      const [period = "daily", date, ...target] = argument.trim().split(/\s+/).filter(Boolean);
+      setNotice("正在汇总本机所有项目的会话记录…");
+      try {
+        await save();
+        const result = await exportWorkReport({ period: period as ReportPeriod, date, output: target.join(" ") || undefined, lubanHome: config.home, workspace: config.workspace });
+        setNotice(`已导出 ${result.report.sessions.length} 个会话：${result.path}${result.report.warnings.length ? ` · ${result.report.warnings.length} 条覆盖说明见报告` : ""}`);
+      } catch (e) { setNotice(`报告导出失败：${String(e)}`); }
+      return;
+    }
     if (command === "/details") { setScrollOffset(0); setShowDetails((current) => !current); return; }
     if (command === "/diff") { setDiff(null); setDialog({ type: "diff", index: 0 }); void workspaceDiff(config.workspace).then(setDiff); return; }
     if (command === "/help") { setShowHelp(true); return; }

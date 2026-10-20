@@ -21,6 +21,25 @@ luban 是一个 AI 编程助手，帮助你阅读代码、修改文件、运行�
 - **自由选择模型**：支持云端与本地模型，也可复用 Codex CLI 的账号登录；在工作台中切换模型和推理强度。
 - **按需扩展**：通过技能和 MCP 接入专用工具，也可通过编辑器集成在开发环境中使用。
 
+## 工作日报、周报、月报与年报
+
+在 TUI 输入 `/report daily`、`/report weekly`、`/report monthly` 或 `/report yearly`。可指定日期和输出文件，例如 `/report weekly 2026-10-20 reports/week.md`。默认汇总本机所有项目的 luban、Codex、Claude Code、OpenCode 会话，不限当前 session。
+
+CLI 示例：
+
+```bash
+luban report daily
+luban report weekly --date 2026-10-20 -o reports/week.md
+luban report monthly --sources luban,codex --format json -o reports/month.json
+luban report yearly --date 2026-01-01
+```
+
+按本机时区划分自然日、周一至周日、自然月和自然年；日期用于选中所在周期。Markdown 按项目展示任务与进展摘要，每个会话每类最多 8 条、每条最多 360 字；JSON 保留时段内收集的用户与助手文本。报告记录来源、会话 ID、原始文件位置和读取异常。所有处理在本机完成，不调用模型。已存在的目标文件不会被覆盖，请使用新文件名。
+
+默认读取 `$LUBAN_HOME/sessions-node`（未设置时为 `~/.luban/sessions-node`）、`$CODEX_HOME`（默认 `~/.codex`）下的 sessions/archived_sessions、`$CLAUDE_CONFIG_DIR/projects`（默认 `~/.claude/projects`）、`$XDG_DATA_HOME/opencode`（默认 `~/.local/share/opencode`）中的旧 JSON 与 SQLite。CLI 支持 `--codex-home`、`--claude-home`、`--opencode-home` 指定其他数据目录。OpenCode SQLite 需要支持 `node:sqlite` 的 Node 22.5+；不可读或缺失来源会在报告中说明。
+
+旧 luban 会话没有逐条消息时间时，按最后更新时间归档并明确标注可能包含此前工作；外部会话按消息时间过滤。报告中的进展属于会话自述。未保存、已删除或保存在其他目录的会话无法自动恢复。
+
 ## 安装
 
 Linux 用户可选择对应架构的 `.deb` 安装包：终端版 `luban-cli` 或桌面版 `luban-desktop`。Windows 用户解压对应的便携包后，运行 `luban.cmd` 或 `luban-desktop.cmd`。
