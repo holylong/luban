@@ -15,6 +15,7 @@ import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
 import { sharedHistory } from "./core/session-history.js";
 import { runHistory } from "./core/history-command.js";
+import { runReport } from "./core/report-command.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
 import { App } from "./ui/app.js";
 import { terminalOutput } from "./ui/terminal-output.js";
@@ -546,7 +547,7 @@ async function main(): Promise<number> {
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
     .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
     .option("-p, --prompt <text>", "run once without the TUI")
-    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban serve [path]  native mesh/worker daemon\n  luban history       search the SQLite mirror of saved sessions\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
+    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
   program.parse();
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -785,6 +786,8 @@ const entry = command === "login" && process.argv[3] === "codex"
           }, reject);
       });
     })
+  : command === "report"
+  ? runReport(process.argv.slice(3))
   : command === "web"
   ? runDaemon(process.argv.slice(3), true)
   : command === "serve"
