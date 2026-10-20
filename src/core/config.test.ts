@@ -44,6 +44,8 @@ describe("config", () => {
     process.env.LUBAN_HOME = home;
     const chosen = loadConfig({ workspace: home, model: "codex/gpt-6-sol" });
     expect(chosen.model).toMatchObject({ id: "codex/gpt-6-sol", model: "gpt-6-sol", api: "codex" });
+    expect(chosen.model.capabilities.vision).toBe(true);
+    expect(loadConfig({ workspace: home, model: "codex/gpt-6.1-sol" }).model.capabilities.vision).toBe(true);
     expect(chosen.models.some((model) => model.id === "codex/gpt-6-luna")).toBe(true);
     expect(loadConfig({ workspace: home, model: "codex/custom-model" }).model.model).toBe("custom-model");
     await savePreferredModel(home, "codex/gpt-6-sol");

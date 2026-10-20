@@ -79,7 +79,8 @@ export function installProcessGuard(options: ProcessGuardOptions = {}): ProcessG
   if (active.installed) return handle;
 
   const label = options.label ?? "luban";
-  const report = options.report ?? ((message: string) => { process.stderr.write(message); });
+  // Ink routes console output around its frame; raw stderr invalidates its cursor tracking.
+  const report = options.report ?? ((message: string) => { console.error(message.trimEnd()); });
   const limit = Math.max(1, options.history ?? 20);
   active.installed = true;
   // Clear in place: the handle handed to a second caller aliases this array, so

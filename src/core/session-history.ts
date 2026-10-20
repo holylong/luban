@@ -128,7 +128,8 @@ export class SessionHistory {
     if (!settings.enabled) return undefined;
     const sqlite = loadSqlite();
     if (!sqlite) {
-      process.stderr.write("history is enabled but this Node runtime has no node:sqlite (Node 22.5+); continuing without the queryable mirror\n");
+      // Ink intercepts console diagnostics and restores its frame around them.
+      console.error("history is enabled but this Node runtime has no node:sqlite (Node 22.5+); continuing without the queryable mirror");
       return undefined;
     }
     const directory = settings.directory || join(home, "history");
@@ -144,7 +145,7 @@ export class SessionHistory {
     } catch (error) {
       // The mirror is derived data: a database that cannot be created must not
       // stop the agent, but the reason has to be visible rather than implied.
-      process.stderr.write(`history database unavailable (${error instanceof Error ? error.message : String(error)}); continuing without the queryable mirror\n`);
+      console.error(`history database unavailable (${error instanceof Error ? error.message : String(error)}); continuing without the queryable mirror`);
       return undefined;
     }
   }
@@ -168,7 +169,7 @@ export class SessionHistory {
       db.exec("PRAGMA busy_timeout = 2000");
       return new SessionHistory(db, settings.maxMessagesPerSession);
     } catch (error) {
-      process.stderr.write(`history database could not be read (${error instanceof Error ? error.message : String(error)})\n`);
+      console.error(`history database could not be read (${error instanceof Error ? error.message : String(error)})`);
       return undefined;
     }
   }
@@ -200,7 +201,7 @@ export class SessionHistory {
       // A failing mirror self-disables: the session JSON keeps being written,
       // and one clear line says why the queryable copy stopped.
       this.closed = true;
-      process.stderr.write(`history mirror stopped (${error instanceof Error ? error.message : String(error)}); session JSON is unaffected\n`);
+      console.error(`history mirror stopped (${error instanceof Error ? error.message : String(error)}); session JSON is unaffected`);
       return 0;
     }
   }

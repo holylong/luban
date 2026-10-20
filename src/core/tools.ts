@@ -740,7 +740,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
           vision_capable_model: vision,
           model: config.model.id,
           note: vision
-            ? "Model declares vision support. This runtime keeps image bytes out of text context; use web/desktop clients for inline images, or describe the needed region and read surrounding code instead."
+            ? "Model declares vision support. Call attach_image with this workspace-relative path to send native image input on the next model call. This metadata result alone does not contain image pixels."
             : `Model ${config.model.id} does not declare vision support. Describe the image content in text or switch to a vision-capable model.`,
         }, null, 2);
       },

@@ -1,9 +1,21 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { installProcessGuard, processGuardInstalled, restoreProcessGuard } from "./process-guard.js";
 
 // Restores the process-wide state each test mutated. Every test must call this
 // or the guard leaks into the rest of the suite.
 afterEach(() => { restoreProcessGuard(); });
+
+it("routes the default diagnostic through console so Ink can restore its frame", () => {
+  const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    installProcessGuard();
+    process.emit("uncaughtException", new Error("background failure"), "uncaughtException");
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining("background failure"));
+  } finally {
+    diagnostic.mockRestore();
+  }
+});
 
 it("reports an unhandled rejection instead of ending the process", async () => {
   const reported: string[] = [];
@@ -20,7 +32,7 @@ it("keeps the process alive after an uncaught exception", () => {
   const reported: string[] = [];
   installProcessGuard({ report: (message) => { reported.push(message); } });
   // An uncaught exception must not reach the default handler that exits.
-  expect(() => { process.emit("uncaughtException", new Error("boom"), "scan.js"); }).not.toThrow();
+  expect(() => { process.emit("uncaughtException", new Error("boom"), "uncaughtException"); }).not.toThrow();
   expect(reported.join("")).toMatch(/boom/u);
 });
 
