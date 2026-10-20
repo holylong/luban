@@ -34,11 +34,11 @@ luban report monthly --sources luban,codex --format json -o reports/month.json
 luban report yearly --date 2026-01-01
 ```
 
-按本机时区划分自然日、周一至周日、自然月和自然年；日期用于选中所在周期。Markdown 按项目展示任务与进展摘要，每个会话每类最多 8 条、每条最多 360 字；JSON 保留时段内收集的用户与助手文本。报告记录来源、会话 ID、原始文件位置和读取异常。所有处理在本机完成，不调用模型。已存在的目标文件不会被覆盖，请使用新文件名。
+按本机时区划分自然日、周一至周日、自然月和自然年；日期用于选中所在周期。默认 Markdown 输出适合发给领导的工作日记或阶段汇报，按项目合并重复事项，整理工作内容、实际进展、问题及明确的后续安排，省略无资料的栏目，不附会话编号、工具来源和本地路径。长材料分批提炼后合并。正文通过当前配置的模型服务生成，会将所选时段的用户与助手文本发送给该服务；生成失败时不写入文件。要求编码工具的 Zen 免费模型需先切换到支持无工具文本生成的模型。JSON 保留本机收集的原始素材、来源和读取说明，不调用模型。已存在的目标文件不会被覆盖，请使用新文件名。
 
-默认读取 `$LUBAN_HOME/sessions-node`（未设置时为 `~/.luban/sessions-node`）、`$CODEX_HOME`（默认 `~/.codex`）下的 sessions/archived_sessions、`$CLAUDE_CONFIG_DIR/projects`（默认 `~/.claude/projects`）、`$XDG_DATA_HOME/opencode`（默认 `~/.local/share/opencode`）中的旧 JSON 与 SQLite。CLI 支持 `--codex-home`、`--claude-home`、`--opencode-home` 指定其他数据目录。OpenCode SQLite 需要支持 `node:sqlite` 的 Node 22.5+；不可读或缺失来源会在报告中说明。
+默认读取 `$LUBAN_HOME/sessions-node`（未设置时为 `~/.luban/sessions-node`）、`$CODEX_HOME`（默认 `~/.codex`）下的 sessions/archived_sessions、`$CLAUDE_CONFIG_DIR/projects`（默认 `~/.claude/projects`）、`$XDG_DATA_HOME/opencode`（默认 `~/.local/share/opencode`）中的旧 JSON 与 SQLite。CLI 支持 `--codex-home`、`--claude-home`、`--opencode-home` 指定其他数据目录。OpenCode SQLite 需要支持 `node:sqlite` 的 Node 22.5+；不可读或缺失来源会在 CLI 或 TUI 提示，并保留于 JSON 素材中。
 
-旧 luban 会话没有逐条消息时间时，按最后更新时间归档并明确标注可能包含此前工作；外部会话按消息时间过滤。报告中的进展属于会话自述。未保存、已删除或保存在其他目录的会话无法自动恢复。
+旧 luban 会话没有逐条消息时间时，按最后更新时间归档，生成时将其标为时间归属待核实，避免直接写成当期已完成成果；外部会话按消息时间过滤。模型根据会话素材整理，发送前请核对实际完成情况。未保存、已删除或保存在其他目录的会话无法自动恢复。
 
 ## 安装
 
