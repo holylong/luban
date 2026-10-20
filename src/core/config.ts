@@ -185,29 +185,47 @@ function opencodeAuthKey(service: "opencode" | "opencode-go" = "opencode-go"): s
 
 /**
  * Prefer an available Console session on Zen, otherwise use the configured
- * or saved Zen API key. Go credentials remain separate.
+ * or saved Zen API key. An explicit key from either OpenCode provider block is
+ * shared, while environment variables and OpenCode's saved credentials keep
+ * their per-service meaning.
  */
-function resolveKey(providerName: string, provider: JsonObject, fallback: JsonObject, session = ""): string {
+function resolveKey(providerName: string, provider: JsonObject, fallback: JsonObject, session = "", shared = ""): string {
   const options = record(provider.options);
   const keyEnv = text(provider.api_key_env, provider.apiKeyEnv);
   if (providerName === "opencode-zen") return text(
     session, provider.api_key, provider.apiKey, options.api_key, options.apiKey,
-    keyEnv ? process.env[keyEnv] : "", process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"),
+    keyEnv ? process.env[keyEnv] : "", process.env.OPENCODE_ZEN_API_KEY,
+    shared, opencodeAuthKey("opencode"),
   );
+  const opencode = providerName === "opencode-go";
   return text(
-    providerName === "opencode-zen" ? session : "",
     provider.api_key,
     provider.apiKey,
     options.api_key,
     options.apiKey,
     keyEnv ? process.env[keyEnv] : "",
     process.env[`${envKey(providerName)}_API_KEY`],
-    providerName === "opencode-go" ? opencodeAuthKey() : providerName === "opencode-zen" ? opencodeAuthKey("opencode") : "",
+    ...(opencode ? [shared] : []),
+    opencode ? opencodeAuthKey() : "",
     fallback.api_key,
     fallback.apiKey,
     process.env.OPENAI_API_KEY,
     process.env.DEEPSEEK_API_KEY,
   );
+}
+
+/**
+ * OpenCode plans share one credential now: the same key answers both the
+ * subscription and metered endpoints. Read it once from whichever provider
+ * block the user wrote, so Go and Zen no longer need duplicate keys.
+ */
+function sharedOpenCodeKey(providers: JsonObject): string {
+  const from = (name: string): string => {
+    const provider = record(providers[name]);
+    const options = record(provider.options);
+    return text(provider.api_key, provider.apiKey, options.api_key, options.apiKey);
+  };
+  return text(from("opencode-zen"), from("opencode-go"));
 }
 
 /**
@@ -292,11 +310,11 @@ const OPENCODE_ZEN_FREE_MODELS: Record<string, { name: string; api: "openai" | "
  * Providers luban knows without any config file. Subscription providers are
  * offered only after login or explicit selection.
  */
-function builtinProviders(includeCodex = false, session = ""): Record<string, JsonObject> {
-  const goKey = text(process.env.OPENCODE_GO_API_KEY, process.env.OPENCODE_API_KEY, opencodeAuthKey());
+function builtinProviders(includeCodex = false, session = "", shared = ""): Record<string, JsonObject> {
+  const goKey = text(process.env.OPENCODE_GO_API_KEY, process.env.OPENCODE_API_KEY, opencodeAuthKey(), shared);
   // OPENCODE_API_KEY has historically selected Go in luban; only a Zen-specific
   // credential may auto-register Zen, so an existing Go setup keeps its models.
-  const zenKey = text(session, process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"));
+  const zenKey = text(session, process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"), shared);
   // Keep model visibility independent of whether a Console login was found.
   const zenCatalog = {
     ...OPENCODE_ZEN_MODELS,
@@ -373,14 +391,15 @@ function resolveBaseUrl(provider: JsonObject, fallback: JsonObject): string {
   );
 }
 
-function collectModels(raw: JsonObject, session = ""): ModelRef[] {
+function collectModels(raw: JsonObject, session = "", shared = ""): ModelRef[] {
   const providers = record(raw.providers);
   const modelConfig = record(raw.model);
   const result: ModelRef[] = [];
   for (const [providerName, value] of Object.entries(providers)) {
     const provider = record(value);
     const baseUrl = resolveBaseUrl(provider, modelConfig);
-    const apiKey = resolveKey(providerName, provider, modelConfig, session);
+    const apiKey = resolveKey(providerName, provider, modelConfig, session,
+      providerName === "opencode-go" || providerName === "opencode-zen" ? shared : "");
     const providerApi = text(provider.api, provider.type, providerName === "anthropic" ? "anthropic" : "openai").toLowerCase();
     const providerHeaders = headerMap(provider.headers);
     for (const model of providerModels(provider)) {
@@ -497,15 +516,17 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const codexEnabled = preferences.codexEnabled === true || Boolean(codexModelId);
   // Read the Console session once: a refresh can cost a network round trip.
   const consoleSession = consoleAccessToken();
-  const builtins = wantsBuiltin || codexEnabled ? builtinProviders(codexEnabled, consoleSession) : {};
+  const sharedOpenCode = sharedOpenCodeKey(explicitProviders);
+  const builtins = wantsBuiltin || codexEnabled ? builtinProviders(codexEnabled, consoleSession, sharedOpenCode) : {};
   // User providers stay first (and win) so defaults and ordering do not shift;
   // built-ins are appended only when the user has not defined that provider.
   const providers: JsonObject = { ...explicitProviders };
   for (const [name, definition] of Object.entries(builtins)) {
-    // A hand-written Zen block usually pins the endpoint and a couple of
-    // models, which used to hide the rest of the free catalog. Merge the
-    // built-in model table in instead of dropping it; explicit entries win.
-    if (name in explicitProviders && name === "opencode-zen") {
+    // A hand-written OpenCode block usually pins the endpoint and a couple of
+    // models, which used to hide the rest of the catalog. Merge the built-in
+    // model table in instead of dropping it; explicit entries win. An explicit
+    // model array remains a full override.
+    if (name in explicitProviders && (name === "opencode-zen" || name === "opencode-go")) {
       providers[name] = mergeModelCatalog(record(explicitProviders[name]), definition);
       continue;
     }
@@ -549,8 +570,8 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   // an unconnected Zen catalog is visible in /models but cannot be the default.
   const fallbackModels = !hasExplicitProviders && Object.keys(providers).length === 1
     && "opencode-zen" in providers && !text(record(providers["opencode-zen"]).api_key)
-    ? collectModels({ model: mergedModel }, consoleSession) : [];
-  const models = [...fallbackModels, ...collectModels(raw, consoleSession)].map((model) => {
+    ? collectModels({ model: mergedModel }, consoleSession, sharedOpenCode) : [];
+  const models = [...fallbackModels, ...collectModels(raw, consoleSession, sharedOpenCode)].map((model) => {
     if (model.api !== "codex") return model;
     const stored = storedEfforts[model.id];
     const effort = forcedEffort ?? (stored === "" ? undefined : codexEffort(stored) ?? configuredEffort);

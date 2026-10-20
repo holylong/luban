@@ -346,9 +346,11 @@ JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会
 ### OpenCode Go
 
 luban 内置 `opencode-go` provider：只要在本机找得到 OpenCode 的凭据（`OPENCODE_API_KEY`
-环境变量，或 OpenCode 在 `$XDG_DATA_HOME/opencode/auth.json`（旧版为 `account.json`）里
-保存的 `opencode-go` key），就会自动注册订阅里的模型，无需手写配置。用 `Ctrl+P`
-选 `opencode-go/kimi-k3` 这类 id 即可，也可以在 `model.active` 里写死。
+环境变量，OpenCode 在 `$XDG_DATA_HOME/opencode/auth.json`（旧版为 `account.json`）里
+保存的 `opencode-go` key，或 `providers.opencode-go` / `providers.opencode-zen` 里显式写的
+`api_key`），就会自动注册订阅里的模型，无需手写配置。当前 OpenCode 的 key 同时适用于
+Go 和 Zen：显式配置在任一 OpenCode provider 块里的 `api_key` 会被两边共用，不必重复填写。
+用 `Ctrl+P` 选 `opencode-go/kimi-k3` 这类 id 即可，也可以在 `model.active` 里写死。
 
 Go 订阅的模型走同一个 base URL，但分属三种协议：多数是 OpenAI 兼容的
 `chat/completions`，`@ai-sdk/anthropic` 模型（如 `qwen3.8-flash`、`minimax-m3`）走
@@ -360,7 +362,8 @@ GPT Luna 这类推理模型不接受显式 `temperature`，内置定义用
 对话独立、稳定的 `x-opencode-session`；同一对话的主请求、总结和标题请求复用该
 标识。旧配置中的固定占位值 `luban` 会自动替换为对话标识，无需手动填写；显式
 自定义的其他请求头仍优先。要退回自己的 key，直接在 `providers`
-里定义同名 `opencode-go`，它会覆盖内置定义。
+里定义同名 `opencode-go`；内置模型表会继续合并，保留清单则把 `models`
+写成数组（如 `["custom"]`）。
 
 Go 自动模式保留配置的 `max_retries`、请求超时和流空闲超时，不再只重试一次或强制
 使用 45 秒超时。失败后按 2、4、8、16、30 秒上限退避（带少量随机抖动），优先读取
@@ -409,18 +412,19 @@ Zen 免费模型支持已有 Zen API key，也可使用 Console 登录。`HTTP 4
 `x-opencode-session` 头（内置 provider 已自动附上）。
 
 如果仍然出现 `FreeTierError`，检查自定义 headers 是否覆盖了客户端版本或会话标识。
-API key 和 Go/Zen 凭据仍分别读取；本地存在 OAuth 会话时优先使用该会话。
+显式配置的 OpenCode API key 由 Go/Zen 共用；本地存在 OAuth 会话时 Zen 优先使用该会话。
 
 ### OpenCode Zen（按量计费）
 
 luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或在 OpenCode 中执行
 `opencode auth login`（luban 读取已有的 Zen API key 或 Console 登录）。
-luban 既有的 `OPENCODE_API_KEY` 仍对应 Go；单独使用 Zen 时请设
-`OPENCODE_ZEN_API_KEY`。Zen 的模型始终会出现在 `/models` / `Ctrl+P` 列表中；
+环境变量 `OPENCODE_API_KEY` 仍对应 Go，单独使用 Zen 时请设
+`OPENCODE_ZEN_API_KEY`；但配置文件里显式写在 `opencode-go` 或 `opencode-zen`
+任一块的 `api_key` 会自动供两端共用。Zen 的模型始终会出现在 `/models` / `Ctrl+P` 列表中；
 未连接时会标注所需凭据，运行前也会提示设置方法。Zen 是按 token 计费的付费端点，
 内置付费和免费模型表，不按 Console 登录状态过滤；`gpt-6-luna` 等 GPT 模型走 Responses，`claude-sonnet-5`
-等走 Messages，其余走 Chat Completions。Zen 与 Go 的本地凭据分别读取，不会把 Go
-登录误当作 Zen 登录。模型名单会变化，以 [Zen 官方列表](https://opencode.ai/docs/zen)
+等走 Messages，其余走 Chat Completions。只有环境变量和 OpenCode 自身保存的凭据仍按服务分别读取；
+配置文件里的显式 key 优先级更高。模型名单会变化，以 [Zen 官方列表](https://opencode.ai/docs/zen)
 为准。配置里显式写了 `opencode-zen` 也不会隐藏内置模型表：自定义的 endpoint、key
 和模型条目优先，其余内置模型继续出现；若只想保留自己的清单，把 `models` 写成数组
 （如 `["deepseek-v4-flash"]`）即可完全覆盖。
