@@ -1,5 +1,4 @@
 import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
 import type { AttachedImage, ChatMessage, ToolDefinition } from "./types.js";
 import { resolveInside } from "./paths.js";
 import { relative, resolve, sep } from "node:path";
@@ -43,7 +42,7 @@ export async function resolveImageParts(workspace: string, images: AttachedImage
     // attaches workspace-relative @ mentions.
     if (image.path.startsWith("/") || image.path.includes("..")) continue;
     try {
-      const abs = join(workspace, image.path);
+      const abs = await resolveInside(workspace, image.path);
       const info = await stat(abs);
       if (!info.isFile() || info.size > MAX_IMAGE_BYTES) continue;
       const base64 = (await readFile(abs)).toString("base64");

@@ -19,9 +19,11 @@ const args = process.argv.slice(2);
 let input = '';
 process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {
-  fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({args, input}) + '\\n');
+  const images = args.flatMap((arg, i) => arg === '--image' ? [fs.readFileSync(args[i + 1], 'base64')] : []);
+  fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({args, input, images}) + '\\n');
   if (!args.includes('--json') || args.includes('--ephemeral')) process.exit(9);
-  if (input.includes('FAIL_THIS_TURN')) process.exit(7);
+  const failureFile = ${JSON.stringify(join(home, "failed-once"))};
+  if (input.includes('FAIL_THIS_TURN') && !fs.existsSync(failureFile)) { fs.writeFileSync(failureFile, '1'); process.exit(7); }
   if (input.includes('WAIT_THIS_TURN')) return setInterval(() => {}, 1000);
   const id = args.includes('resume') ? args[args.indexOf('resume') + 1] : require('crypto').randomUUID();
   const started = JSON.stringify({type: 'thread.started', thread_id: id}) + '\\n';
@@ -40,7 +42,7 @@ process.stdin.on('end', () => {
   await savePreferredModel(home, "codex/gpt-6.1-sol", "medium");
   const config = loadConfig({ workspace: home, model: "codex/gpt-6.1-sol" });
   const requests = async () => (await readFile(log, "utf8")).trim().split("\n")
-    .map(line => JSON.parse(line) as { args: string[]; input: string });
+    .map(line => JSON.parse(line) as { args: string[]; input: string; images: string[] });
   return { client: new CodexClient(config), config, requests };
 }
 
@@ -54,6 +56,66 @@ afterEach(() => {
 });
 
 describe("CodexClient", () => {
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+  it("sends native image bytes initially and on resume, then accepts text-only follow-ups", async () => {
+    const { client, config, requests } = await recordingClient();
+    await writeFile(join(config.workspace, "截图 with spaces.png"), Buffer.from(png, "base64"));
+    const image = { path: "截图 with spaces.png", mime: "image/png" };
+    const messages: ChatMessage[] = [{ role: "user", content: "inspect screenshot", images: [image] }];
+    const signal = new AbortController().signal;
+    await client.complete(messages, [], signal);
+    messages.push({ role: "assistant", content: "done" }, { role: "user", content: "another screenshot", images: [image] });
+    await client.complete(messages, [], signal);
+    messages.push({ role: "assistant", content: "done" }, { role: "user", content: "continue in text" });
+    await client.complete(messages, [], signal);
+    const recorded = await requests();
+    expect(recorded.map(request => request.images)).toEqual([[png], [png], []]);
+    expect(recorded.map(request => request.args.includes("resume"))).toEqual([false, true, true]);
+    expect(recorded[0]!.input).toContain("Native image attachments");
+    expect(recorded[1]!.input).not.toContain("inspect screenshot");
+    for (const request of recorded.slice(0, 2)) {
+      await expect(readFile(request.args[request.args.indexOf("--image") + 1]!)).rejects.toThrow();
+    }
+  });
+
+  it("detects tool-attached images on an earlier user message and rebuilds the thread", async () => {
+    const { client, config, requests } = await recordingClient();
+    await writeFile(join(config.workspace, "shot.png"), Buffer.from(png, "base64"));
+    const messages: ChatMessage[] = [{ role: "user", content: "look" }];
+    const signal = new AbortController().signal;
+    await client.complete(messages, [], signal);
+    messages[0]!.images = [{ path: "shot.png", mime: "image/png" }];
+    messages.push({ role: "assistant", content: "attaching" }, { role: "tool", content: "attached" });
+    await client.complete(messages, [], signal);
+    const recorded = await requests();
+    expect(recorded[1]!.args).not.toContain("resume");
+    expect(recorded[1]!.images).toEqual([png]);
+  });
+
+  it("recovers after a failed image turn without removing images from history", async () => {
+    const { client, config, requests } = await recordingClient();
+    await writeFile(join(config.workspace, "shot.png"), Buffer.from(png, "base64"));
+    const messages: ChatMessage[] = [{ role: "user", content: "FAIL_THIS_TURN", images: [{ path: "shot.png", mime: "image/png" }] }];
+    const signal = new AbortController().signal;
+    await expect(client.complete(messages, [], signal)).rejects.toThrow("exit 7");
+    messages.push({ role: "user", content: "continue" });
+    await expect(client.complete(messages, [], signal)).resolves.toMatchObject({ content: "done" });
+    expect((await requests()).map(request => request.images)).toEqual([[png], [png]]);
+    expect(messages[0]!.images).toHaveLength(1);
+  });
+
+  it("skips unavailable historical attachments with a notice and continues the text request", async () => {
+    const { client, requests } = await recordingClient();
+    const notices: string[] = [];
+    await expect(client.complete([
+      { role: "user", content: "old screenshot", images: [{ path: "missing.png", mime: "image/png" }] },
+      { role: "user", content: "new text" },
+    ], [], new AbortController().signal, undefined, text => notices.push(text))).resolves.toMatchObject({ content: "done" });
+    expect(notices.join("")).toContain("已跳过");
+    expect((await requests())[0]!.images).toEqual([]);
+  });
+
   it("resumes across TUI-style copied transcripts on consecutive user turns", async () => {
     const { client, config, requests } = await recordingClient();
     const runner = new AgentRunner(config, client);

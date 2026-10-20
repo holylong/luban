@@ -7,6 +7,7 @@ import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
 import { codexInvocation } from "./codex-command.js";
 import { PLAN_MARKER, VERIFICATION_MARKER } from "./plan.js";
+import { resolveImageParts } from "./vision.js";
 
 const OUTPUT_SCHEMA = {
   type: "object",
@@ -27,8 +28,8 @@ const OUTPUT_SCHEMA = {
 } as const;
 
 function wireMessages(messages: ChatMessage[]): string[] {
-  return messages.map(({ role, content, name, tool_call_id, tool_calls }) =>
-    JSON.stringify({ role, content, name, tool_call_id, tool_calls }));
+  return messages.map(({ role, content, name, tool_call_id, tool_calls, images }) =>
+    JSON.stringify({ role, content, name, tool_call_id, tool_calls, ...(images?.length ? { images } : {}) }));
 }
 
 function promptFor(messages: string[], tools: string, incremental = false, state?: string[]): string {
@@ -76,9 +77,6 @@ export class CodexClient {
   async complete(messages: ChatMessage[], tools: Array<Record<string, unknown>>, signal: AbortSignal,
     onDelta?: DeltaHandler, onNotice?: NoticeHandler, options?: ModelRequestOptions): Promise<CompletionResult> {
     if (signal.aborted) throw signal.reason ?? new Error("aborted");
-    if (messages.some((message) => message.images?.length)) {
-      throw new Error("Codex CLI model backend does not yet support image attachments");
-    }
     const dir = await mkdtemp(join(tmpdir(), "luban-codex-"));
     const schema = join(dir, "response.schema.json");
     const output = join(dir, "response.json");
@@ -101,10 +99,30 @@ export class CodexClient {
     let reportedUsage = false;
     try {
       await writeFile(schema, JSON.stringify(OUTPUT_SCHEMA), { mode: 0o600 });
+      const sentMessages = resume
+        ? messages.filter(message => !runtimeState(message)).slice(resume.messages.length)
+        : messages;
+      const imageArgs: string[] = [];
+      const imageManifest: Array<{ image: number; message: number; path: string }> = [];
+      for (const [index, message] of sentMessages.entries()) {
+        const images = await resolveImageParts(this.config.workspace, message.images);
+        if (images.length < (message.images?.length ?? 0)) {
+          onNotice?.("部分图片附件无法读取或超出限制，已跳过；文字请求继续处理。");
+        }
+        for (const image of images) {
+          const number = imageManifest.length + 1;
+          const extension = image.mime.split("/")[1]!.replace(/[^a-z0-9]/gi, "");
+          const path = join(dir, `image-${number}.${extension}`);
+          await writeFile(path, Buffer.from(image.base64, "base64"), { mode: 0o600 });
+          imageArgs.push("--image", path);
+          imageManifest.push({ image: number, message: index + 1, path: image.path });
+        }
+      }
+      signal.throwIfAborted();
       const args = ["exec", "--sandbox", "read-only", "-C", this.config.workspace,
         ...(resume ? ["resume", resume.id] : []), "--json", "--skip-git-repo-check",
         "--output-schema", schema, "--output-last-message", output,
-        "-c", 'forced_login_method="chatgpt"'];
+        "-c", 'forced_login_method="chatgpt"', ...imageArgs];
       if (this.config.model.model !== "default") args.push("--model", this.config.model.model);
       // An absent override leaves Codex's own config.toml effort intact.
       const effort = options?.reasoningEffort ?? this.config.model.reasoningEffort;
@@ -168,7 +186,10 @@ export class CodexClient {
         child.on("close", () => clearTimeout(timer));
         child.stdin.on("error", () => {});
         const changedState = resume && JSON.stringify(state) !== JSON.stringify(resume.state) ? state : undefined;
-        child.stdin.end(promptFor(resume ? snapshot.slice(resume.messages.length) : wireMessages(messages), toolSchema, Boolean(resume), changedState));
+        const prompt = promptFor(resume ? snapshot.slice(resume.messages.length) : wireMessages(messages), toolSchema, Boolean(resume), changedState);
+        child.stdin.end(prompt + (imageManifest.length
+          ? `\n\nNative image attachments, in order (message numbers refer to the messages in this request):\n${JSON.stringify(imageManifest)}\nThese images are attached natively; inspect them directly. If an attachment is unavailable, say so instead of guessing its contents.`
+          : ""));
       });
       if (signal.aborted) throw signal.reason ?? new Error("aborted");
       if (result.code !== 0) throw new Error(`Codex CLI failed: ${result.stderr.trim() || `exit ${result.code}`}. Run codex login with your ChatGPT Plus account.`);

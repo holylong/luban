@@ -162,6 +162,75 @@ const COMMAND_USAGE: Record<string, string> = {
   "/add-contact": "/add-contact <name> <host> <tcp-port> [udp-port]",
 };
 
+/**
+ * Rewrite the command token to its canonical lowercase spelling.
+ *
+ * `/EXPORT` and `/Help` name real commands, but the dispatch branches compare
+ * against the literal table entries, so a wrong-case line used to skip all of
+ * them and land on the unknown-command notice. Only the first token is
+ * touched; the argument keeps the user's own casing.
+ */
+export function canonicalCommand(value: string): string {
+  if (!value.startsWith("/")) return value;
+  const boundary = value.search(/\s/u);
+  const token = (boundary < 0 ? value : value.slice(0, boundary)).toLowerCase();
+  if (boundary < 0) return token;
+  // Arguments keep the user's own casing: only the command token is a name.
+  return `${token}${value.slice(boundary)}`;
+}
+
+/**
+ * A mistyped command has to say so.
+ *
+ * `Unknown command: /foo` on its own left the user with no next move: the list
+ * of real commands was only in `/help`, one command further away. Name the
+ * closest candidates inline, fall back to the command list when nothing looks
+ * like what was typed, and keep the argument the user actually typed.
+ */
+export function unknownCommandMessage(command: string, argument: string): string {
+  const bare = command.replace(/^\//u, "").toLowerCase();
+  // An exact match is not "unknown" — the dispatcher decides what it means.
+  const known = COMMANDS.some(([name]) => name === command);
+  if (known) return "";
+  // A mistyped case (`/EXPORT`, `/Help`) is still a real command: resolve it
+  // rather than reporting it as unknown, which is what used to happen because
+  // the early `/export` and `/queue` branches compared the raw line verbatim.
+  const correct = COMMANDS.find(([name]) => name.slice(1).toLowerCase() === bare);
+  if (correct) return "";
+  const candidates = bare.length >= 2
+    ? COMMANDS.filter(([name]) => {
+      const target = name.slice(1);
+      // A substring either way is a clear signal; otherwise stay strict, so
+      // `/hel` offers `/help` and not every command one edit away.
+      return target.includes(bare) || bare.includes(target) || levenshtein(target, bare) <= 1;
+    }).slice(0, 3).map(([name]) => name)
+    : [];
+  const tried = command + (argument ? ` ${argument}` : "");
+  if (!candidates.length) {
+    return `未知指令 ${tried} · 输入 /help 查看全部命令`;
+  }
+  return `未知指令 ${tried} · 你想用 ${candidates.join(" / ")} 吗？`;
+}
+
+/** Small edit distance, used only to suggest a command the user meant. */
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] = Math.min(
+        previous[j]! + 1,
+        current[j - 1]! + 1,
+        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+
 function atToken(input: string): string | null {
   const match = input.match(/@([\w./-]*)$/u);
   return match ? (match[1] ?? "") : null;
@@ -215,6 +284,7 @@ interface DialogState {
   creditId?: string;
   title?: string;
   content?: string;
+  loading?: string;
 }
 
 export interface AppProps {
@@ -327,11 +397,12 @@ function ExportDialog({ value, defaultName, dest }: { value: string; defaultName
 
 /** Read-only command output shown in a dismissible dialog so an active run is
  * never interrupted by a status query answering mid-flight. */
-function InfoDialog({ title, content }: { title: string; content: string }) {
+function InfoDialog({ title, content, loading }: { title: string; content: string; loading?: string }) {
   const lines = content.split("\n").slice(0, 200);
   return <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} flexShrink={0}>
     <Text color={theme.accent} bold>{title} · Esc/Enter 返回</Text>
     {lines.map((line, index) => <Text key={`${index}-${line.slice(0, 24)}`} color={theme.muted} wrap="truncate-end">{line || " "}</Text>)}
+    {loading ? <Box height={1} flexShrink={0}><Spinner color={theme.accent} /><Text color={theme.muted}> {loading}</Text></Box> : null}
   </Box>;
 }
 
@@ -724,6 +795,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   questionRequestRef.current = questionRequest;
   const questionOptionNodesRef = useRef<Array<LayoutNode | null>>([]);
   const [dialog, setDialog] = useState<DialogState | null>(null);
+  const statusAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { statusAbortRef.current?.abort(); }, []);
   const [dialogQuery, setDialogQuery] = useState("");
   /** Counts palette swaps: the colors live outside React, so a change needs a frame. */
   const [themeRevision, setThemeRevision] = useState(0);
@@ -1493,7 +1566,11 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   };
 
   const submit = async (raw: string) => {
-    const value = resolveCompletion(raw.trim(), commandIndex);
+    // Slash commands are case-insensitive: `/EXPORT` and `/Help` are the same
+    // command as `/export` and `/help`. Every early branch below matched on the
+    // raw line, so a stray capital fell through to the unknown-command branch
+    // and silently did nothing. Canonicalize the command token once, here.
+    const value = canonicalCommand(resolveCompletion(raw.trim(), commandIndex));
     if (!value) return;
     const rememberInput = () => {
       const record = sessionRef.current;
@@ -1545,21 +1622,30 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     if (running) {
       // Codex-style: read-only and view commands execute immediately mid-run;
       // only task-bearing input (plain text, /queue, !shell) waits or steers.
-      if (value.startsWith("/") && !value.startsWith("/queue ")) {
-        const command = commandOf(value);
+      const command = commandOf(value);
+      const argument = argumentOf(value);
+      if (value.startsWith("/") && command !== "/queue") {
         if (command === "/exit") { rememberInput(); setInput(""); await save(); runnerRef.current.close(); exit(); return; }
         if (RUN_IMMEDIATE_COMMANDS.has(command)) {
           rememberInput();
           setInput("");
-          await handleSlashCommand(command, argumentOf(value), value, runDetachedMeshAction);
+          await handleSlashCommand(command, argument, value, runDetachedMeshAction);
           return;
         }
-        setNotice(`运行中仅 /queue、补充指令和只读命令（/status /peers /models 等）可用；Esc 中断当前任务。`); return;
+        setNotice(`运行中仅 /queue、补充指令和只读命令（/status /peers /models 等）可用；Esc 中断当前任务。`);
+        return;
+      }
+      // `/queue <task>` and `/queue` name the same command, but only the task
+      // form has work to do. The bare token used to fall through every branch
+      // and end up reported as an unknown command.
+      if (value.startsWith("/") && !argument) {
+        setNotice("用法：/queue <任务> · 例如 /queue 修复登录超时");
+        return;
       }
       if (value.startsWith("!")) { setNotice("运行中 !command 会排队：请用 /queue 排入下一任务，或直接输入作为补充指令。"); return; }
-      const queued = value.startsWith("/queue ");
-      const rawContent = queued ? value.slice(7).trim() : value;
-      if (!rawContent) { setNotice("Usage: /queue <task>"); return; }
+      const queued = command === "/queue";
+      const rawContent = queued ? argument : value;
+      if (!rawContent.trim()) { setNotice("用法：/queue <任务> · 例如 /queue 修复登录超时"); return; }
       const expanded = await expandAtMentions(rawContent);
       const content = expanded.text;
       try {
@@ -1579,7 +1665,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     // Idle: every submitted line is recallable with Up/Down.
     rememberInput();
     setInput("");
-    if (value.startsWith("/queue ")) { const expanded = await expandAtMentions(value.slice(7)); return runPrompt(expanded.text, expanded.images); }
+    if (value.startsWith("/queue")) {
+      // Same rule as the mid-run path: the bare token is a usage mistake, not
+      // a command to run, so say what the command expects.
+      const argument = argumentOf(value);
+      if (!argument) { setNotice("用法：/queue <任务> · 例如 /queue 修复登录超时"); return; }
+      const expanded = await expandAtMentions(argument);
+      return runPrompt(expanded.text, expanded.images);
+    }
     if (value.startsWith("!")) return directShell(value.slice(1).trim());
     if (!value.startsWith("/")) { const expanded = await expandAtMentions(value); return runPrompt(expanded.text, expanded.images); }
     await handleSlashCommand(commandOf(value), argumentOf(value), value, runMeshAction);
@@ -1633,11 +1726,21 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         `本次打开以来用量：输入 ${usage.input}（缓存 ${usage.cached}） · 输出 ${usage.output}（推理 ${usage.reasoning}） token`,
         `工作区：${config.workspace}`,
       ];
+      statusAbortRef.current?.abort();
+      const controller = new AbortController();
+      statusAbortRef.current = controller;
+      const pending: DialogState = { type: "info", index: 0, title: "状态与 Codex 额度",
+        content: local.join("\n"), loading: "正在读取 Codex 额度…" };
+      setDialog(pending);
       try {
-        const limits = await readCodexRateLimits();
-        setDialog({ type: "info", index: 0, title: "状态与 Codex 额度", content: `${local.join("\n")}\n\n${formatCodexRateLimits(limits)}` });
+        const limits = await readCodexRateLimits(controller.signal);
+        if (!controller.signal.aborted) setDialog(current => current === pending
+          ? { type: "info", index: 0, title: "状态与 Codex 额度", content: `${local.join("\n")}\n\n${formatCodexRateLimits(limits)}` } : current);
       } catch (error) {
-        setDialog({ type: "info", index: 0, title: "本地状态", content: `${local.join("\n")}\n\nCodex 额度读取失败：${error instanceof Error ? error.message : String(error)}` });
+        if (!controller.signal.aborted) setDialog(current => current === pending
+          ? { type: "info", index: 0, title: "本地状态", content: `${local.join("\n")}\n\nCodex 额度读取失败：${error instanceof Error ? error.message : String(error)}` } : current);
+      } finally {
+        if (statusAbortRef.current === controller) statusAbortRef.current = null;
       }
       return;
     }
@@ -1860,7 +1963,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       });
       return;
     }
-    setNotice(`Unknown command: ${command}`);
+    setNotice(unknownCommandMessage(command, argument) || `未知指令 ${command} · 输入 /help 查看全部命令`);
   };
 
   useEffect(() => {
@@ -2092,7 +2195,15 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         setDialogQuery("");
         return;
       }
-      if (dialog.type === "diff" || dialog.type === "verify" || dialog.type === "info") { if (key.escape || key.return) { setDialog(null); setDialogQuery(""); } return; }
+      if (dialog.type === "diff" || dialog.type === "verify" || dialog.type === "info") {
+        if (key.escape || key.return) {
+          statusAbortRef.current?.abort();
+          statusAbortRef.current = null;
+          setDialog(null);
+          setDialogQuery("");
+        }
+        return;
+      }
       if (dialog.type === "codex-effort") {
         const model = config.models.find((item) => item.id === dialog.modelId);
         const efforts = CODEX_EFFORTS.filter((item) => item.value !== "ultra" || model?.model !== "gpt-6-luna");
@@ -2398,7 +2509,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} /> : null}
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
-        {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} /> : null}
+        {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} loading={dialog.loading} /> : null}
         {dialog?.type === "codex-reset" ? <ResetDialog content={dialog.content ?? ""} /> : null}
         {dialog?.type === "theme" ? <ThemeDialog index={dialog.index} /> : null}
         {dialog?.type === "export" ? <ExportDialog value={dialogQuery} defaultName={defaultExportFilename(config.project, sessionRef.current.id)} dest={expandExportPath(dialogQuery, config.project, sessionRef.current.id)} /> : null}

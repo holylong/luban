@@ -307,7 +307,7 @@ function builtinProviders(includeCodex = false, session = ""): Record<string, Js
       api: "codex",
       models: Object.fromEntries(["default", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].map((id) => [id, {
         name: id === "default" ? "Codex (CLI default)" : id,
-        capabilities: { vision: false, thinking: true, tools: true },
+        capabilities: { vision: true, thinking: true, tools: true },
       }])),
     } } : {}),
     ...(goKey ? { "opencode-go": {
@@ -519,7 +519,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
         ...codex,
         models: { ...Object.fromEntries(providerModels(codex).map((model) => [model.id,
           Array.isArray(codex.models) ? { name: model.name } : record(codex.models)[model.id]])), [requestedName]: {
-          name: requestedName, capabilities: { vision: false, thinking: true, tools: true },
+          name: requestedName, capabilities: { vision: true, thinking: true, tools: true },
         } },
       };
     }

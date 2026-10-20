@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionHistory } from "./session-history.js";
@@ -20,6 +20,41 @@ function record(store: SessionStore, messages: ChatMessage[] = []): SessionRecor
 }
 
 describe("SessionHistory", () => {
+  it("reports an unavailable database through the TUI-aware console", async () => {
+    const directory = await home();
+    const blocked = join(directory, "file");
+    await writeFile(blocked, "not a directory");
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(SessionHistory.open(settings({ directory: blocked }), directory)).toBeUndefined();
+      expect(diagnostic).toHaveBeenCalledTimes(1);
+      expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining("history database unavailable"));
+    } finally {
+      diagnostic.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a failed append once and preserves session messages", async () => {
+    const directory = await home();
+    const writer = SessionHistory.open(settings({ directory }), directory)!;
+    writer.close();
+    const reader = SessionHistory.openForRead(settings({ directory }), directory)!;
+    const session = record(new SessionStore(directory), [{ role: "user", content: "keep this message" }]);
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(reader.append(session)).toBe(0);
+      expect(reader.append(session)).toBe(0);
+      expect(diagnostic).toHaveBeenCalledTimes(1);
+      expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining("history mirror stopped"));
+      expect(session.messages[0]!.content).toBe("keep this message");
+    } finally {
+      diagnostic.mockRestore();
+      reader.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("mirrors a session as its messages are appended and reloads from the database", async () => {
     const directory = await home();
     const opened = SessionHistory.open(settings({ directory }), directory);

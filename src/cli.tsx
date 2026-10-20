@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "./runtime-env.js";
 import React from "react";
 import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
@@ -697,7 +698,7 @@ async function main(): Promise<number> {
     // ansiEscapes.eraseLines(previousLineCount), whose count includes that
     // trailing newline, so it redraws in place. terminalOutput turns fixed-height
     // frame erases into row updates on all TTYs, without requiring DECSET 2026.
-    const instance = render(<App config={config} mesh={mesh} resume={resume} mobileLink={mobileLink} />, { stdout: mascotOutput(terminalOutput(process.stdout)), exitOnCtrlC: false, incrementalRendering: false });
+    const instance = render(React.createElement(App, { config, mesh, resume, mobileLink }), { stdout: mascotOutput(terminalOutput(process.stdout)), exitOnCtrlC: false, incrementalRendering: false });
     await instance.waitUntilExit();
     return 0;
   } catch (error) {
