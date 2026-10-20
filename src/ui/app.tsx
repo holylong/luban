@@ -1687,11 +1687,11 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const handleSlashCommand = async (command: string, argument: string, value: string, meshAction: typeof runMeshAction) => {
     if (command === "/report") {
       const [period = "daily", date, ...target] = argument.trim().split(/\s+/).filter(Boolean);
-      setNotice("正在汇总本机所有项目的会话记录…");
+      setNotice("正在汇总本机工作内容，并通过当前模型整理工作日记…");
       try {
         await save();
-        const result = await exportWorkReport({ period: period as ReportPeriod, date, output: target.join(" ") || undefined, lubanHome: config.home, workspace: config.workspace });
-        setNotice(`已导出 ${result.report.sessions.length} 个会话：${result.path}${result.report.warnings.length ? ` · ${result.report.warnings.length} 条覆盖说明见报告` : ""}`);
+        const result = await exportWorkReport({ period: period as ReportPeriod, date, output: target.join(" ") || undefined, config, lubanHome: config.home, workspace: config.workspace });
+        setNotice(`工作日记已导出：${result.path}${result.report.warnings.length ? ` · 素材读取说明：${result.report.warnings.join("；")}` : ""}`);
       } catch (e) { setNotice(`报告导出失败：${String(e)}`); }
       return;
     }

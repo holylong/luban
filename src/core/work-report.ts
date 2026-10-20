@@ -4,6 +4,8 @@ import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { generateWorkDiary, modelDiaryWriter, type DiaryWriter } from "./work-diary.js";
+import type { LubanConfig } from "./types.js";
 
 export const REPORT_SOURCES = ["luban", "codex", "claude", "opencode"] as const;
 export type ReportSource = typeof REPORT_SOURCES[number];
@@ -168,14 +170,22 @@ export function renderWorkReport(r: WorkReport): string {
   if (r.warnings.length) out.push("## 覆盖与时间精度说明", "", ...r.warnings.map(w => `- ${w}`), "");
   return out.join("\n") + "\n";
 }
-export async function exportWorkReport(options: ReportOptions & { output?: string; format?: string; workspace?: string }) {
+export async function exportWorkReport(options: ReportOptions & { output?: string; format?: string; workspace?: string; config?: LubanConfig; writer?: DiaryWriter }) {
   const format = options.format || "markdown";
   if (!["markdown", "json"].includes(format)) throw new Error("格式须为 markdown 或 json");
   const report = await collectWorkReport(options);
   const filename = `luban-report-${report.period}-${day(new Date(report.start))}.${format === "json" ? "json" : "md"}`;
   const output = options.output?.replace(/^~(?=$|[\/])/, homedir());
   const path = resolve(options.workspace || process.cwd(), output || filename);
+  if (await exists(path)) throw new Error(`目标文件已存在：${path}`);
+  let content: string;
+  if (format === "json") content = JSON.stringify(report, null, 2) + "\n";
+  else {
+    if (!options.writer && !options.config && report.sessions.length) throw new Error("生成工作日记需要配置模型");
+    const writer = options.writer ?? (options.config && report.sessions.length ? modelDiaryWriter(options.config) : async () => "");
+    content = await generateWorkDiary(report, writer, options.config ? Math.min(16000, Math.max(2000, (options.config.contextWindow - 6500) * 2)) : 16000);
+  }
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, format === "json" ? JSON.stringify(report, null, 2) + "\n" : renderWorkReport(report), { encoding: "utf8", mode: 0o600, flag: "wx" });
+  await writeFile(path, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
   return { path, report };
 }

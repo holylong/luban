@@ -17,7 +17,7 @@ export async function runReport(argv: string[]): Promise<number> {
   const opts = program.opts();
   try {
     const config = loadConfig({ workspace: process.cwd() });
-    const result = await exportWorkReport({ ...opts, lubanHome: config.home, period: program.args[0] as ReportPeriod, sources: opts.sources?.split(",").map((s: string) => s.trim()) as ReportSource[] | undefined });
+    const result = await exportWorkReport({ ...opts, config, lubanHome: config.home, period: program.args[0] as ReportPeriod, sources: opts.sources?.split(",").map((s: string) => s.trim()) as ReportSource[] | undefined });
     process.stdout.write(`已导出 ${result.report.sessions.length} 个会话：${result.path}\n`);
     for (const warning of result.report.warnings) process.stderr.write(`${warning}\n`);
     return 0;
