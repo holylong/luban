@@ -34,7 +34,7 @@ luban report monthly --sources luban,codex --format json -o reports/month.json
 luban report yearly --date 2026-01-01
 ```
 
-按本机时区划分自然日、周一至周日、自然月和自然年；日期用于选中所在周期。默认 Markdown 输出适合发给领导的工作日记或阶段汇报，按项目合并重复事项，整理工作内容、实际进展、问题及明确的后续安排，省略无资料的栏目，不附会话编号、工具来源和本地路径。长材料分批提炼后合并。正文通过当前配置的模型服务生成，会将所选时段的用户与助手文本发送给该服务；生成失败时不写入文件。要求编码工具的 Zen 免费模型需先切换到支持无工具文本生成的模型。JSON 保留本机收集的原始素材、来源和读取说明，不调用模型。已存在的目标文件不会被覆盖，请使用新文件名。
+按本机时区划分自然日、周一至周日、自然月和自然年；日期用于选中所在周期。默认 Markdown 输出适合发给领导的工作日记或阶段汇报，按项目合并重复事项，整理工作内容、实际进展、问题及明确的后续安排，省略无资料的栏目，不附会话编号、工具来源和本地路径。周报、月报和年报按 P0 紧急且重要、P1 重要、P2 常规跟进三档组织，并在末尾列出本期硬节点（含日期与交付物，素材无明确日期时不编造）。长材料分批提炼后合并。正文通过当前配置的模型服务生成，会将所选时段的用户与助手文本发送给该服务；生成失败时不写入文件。Zen 免费模型要求请求携带编码工具，luban 会附带一个不会被调用的占位工具，因此免费模型同样可以生成工作日记。JSON 保留本机收集的原始素材、来源和读取说明，不调用模型。已存在的目标文件不会被覆盖，请使用新文件名。
 
 默认读取 `$LUBAN_HOME/sessions-node`（未设置时为 `~/.luban/sessions-node`）、`$CODEX_HOME`（默认 `~/.codex`）下的 sessions/archived_sessions、`$CLAUDE_CONFIG_DIR/projects`（默认 `~/.claude/projects`）、`$XDG_DATA_HOME/opencode`（默认 `~/.local/share/opencode`）中的旧 JSON 与 SQLite。CLI 支持 `--codex-home`、`--claude-home`、`--opencode-home` 指定其他数据目录。OpenCode SQLite 需要支持 `node:sqlite` 的 Node 22.5+；不可读或缺失来源会在 CLI 或 TUI 提示，并保留于 JSON 素材中。
 

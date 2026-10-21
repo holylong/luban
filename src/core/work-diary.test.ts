@@ -44,6 +44,24 @@ it("rejects empty and incomplete model output", async () => {
   await expect(writer([], 100)).rejects.toThrow("未完整");
   expect(complete.mock.calls[0][1]).toEqual([]);
 });
+it("sends a placeholder coding tool for Zen free models instead of refusing", async () => {
+  const complete = vi.spyOn(OpenAiClient.prototype, "complete");
+  complete.mockResolvedValue({ content: "## 工作内容与进展\n完成修复。", reasoning: "", toolCalls: [], usage: { input: 1, output: 1 } });
+  const writer = modelDiaryWriter({ model: { id: "opencode-zen/exo-free", provider: "opencode-zen", model: "exo-free", api: "openai" } } as LubanConfig);
+  await expect(writer([], 100)).resolves.toContain("完成修复");
+  const tools = complete.mock.calls[0][1] as Array<{ function: { name: string } }>;
+  expect(tools.map(tool => tool.function.name)).toEqual(["read"]);
+});
+it("asks weekly reports for P0/P1/P2 priorities and hard deadlines", async () => {
+  const r = report(); r.period = "weekly";
+  const writer = vi.fn(async () => "## P0 紧急且重要\n1. 修复解析器。");
+  await generateWorkDiary(r, writer);
+  const prompt = String((writer.mock.calls.at(-1) as any[])[0][1].content);
+  expect(prompt).toContain("P0 紧急且重要");
+  expect(prompt).toContain("P1 重要");
+  expect(prompt).toContain("P2 常规跟进");
+  expect(prompt).toContain("本期硬节点");
+});
 it("exports generated Markdown and leaves no file after generation failure", async () => {
   const root = await mkdtemp(join(tmpdir(), "luban-diary-")); roots.push(root);
   const home = join(root, "home"), dir = join(home, "sessions-node", "project");

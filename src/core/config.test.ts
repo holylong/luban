@@ -8,6 +8,7 @@ import { loadConfig, savePermissionMode, savePreferredModel, saveTheme, stripJso
 const originalHome = process.env.LUBAN_HOME;
 const originalUserHome = process.env.HOME;
 const originalDataHome = process.env.XDG_DATA_HOME;
+const originalCodexHome = process.env.CODEX_HOME;
 const originalOpencodeEnv = {
   OPENCODE_API_KEY: process.env.OPENCODE_API_KEY,
   OPENCODE_GO_API_KEY: process.env.OPENCODE_GO_API_KEY,
@@ -19,6 +20,8 @@ beforeEach(async () => {
   // Keep the OpenCode credential lookup from reading the developer's real
   // files: every test starts with an empty data home and no OpenCode env.
   process.env.XDG_DATA_HOME = await mkdtemp(join(tmpdir(), "luban-xdg-"));
+  // Keep the Codex model catalog deterministic; tests opt in to a cache.
+  process.env.CODEX_HOME = await mkdtemp(join(tmpdir(), "luban-codex-home-"));
   delete process.env.OPENCODE_API_KEY;
   delete process.env.OPENCODE_GO_API_KEY;
   delete process.env.OPENCODE_ZEN_API_KEY;
@@ -32,6 +35,8 @@ afterEach(() => {
   else process.env.HOME = originalUserHome;
   if (originalDataHome === undefined) delete process.env.XDG_DATA_HOME;
   else process.env.XDG_DATA_HOME = originalDataHome;
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
   for (const [name, value] of Object.entries(originalOpencodeEnv)) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
@@ -51,6 +56,30 @@ describe("config", () => {
     await savePreferredModel(home, "codex/gpt-6-sol");
     await savePreferredModel(home, "openai-compatible/gpt-4.1-mini");
     expect(loadConfig({ workspace: home }).models.some((model) => model.id === "codex/gpt-6-sol")).toBe(true);
+  });
+
+  it("lists the Codex models published by the CLI model cache", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-codex-cache-"));
+    process.env.LUBAN_HOME = home;
+    const fallback = loadConfig({ workspace: home, model: "codex/default" });
+    for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-5.6-sol",
+      "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      expect(fallback.models.some((model) => model.id === `codex/${id}`)).toBe(true);
+    }
+    await writeFile(join(process.env.CODEX_HOME!, "models_cache.json"), JSON.stringify({
+      models: [
+        { slug: "gpt-7-visible", display_name: "GPT-7", visibility: "list", supported_in_api: true,
+          priority: 1, input_modalities: ["text", "image"] },
+        { slug: "gpt-7-hidden", display_name: "GPT-7 Hidden", visibility: "hide", supported_in_api: true,
+          priority: 2, input_modalities: ["text"] },
+        { slug: "gpt-7-text", display_name: "GPT-7 Text", visibility: "list", supported_in_api: true,
+          priority: 3, input_modalities: ["text"] },
+      ],
+    }));
+    const cached = loadConfig({ workspace: home, model: "codex/default" });
+    expect(cached.models.find((model) => model.id === "codex/gpt-7-visible")?.capabilities.vision).toBe(true);
+    expect(cached.models.find((model) => model.id === "codex/gpt-7-text")?.capabilities.vision).toBe(false);
+    expect(cached.models.some((model) => model.id === "codex/gpt-7-hidden")).toBe(false);
   });
 
   it("keeps Codex reasoning effort per model and permits the CLI default", async () => {
@@ -365,7 +394,8 @@ describe("config", () => {
     expect(config.model.id).toBe("opencode-go/cat-jam-free");
     expect(config.model.baseUrl).toBe("https://opencode.ai/zen/go/v1");
     expect(config.model.headers["x-opencode-client"]).toBe("luban");
-    for (const id of ["cat-jam-free", "step-5-preview-free", "longcat-2.5-preview-free"]) {
+    for (const id of ["cat-jam-free", "step-5-preview-free", "longcat-2.5-preview-free",
+      "beam-free", "minimax-m3.1-flash-free"]) {
       expect(config.models.some(item => item.id === `opencode-go/${id}`)).toBe(true);
     }
     // Go lists `space-bunny`; the Zen-only `space-bunny-free` is unavailable here.
@@ -488,9 +518,12 @@ describe("config", () => {
     for (const id of ["big-pickle", "space-bunny-free", "longcat-2.5-preview-free", "exo-free",
       "fledge-alpha-free", "mimo-v2.6-flash-free", "mimo-v2.5-free", "ling-3.1-flash-free",
       "ling-3.0-flash-fin-free", "nemotron-3-ultra-free", "nemotron-3.5-lightning-free",
-      "muse-spark-1.3-contributor-free"]) {
+      "muse-spark-1.3-contributor-free", "deepseek-v4.1-flash-free", "glm-5.3-flash-free",
+      "minimax-m3.1-flash-free", "beam-free", "nemotron-3.5-super-vl-free"]) {
       expect(zen.find((item) => item.model === id)?.apiKey).toBe("");
     }
+    expect(zen.find((item) => item.model === "deepseek-v4.1-flash-free")?.capabilities.vision).toBe(true);
+    expect(zen.find((item) => item.model === "minimax-m3.1-flash-free")?.api).toBe("openai");
     expect(config.model.id).toBe("opencode-zen/space-bunny-free");
     expect(zen.find((item) => item.model === "muse-spark-1.3-contributor-free")?.api).toBe("responses");
   });
