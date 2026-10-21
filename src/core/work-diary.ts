@@ -3,7 +3,7 @@ import { OpenAiClient } from "./openai.js";
 import { AnthropicClient } from "./anthropic.js";
 import { ResponsesClient } from "./responses.js";
 import { CodexClient } from "./codex.js";
-import { isZenFreeModel } from "./opencode-zen.js";
+import { isZenFreeModel, OpenCodeZenClient } from "./opencode-zen.js";
 import type { ChatMessage, LubanConfig } from "./types.js";
 import type { WorkReport } from "./work-report.js";
 
@@ -14,6 +14,15 @@ const RULES = `你是工作日记编辑，为本人撰写可直接发给领导�
 禁止编造工时、比例、收益、部署、问题已解决等事实。计划仅来自明确待办，不凭空承诺；没有资料的栏目省略。时间归属不精确的材料只能写为待核实进展，不能写成该时段已完成。
 不输出原始对话、会话编号、工具来源、本地绝对路径、代码块、生成过程或技术覆盖说明。保留业务上有意义的项目名称，过滤闲聊、代理提示词和无关内容。`;
 const LABELS = { daily: "工作日记", weekly: "工作周报", monthly: "工作月报", yearly: "工作年报" };
+/** Zen's free tier rejects tool-less requests; this tool is declared, never called. */
+const DIARY_PLACEHOLDER_TOOL: Record<string, unknown> = {
+  type: "function",
+  function: {
+    name: "read_file",
+    description: "Read a workspace file. Not used for report writing.",
+    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+};
 function localDay(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
 export function diaryHeading(report: WorkReport): string {
   const last = new Date(report.end); last.setDate(last.getDate() - 1);
@@ -22,10 +31,13 @@ export function diaryHeading(report: WorkReport): string {
 }
 
 export function modelDiaryWriter(config: LubanConfig, signal = new AbortController().signal): DiaryWriter {
-  if (isZenFreeModel(config.model)) throw new Error("当前免费模型要求编码工具，请先切换到支持无工具文本生成的模型后生成工作日记；原始素材仍可用 --format json 导出。");
-  const client = config.model.api === "codex" ? new CodexClient(config) : config.model.api === "anthropic" ? new AnthropicClient(config) : config.model.api === "responses" ? new ResponsesClient(config) : new OpenAiClient(config);
+  // Zen's free tier only answers requests that carry coding tools, so the
+  // diary request keeps a placeholder tool on the wire and never executes it.
+  const zenFree = isZenFreeModel(config.model);
+  const client = zenFree ? new OpenCodeZenClient(config)
+    : config.model.api === "codex" ? new CodexClient(config) : config.model.api === "anthropic" ? new AnthropicClient(config) : config.model.api === "responses" ? new ResponsesClient(config) : new OpenAiClient(config);
   return async (messages, maxTokens) => {
-    const result = await client.complete(messages, [], signal, undefined, undefined, { maxTokens, enableThinking: false });
+    const result = await client.complete(messages, zenFree ? [DIARY_PLACEHOLDER_TOOL] : [], signal, undefined, undefined, { maxTokens, enableThinking: false });
     if (result.truncated || result.streamEnded || result.toolCalls.length || !result.content.trim()) throw new Error("工作日记生成未完整结束，请重试；未写入报告文件。");
     return result.content.trim();
   };
@@ -72,6 +84,10 @@ export async function generateWorkDiary(report: WorkReport, write: DiaryWriter, 
     if (facts.join("\n").length >= previous) throw new Error("模型未有效压缩材料，请重试或切换模型。");
   }
   const focus = report.period === "daily" ? "围绕当天工作，写清具体事项及推进结果" : "围绕阶段成果和项目进展归纳，避免逐日流水账";
-  const body = await ask(`撰写${LABELS[report.period]}正文，${focus}。按有材料的内容组织为“工作内容与进展”“问题与待协调事项”“后续工作安排”。同一事项仅出现一次。直接输出 Markdown 正文，从二级标题开始，不重复文档标题和日期，不加开场白。`, facts.join("\n"), 4000);
+  const structure = report.period === "daily"
+    ? "按有材料的内容组织为“工作内容与进展”“问题与待协调事项”“后续工作安排”。"
+    : `按优先级组织为“P0 紧急且重要”“P1 重要（本期需有结论）”“P2 常规跟进”三节，每节内用有序列表编号，每条写清事项、当前状态、责任人或协作方（仅用素材中出现的姓名）和下一步动作；没有材料的优先级整节省略。
+在正文末尾追加“本期硬节点”一节，列出本期必须完成的时间节点（含日期与交付物），最多 5 条；素材中没有明确日期时不要编造。`;
+  const body = await ask(`撰写${LABELS[report.period]}正文，${focus}。${structure}同一事项仅出现一次。直接输出 Markdown 正文，从二级标题开始，不重复文档标题和日期，不加开场白。`, facts.join("\n"), 4000);
   return heading + body + "\n";
 }

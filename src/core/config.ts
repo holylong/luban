@@ -251,6 +251,8 @@ const OPENCODE_GO_MODELS: Record<string, { name: string; api: "openai" | "anthro
   "longcat-2.5-preview-free": { name: "LongCat 2.5 Preview · Free", api: "openai", vision: true },
   "step-5-preview-free": { name: "Step 5 Preview · Free", api: "openai", vision: true },
   "cat-jam-free": { name: "Cat Jam · Free", api: "openai", vision: false },
+  "beam-free": { name: "Beam · Free", api: "openai", vision: false },
+  "minimax-m3.1-flash-free": { name: "MiniMax M3.1 Flash · Free", api: "openai", vision: true },
   "mimo-v2.6-pro": { name: "MiMo-V2.6-Pro", api: "openai", vision: true },
   "mimo-v2.6-flash": { name: "MiMo-V2.6-Flash", api: "openai", vision: true },
   "mimo-v2.5": { name: "MiMo V2.5", api: "openai", vision: true },
@@ -304,7 +306,45 @@ const OPENCODE_ZEN_FREE_MODELS: Record<string, { name: string; api: "openai" | "
   "nemotron-3-ultra-free": { name: "Nemotron 3 Ultra · Free", api: "openai" },
   "nemotron-3.5-lightning-free": { name: "Nemotron 3.5 Lightning · Free", api: "openai" },
   "muse-spark-1.3-contributor-free": { name: "Muse Spark 1.3 Contributor · Free", api: "responses" },
+  "deepseek-v4.1-flash-free": { name: "DeepSeek V4.1 Flash · Free", api: "openai", vision: true },
+  "glm-5.3-flash-free": { name: "GLM-5.3-Flash · Free", api: "openai", vision: true },
+  "minimax-m3.1-flash-free": { name: "MiniMax M3.1 Flash · Free", api: "openai", vision: true },
+  "beam-free": { name: "Beam · Free", api: "openai" },
+  "nemotron-3.5-super-vl-free": { name: "Nemotron 3.5 Super VL · Free", api: "openai", vision: true },
 };
+
+/**
+ * Codex CLI keeps its current model catalog in `models_cache.json`. Read it so
+ * newly released models show up without a luban release, and keep a static
+ * fallback for a fresh machine where the CLI has not fetched it yet.
+ */
+const CODEX_FALLBACK_MODELS = [
+  "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+  "gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+];
+
+function codexModelCatalog(): Record<string, JsonObject> {
+  const catalog: Record<string, JsonObject> = {
+    default: { name: "Codex (CLI default)", capabilities: { vision: true, thinking: true, tools: true } },
+  };
+  const add = (id: string, vision: boolean): void => {
+    if (catalog[id]) return;
+    catalog[id] = { name: id, capabilities: { vision, thinking: true, tools: true } };
+  };
+  for (const id of CODEX_FALLBACK_MODELS) add(id, true);
+  const codexHome = text(process.env.CODEX_HOME, join(homedir(), ".codex"));
+  const cached = readJson(join(codexHome, "models_cache.json"));
+  const discovered = (Array.isArray(cached.models) ? cached.models : []).flatMap((value) => {
+    const item = record(value);
+    const id = text(item.slug);
+    if (!id || item.visibility === "hide" || item.supported_in_api === false) return [];
+    const modalities = stringList(item.input_modalities);
+    return [{ id, priority: integer(item.priority, Number.MAX_SAFE_INTEGER),
+      vision: !modalities.length || modalities.includes("image") }];
+  }).sort((left, right) => left.priority - right.priority);
+  for (const model of discovered) add(model.id, model.vision);
+  return catalog;
+}
 
 /**
  * Providers luban knows without any config file. Subscription providers are
@@ -323,10 +363,7 @@ function builtinProviders(includeCodex = false, session = "", shared = ""): Reco
   return {
     ...(includeCodex ? { codex: {
       api: "codex",
-      models: Object.fromEntries(["default", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].map((id) => [id, {
-        name: id === "default" ? "Codex (CLI default)" : id,
-        capabilities: { vision: true, thinking: true, tools: true },
-      }])),
+      models: codexModelCatalog(),
     } } : {}),
     ...(goKey ? { "opencode-go": {
       api_key_env: "OPENCODE_API_KEY",
