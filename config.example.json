@@ -20,6 +20,8 @@
     "timeout": 300,
     "thinking_timeout": 600,
     "max_retries": 5,
+    "reconnect": true,
+    "reconnect_max_delay": 60,
     "context_window": 262144,
     "max_history_messages": 120,
     "active": "codex/gpt-6-sol",

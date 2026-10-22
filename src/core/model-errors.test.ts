@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeModelError, isContextOverflowError, isFreeTierError, isModelTimeoutError, retryableModelError } from "./model-errors.js";
+import { describeModelError, isContextOverflowError, isFreeTierError, isModelTimeoutError, recoverableModelConnectionError, retryableModelError } from "./model-errors.js";
 
 describe("model error classification", () => {
   it("detects context overflow without marking it retryable", () => {
@@ -22,6 +22,29 @@ describe("model error classification", () => {
     expect(retryableModelError(new Error(body))).toBe(false);
     // A plain 403 without the free-tier marker stays a normal failure.
     expect(isFreeTierError(new Error("model HTTP 403: forbidden"))).toBe(false);
+  });
+});
+
+describe("recoverableModelConnectionError", () => {
+  it.each([
+    "Codex CLI failed: stream disconnected before completion", "Codex CLI failed: error sending request",
+    "model stream idle timeout", "model HTTP 503: overloaded", "model HTTP 429: rate limited",
+    "model stream error: upstream 502", "model stream ended before completion",
+  ])("recovers temporary connection failure: %s", message => {
+    expect(recoverableModelConnectionError(new Error(message))).toBe(true);
+  });
+  it.each([
+    "model HTTP 401: connection closed", "Codex CLI failed: authentication required",
+    'Codex CLI failed: status_code: 403 stream disconnected',
+    "model HTTP 429: insufficient_quota", "usage limit reached; try again later",
+    "model HTTP 400: maximum context length", "FreeTierError",
+    "ENOENT: missing executable", "TOOL ERROR: permission denied",
+  ])("does not reconnect permanent failures: %s", message => {
+    expect(recoverableModelConnectionError(new Error(message))).toBe(false);
+  });
+  it("keeps missing Codex output distinct from missing local files", () => {
+    expect(recoverableModelConnectionError(Object.assign(new Error("missing response"), { code: "CODEX_OUTPUT_MISSING" }))).toBe(true);
+    expect(recoverableModelConnectionError(new TypeError("fetch failed", { cause: new Error("ECONNRESET") }))).toBe(true);
   });
 });
 

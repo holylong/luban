@@ -44,6 +44,15 @@ afterEach(() => {
 });
 
 describe("config", () => {
+  it("defaults to unattended reconnect and supports disabling and bounding delay", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-reconnect-config-"));
+    process.env.LUBAN_HOME = home;
+    expect(loadConfig({ workspace: home })).toMatchObject({ modelReconnect: true, modelReconnectMaxDelayMs: 60_000 });
+    await writeFile(join(home, "config.json"), JSON.stringify({ model: { reconnect: false, reconnect_max_delay: 10 } }));
+    expect(loadConfig({ workspace: home })).toMatchObject({ modelReconnect: false, modelReconnectMaxDelayMs: 10_000 });
+    await writeFile(join(home, "config.json"), JSON.stringify({ model: { reconnect_max_delay: 9999 } }));
+    expect(loadConfig({ workspace: home }).modelReconnectMaxDelayMs).toBe(300_000);
+  });
   it("selects a named Codex CLI model without falling back to default", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-codex-model-"));
     process.env.LUBAN_HOME = home;

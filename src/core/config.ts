@@ -674,6 +674,8 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     semanticCompaction: modelConfig.semantic_compaction !== false && modelConfig.semanticCompaction !== false,
     maxHistoryMessages: Math.max(20, Math.min(500, integer(modelConfig.max_history_messages ?? modelConfig.maxHistoryMessages, 80))),
     maxRetries: Math.max(0, Math.min(10, integer(modelConfig.max_retries ?? modelConfig.maxRetries, 5))),
+    modelReconnect: modelConfig.reconnect !== false,
+    modelReconnectMaxDelayMs: Math.max(2, Math.min(300, integer(modelConfig.reconnect_max_delay, 60))) * 1000,
     mcpServers: mcpServers(raw.mcpServers),
     codeIntelWorker: codeIntelRaw.worker === true || codeIntelRaw.isolated === true,
     lspServers: lspServers(raw.lspServers),
