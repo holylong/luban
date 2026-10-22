@@ -21,6 +21,25 @@ describe("OpenAiClient", () => {
     expect(wire[3]).not.toHaveProperty("editPreview");
   });
 
+  it("retains reasoning and supplies empty fields for legacy DeepSeek assistant messages only", async () => {
+    const messages = [
+      { role: "assistant" as const, content: "old summary" },
+      { role: "user" as const, content: "continue" },
+      { role: "assistant" as const, content: "", reasoning_content: "inspect first",
+        tool_calls: [{ id: "a", type: "function" as const, function: { name: "probe", arguments: "{}" } }] },
+      { role: "tool" as const, tool_call_id: "a", content: "result" },
+    ];
+    const before = JSON.stringify(messages);
+    const model = { id: "opencode-go/deepseek-v4.1-flash", model: "deepseek-v4.1-flash" } as LubanConfig["model"];
+    const wire = await openAiWireMessages(messages, "", model);
+    expect(wire[0]).toHaveProperty("reasoning_content", "");
+    expect(wire[2]).toHaveProperty("reasoning_content", "inspect first");
+    expect(wire[1]).not.toHaveProperty("reasoning_content");
+    expect(wire[3]).not.toHaveProperty("reasoning_content");
+    expect((await openAiWireMessages(messages))[0]).not.toHaveProperty("reasoning_content");
+    expect(JSON.stringify(messages)).toBe(before);
+  });
+
   it("aggregates fragmented SSE text, tool calls and usage", async () => {
     let requestBody: Record<string, unknown> | undefined;
     server = createServer((request, response) => {

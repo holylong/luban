@@ -23,6 +23,8 @@ export interface ChatMessage {
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  /** OpenAI-compatible reasoning retained for subsequent tool requests. */
+  reasoning_content?: string;
   editPreview?: string;
   /** Image attachments resolved to model-native vision parts at transport. */
   images?: AttachedImage[];
