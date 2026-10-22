@@ -24,13 +24,40 @@ process.stdin.on('end', () => {
   if (!args.includes('--json') || args.includes('--ephemeral')) process.exit(9);
   const failureFile = ${JSON.stringify(join(home, "failed-once"))};
   if (input.includes('FAIL_THIS_TURN') && !fs.existsSync(failureFile)) { fs.writeFileSync(failureFile, '1'); process.exit(7); }
+  if (input.includes('NETWORK_ONCE') && !fs.existsSync(failureFile)) { fs.writeFileSync(failureFile, '1'); process.stderr.write('stream disconnected before completion'); process.exit(1); }
+  if (input.includes('ACTIVE_THIS_TURN')) {
+    const pulse = setInterval(() => process.stdout.write(JSON.stringify({type:'item.updated'}) + String.fromCharCode(10)), 100);
+    setTimeout(() => { clearInterval(pulse); fs.writeFileSync(args[args.indexOf('--output-last-message') + 1], JSON.stringify({content:'done', tool_calls:[]})); }, 1500);
+    return;
+  }
+  if (input.includes('IGNORE_TERM')) {
+    process.on('SIGTERM', () => {});
+    fs.writeFileSync(${JSON.stringify(join(home, 'child-pid'))}, String(process.pid));
+    return setInterval(() => {}, 1000);
+  }
   if (input.includes('WAIT_THIS_TURN')) return setInterval(() => {}, 1000);
   const id = args.includes('resume') ? args[args.indexOf('resume') + 1] : require('crypto').randomUUID();
   const started = JSON.stringify({type: 'thread.started', thread_id: id}) + '\\n';
   process.stdout.write(started.slice(0, 11));
   process.stdout.write(started.slice(11));
   const output = args[args.indexOf('--output-last-message') + 1];
-  fs.writeFileSync(output, JSON.stringify({content:'done', tool_calls:[]}));
+  const response = {content:'done', tool_calls:[]};
+  const mode = input.match(/OUTPUT_MODE:([a-z-]+)/)?.[1];
+  const missingMarker = ${JSON.stringify(join(home, 'missing-once'))};
+  const skipOnce = input.includes('MISSING_ONCE') && !fs.existsSync(missingMarker);
+  if (skipOnce) fs.writeFileSync(missingMarker, '1');
+  if (!skipOnce && !['missing', 'event', 'partial', 'failed', 'invalid-event', 'empty', 'invalid', 'malformed-call'].includes(mode)) fs.writeFileSync(output, JSON.stringify(response));
+  if (mode === 'empty') fs.writeFileSync(output, '');
+  if (mode === 'invalid') fs.writeFileSync(output, '{broken');
+  if (mode === 'malformed-call') fs.writeFileSync(output, JSON.stringify({content:'', tool_calls:[null]}));
+  if (['event', 'partial', 'failed', 'invalid-event'].includes(mode)) {
+    const text = mode === 'invalid-event' ? 'not JSON' : JSON.stringify(response);
+    const event = JSON.stringify({type:'item.completed', item:{type:'agent_message', text}}) + String.fromCharCode(10);
+    process.stdout.write(event.slice(0, 17));
+    process.stdout.write(event.slice(17));
+    if (mode === 'partial') return;
+    if (mode === 'failed') { process.stdout.write(JSON.stringify({type:'turn.failed', error:{message:'authentication required'}})); return; }
+  }
   const usageFile = ${JSON.stringify(join(home, "thread-usage.json"))};
   const counts = fs.existsSync(usageFile) ? JSON.parse(fs.readFileSync(usageFile, 'utf8')) : {};
   const count = counts[id] = (counts[id] || 0) + 1;
@@ -232,6 +259,80 @@ describe("CodexClient", () => {
     await client.complete(messages, [], signal);
     expect((await requests()).map(request => request.args.includes("resume"))).toEqual([false, true, false, true, false]);
   });
+  it("does not time out an active CLI turn merely because total elapsed time exceeds the idle limit", async () => {
+    const { client } = await recordingClient();
+    await expect(client.complete([{ role: "user", content: "ACTIVE_THIS_TURN" }], [], new AbortController().signal,
+      undefined, undefined, { timeoutMs: 500 })).resolves.toMatchObject({ content: "done" });
+  });
+
+  it("reaps a stalled CLI that ignores termination before returning its timeout", async () => {
+    const { client, config } = await recordingClient();
+    await expect(client.complete([{ role: "user", content: "IGNORE_TERM" }], [], new AbortController().signal,
+      undefined, undefined, { timeoutMs: 500 })).rejects.toThrow("idle timeout");
+    const pid = Number(await readFile(join(config.workspace, "child-pid"), "utf8"));
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, 10_000);
+
+  it("recovers a real CLI network exit through the agent without manual continue", async () => {
+    const { client, config, requests } = await recordingClient();
+    const runner = new AgentRunner(config, client);
+    const notices: string[] = [];
+    try {
+      const result = await runner.run([...initialMessages(config.workspace), { role: "user", content: "NETWORK_ONCE" }],
+        "agent", new AbortController().signal, event => { if (event.type === "status") notices.push(event.text); }, async () => "once");
+      expect(result).toMatchObject({ ok: true, steps: 1, modelCalls: 2 });
+      expect(await requests()).toHaveLength(2);
+      expect(notices.join("")).toContain("自动重连");
+    } finally { runner.close(); }
+  });
+
+  it("recovers missing output from a completed chunked event stream without replay", async () => {
+    const { client, requests } = await recordingClient();
+    const notices: string[] = [];
+    const deltas: string[] = [];
+    await expect(client.complete([{ role: 'user', content: 'OUTPUT_MODE:event' }], [], new AbortController().signal,
+      text => deltas.push(text), text => notices.push(text))).resolves.toMatchObject({ content: 'done' });
+    expect(await requests()).toHaveLength(1);
+    expect(deltas).toEqual(['done']);
+    expect(notices.join('')).toContain('事件流恢复');
+  });
+
+  it("automatically rebuilds a missing-output resumed turn with full authoritative history", async () => {
+    const { client, requests } = await recordingClient();
+    const messages: ChatMessage[] = [{ role: 'user', content: 'ORIGINAL_TASK' }];
+    const signal = new AbortController().signal;
+    await client.complete(messages, [], signal);
+    messages.push({ role: 'tool', content: 'MISSING_ONCE already executed' });
+    const notices: string[] = [];
+    await expect(client.complete(messages, [], signal, undefined, text => notices.push(text))).resolves.toMatchObject({ content: 'done' });
+    const recorded = await requests();
+    expect(recorded.map(request => request.args.includes('resume'))).toEqual([false, true, false]);
+    expect(recorded[2]!.input).toContain('ORIGINAL_TASK');
+    expect(recorded[2]!.input).toContain('already executed');
+    expect(notices.join('')).toContain('自动恢复');
+  });
+
+  it.each(['missing', 'partial', 'invalid-event', 'empty', 'invalid', 'malformed-call'])(
+    "bounds retries for %s output and never emits incomplete answers", async mode => {
+      const { client, requests } = await recordingClient();
+      const deltas: string[] = [];
+      await expect(client.complete([{ role: 'user', content: `OUTPUT_MODE:${mode}` }], [], new AbortController().signal,
+        text => deltas.push(text))).rejects.toThrow('未生成有效结构化结果');
+      expect(await requests()).toHaveLength(3);
+      expect(deltas).toEqual([]);
+    });
+
+  it("honors disabled retries and does not replay explicit failures or cancellation", async () => {
+    const { client, requests } = await recordingClient();
+    await expect(client.complete([{ role: 'user', content: 'OUTPUT_MODE:missing' }], [], new AbortController().signal,
+      undefined, undefined, { maxRetries: 0 })).rejects.toThrow('输出文件缺失');
+    await expect(client.complete([{ role: 'user', content: 'OUTPUT_MODE:failed' }], [], new AbortController().signal)).rejects.toThrow('authentication required');
+    const controller = new AbortController();
+    await expect(client.complete([{ role: 'user', content: 'OUTPUT_MODE:missing' }], [], controller.signal,
+      undefined, () => controller.abort(new Error('cancelled')))).rejects.toThrow('cancelled');
+    expect(await requests()).toHaveLength(3);
+  });
+
   it("uses CLI structured output and returns luban tool calls", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-codex-test-"));
     process.env.LUBAN_HOME = home;

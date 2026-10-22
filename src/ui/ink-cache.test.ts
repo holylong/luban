@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
@@ -47,6 +47,28 @@ it("installs idempotently and rejects an incompatible renderer without modifying
     expect(readFileSync(join(ink, "build/measure-text.js"), "utf8")).toBe("const cache = new Map();");
     writeFileSync(join(ink, "package.json"), JSON.stringify({ version: "8.0.0", main: "build/index.js" }));
     expect(() => patchInk(root)).toThrow("review the bounded-cache backport");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("does not rewrite the helper during repeated installation while other processes may import it", () => {
+  const root = mkdtempSync(join(tmpdir(), "luban-ink-idempotent-"));
+  try {
+    const ink = join(root, "node_modules", "ink");
+    const build = join(ink, "build");
+    mkdirSync(build, { recursive: true });
+    writeFileSync(join(root, "package.json"), "{}");
+    writeFileSync(join(ink, "package.json"), JSON.stringify({ version: "6.8.0", main: "build/index.js" }));
+    writeFileSync(join(build, "index.js"), "");
+    writeFileSync(join(build, "measure-text.js"), "const cache = new Map();");
+    writeFileSync(join(build, "wrap-text.js"), ["const cache = {};", "const cacheKey = text + String(maxWidth) + String(wrapType);", "const cachedText = cache[cacheKey];", "cache[cacheKey] = wrappedText;"].join("\n"));
+    patchInk(root);
+    const helper = join(build, "luban-text-cache.js");
+    const content = readFileSync(helper, "utf8");
+    const past = new Date("2000-01-01T00:00:00Z");
+    utimesSync(helper, past, past);
+    expect(patchInk(root).patched).toBe(0);
+    expect(statSync(helper).mtimeMs).toBe(+past);
+    expect(readFileSync(helper, "utf8")).toBe(content);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

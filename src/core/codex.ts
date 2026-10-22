@@ -65,6 +65,22 @@ function runtimeState(message: ChatMessage): boolean {
     .some(marker => String(message.content).startsWith(marker));
 }
 
+class CodexOutputError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); }
+}
+
+function parseResponse(text: string): { content: string; tool_calls: Array<{ name: string; arguments: string }> } {
+  const raw: unknown = JSON.parse(text);
+  if (!raw || typeof raw !== "object") throw new Error("invalid response object");
+  const value = raw as { content?: unknown; tool_calls?: unknown };
+  if (typeof value.content !== "string" || !Array.isArray(value.tool_calls)
+    || (!value.content.trim() && !value.tool_calls.length)
+    || value.tool_calls.some(call => !call || typeof call.name !== "string" || typeof call.arguments !== "string")) {
+    throw new Error("invalid structured response");
+  }
+  return value as ReturnType<typeof parseResponse>;
+}
+
 /** Uses the official Codex CLI and its ChatGPT login cache, never an API key. */
 export class CodexClient {
   // AgentRunner supplies a stable identity across TUI transcript copies. Direct
@@ -76,7 +92,21 @@ export class CodexClient {
 
   async complete(messages: ChatMessage[], tools: Array<Record<string, unknown>>, signal: AbortSignal,
     onDelta?: DeltaHandler, onNotice?: NoticeHandler, options?: ModelRequestOptions): Promise<CompletionResult> {
-    if (signal.aborted) throw signal.reason ?? new Error("aborted");
+    const retries = Math.min(2, Math.max(0, options?.maxRetries ?? this.config.maxRetries ?? 2));
+    for (let attempt = 0; ; attempt += 1) {
+      signal.throwIfAborted();
+      try {
+        return await this.completeAttempt(messages, tools, signal, onDelta, onNotice, options);
+      } catch (error) {
+        if (signal.aborted || !(error instanceof CodexOutputError) || attempt >= retries) throw error;
+        onNotice?.(`Codex CLI 未返回有效结果，正在自动恢复（${attempt + 1}/${retries}）；已完成的工具操作保留`);
+      }
+    }
+  }
+
+  private async completeAttempt(messages: ChatMessage[], tools: Array<Record<string, unknown>>, signal: AbortSignal,
+    onDelta?: DeltaHandler, onNotice?: NoticeHandler, options?: ModelRequestOptions): Promise<CompletionResult> {
+    signal.throwIfAborted();
     const dir = await mkdtemp(join(tmpdir(), "luban-codex-"));
     const schema = join(dir, "response.schema.json");
     const output = join(dir, "response.json");
@@ -97,6 +127,9 @@ export class CodexClient {
     // exec resume reports cumulative thread totals, not just the resumed call.
     let totalUsage: CompletionResult["usage"] = resume?.usage ?? { input: 0, output: 0 };
     let reportedUsage = false;
+    let eventOutput: string | undefined;
+    let turnCompleted = false;
+    let turnFailed = false;
     try {
       await writeFile(schema, JSON.stringify(OUTPUT_SCHEMA), { mode: 0o600 });
       const sentMessages = resume
@@ -128,11 +161,21 @@ export class CodexClient {
       const effort = options?.reasoningEffort ?? this.config.model.reasoningEffort;
       if (effort) args.push("-c", `model_reasoning_effort="${effort}"`);
       args.push("-");
-      const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+      const result = await new Promise<{ code: number | null; stderr: string; timedOut: boolean }>((resolve, reject) => {
         const child = spawn(...codexInvocation(args), { stdio: ["pipe", "pipe", "pipe"] });
         let stderr = "";
         let pending = "";
         let timedOut = false;
+        let killTimer: ReturnType<typeof setTimeout> | undefined;
+        const terminate = () => {
+          child.kill("SIGTERM");
+          killTimer ??= setTimeout(() => child.kill("SIGKILL"), 5000);
+        };
+        const timeoutMs = options?.timeoutMs ?? this.config.timeoutMs;
+        const idleAbort = () => { timedOut = true; terminate(); };
+        // CLI event activity extends the wait; long productive turns have no
+        // absolute deadline. Reconnection starts only after this child closes.
+        let timer = setTimeout(idleAbort, timeoutMs);
         const eventLine = (line: string) => {
           let event: Record<string, unknown>;
           try {
@@ -141,6 +184,13 @@ export class CodexClient {
             event = parsed as Record<string, unknown>;
           } catch { return; }
           if (event.type === "thread.started" && typeof event.thread_id === "string") threadId = event.thread_id;
+          if (event.type === "turn.started") { eventOutput = undefined; turnCompleted = false; turnFailed = false; }
+          if (event.type === "item.completed") {
+            const item = event.item as { type?: unknown; text?: unknown } | undefined;
+            if (item?.type === "agent_message" && typeof item.text === "string") eventOutput = item.text;
+          }
+          if (event.type === "turn.completed") turnCompleted = true;
+          if (event.type === "turn.failed") turnFailed = true;
           if (event.type === "turn.completed" && event.usage && typeof event.usage === "object") {
             const values = event.usage as Record<string, unknown>;
             const tokens = (key: string): number => typeof values[key] === "number" && Number.isFinite(values[key])
@@ -160,6 +210,7 @@ export class CodexClient {
         };
         child.stdout.setEncoding("utf8");
         child.stdout.on("data", (part: string) => {
+          if (!timedOut) { clearTimeout(timer); timer = setTimeout(idleAbort, timeoutMs); }
           pending += part;
           let newline: number;
           while ((newline = pending.indexOf("\n")) >= 0) {
@@ -168,22 +219,20 @@ export class CodexClient {
           }
           // Agent message events can include large patches. Do not retain an
           // unbounded incomplete event from a broken CLI.
-          if (pending.length > 8_000_000) { pending = ""; child.kill("SIGTERM"); }
+          if (pending.length > 8_000_000) { pending = ""; terminate(); }
         });
         child.stderr.setEncoding("utf8");
         child.stderr.on("data", (part: string) => { stderr = (stderr + part).slice(-4000); });
         child.on("error", reject);
         child.on("close", (code) => {
           if (pending.trim()) eventLine(pending);
-          resolve({ code, stderr: timedOut ? `timed out after ${timeoutMs} ms. ${stderr}` : stderr });
+          resolve({ code, stderr: timedOut ? `idle timeout: timed out after ${timeoutMs} ms without CLI events. ${stderr}` : stderr, timedOut });
         });
-        const abort = () => child.kill("SIGTERM");
+        const abort = terminate;
         signal.addEventListener("abort", abort, { once: true });
         if (signal.aborted) abort();
         child.on("close", () => signal.removeEventListener("abort", abort));
-        const timeoutMs = options?.timeoutMs ?? this.config.timeoutMs;
-        const timer = setTimeout(() => { timedOut = true; abort(); }, timeoutMs);
-        child.on("close", () => clearTimeout(timer));
+        child.on("close", () => { clearTimeout(timer); if (killTimer) clearTimeout(killTimer); });
         child.stdin.on("error", () => {});
         const changedState = resume && JSON.stringify(state) !== JSON.stringify(resume.state) ? state : undefined;
         const prompt = promptFor(resume ? snapshot.slice(resume.messages.length) : wireMessages(messages), toolSchema, Boolean(resume), changedState);
@@ -192,9 +241,21 @@ export class CodexClient {
           : ""));
       });
       if (signal.aborted) throw signal.reason ?? new Error("aborted");
-      if (result.code !== 0) throw new Error(`Codex CLI failed: ${result.stderr.trim() || `exit ${result.code}`}. Run codex login with your ChatGPT Plus account.`);
-      const raw = JSON.parse(await readFile(output, "utf8")) as { content?: unknown; tool_calls?: unknown };
-      if (typeof raw.content !== "string" || !Array.isArray(raw.tool_calls)) throw new Error("Codex CLI returned an invalid response");
+      if (result.timedOut || result.code !== 0 || turnFailed) throw new Error(`Codex CLI failed: ${result.stderr.trim() || `exit ${result.code}`}`);
+      let raw: ReturnType<typeof parseResponse>;
+      try {
+        raw = parseResponse(await readFile(output, "utf8"));
+      } catch (error) {
+        // Recover only the completed turn's final agent message, never partial text.
+        try {
+          if (!turnCompleted || eventOutput === undefined) throw error;
+          raw = parseResponse(eventOutput);
+        } catch {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new CodexOutputError(`Codex CLI 未生成有效结构化结果（${/ENOENT/.test(reason) ? "输出文件缺失" : "输出为空或格式无效"}）${result.stderr.trim() ? `：${result.stderr.trim()}` : ""}；已完成的工具操作保留。`, /ENOENT/.test(reason) ? "CODEX_OUTPUT_MISSING" : undefined);
+        }
+        onNotice?.("Codex 输出文件不可用，已从完整事件流恢复结果。");
+      }
       const toolCalls: ToolCall[] = raw.tool_calls.map((item: unknown) => {
         const call = item as { name?: unknown; arguments?: unknown };
         if (typeof call.name !== "string" || typeof call.arguments !== "string") throw new Error("Codex CLI returned an invalid tool call");

@@ -119,6 +119,10 @@ export interface LubanConfig {
   maxHistoryMessages?: number;
   /** Retries for transient model transport, rate-limit, and server errors. */
   maxRetries: number;
+  /** Keep AGENT/AUTO tasks alive across transient model outages (default true). */
+  modelReconnect?: boolean;
+  /** Maximum delay between recovery requests; default 60 seconds. */
+  modelReconnectMaxDelayMs?: number;
   mcpServers: Record<string, McpServerSettings>;
   lspServers: Record<string, LspServerSettings>;
   /** Run code-intelligence queries in a disposable child process. */

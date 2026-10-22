@@ -12,7 +12,7 @@ import { isZenFreeModel, OpenCodeZenClient } from "./opencode-zen.js";
 import { modelRetryDelay, recoverableGoStreamError, waitForModelRetry } from "./opencode-go.js";
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactForRequest, compactMessages, estimateMessagesTokens } from "./context.js";
-import { isContextOverflowError, isModelTimeoutError } from "./model-errors.js";
+import { describeModelError, isContextOverflowError, isModelTimeoutError, recoverableModelConnectionError } from "./model-errors.js";
 import { reasoningRecoveryOptions } from "./model-controls.js";
 import { parseToolArguments } from "./json-args.js";
 import { repairToolHistory } from "./history.js";
@@ -543,6 +543,16 @@ export class AgentRunner {
     let modelCalls = 0;
     let reasoningRecovery: ModelRequestOptions | undefined;
     let lastMainOptions: ModelRequestOptions | undefined;
+    const reconnect = mode !== "ask" && this.config.modelReconnect !== false && this.config.maxRetries !== 0;
+    let connectionFailures = 0;
+    const waitForConnection = async (error: unknown, callSignal: AbortSignal) => {
+      callSignal.throwIfAborted();
+      const ceiling = Math.max(2000, Math.min(300_000, this.config.modelReconnectMaxDelayMs ?? 60_000));
+      const delay = Math.min(ceiling, 2000 * 2 ** Math.min(connectionFailures++, 8));
+      await persist();
+      onEvent({ type: "status", text: `模型连接暂不可用（${describeModelError(error).slice(0, 240)}），${delay / 1000}s 后自动重连（第 ${connectionFailures} 次）；进度已保存，可取消等待` });
+      await waitForModelRetry(delay, callSignal);
+    };
     const callModel: typeof this.client.complete = async (callMessages, callTools, callSignal, onDelta) => {
       const mainRequest = callMessages === messages;
       const go = this.config.model.provider === "opencode-go";
@@ -578,16 +588,16 @@ export class AgentRunner {
         if (reasoningRecovery) options = { ...options, ...reasoningRecovery };
         lastMainOptions = options;
       }
-      // Clients retry connection failures before a stream starts. A stream that
-      // opens but produces no output can still time out: retry that model call
-      // here, where no tool has run and there is no partial answer to duplicate.
-      // Codex owns transport retries and may already be generating a billed
-      // response without emitting user-visible text. Never replay its turn.
+      // Short client retries precede sustained task recovery. A rejected Codex
+      // call has already closed its child; reconnect never overlaps live calls
+      // and never replays tool.execute. Auxiliary/ASK calls remain bounded.
       const silentRetries = this.config.model.api === "codex" ? 0 : Math.min(2, Math.max(0, this.config.maxRetries ?? 3));
       for (let attempt = 0; ; attempt += 1) {
         modelCalls += 1;
         onEvent({ type: "model-call", index: modelCalls });
         let receivedOutput = false;
+        let partialContent = "";
+        let partialReasoning = "";
         const requestStarted = Date.now();
         let firstOutputMs: number | undefined;
         let requestOk = false;
@@ -595,6 +605,8 @@ export class AgentRunner {
         try {
           const response = await this.client.complete(callMessages, callTools, callSignal, (text, kind) => {
             if (text) { receivedOutput = true; firstOutputMs ??= Date.now() - requestStarted; }
+            if (kind === "content") partialContent += text;
+            else partialReasoning += text;
             onDelta?.(text, kind);
           }, (text) => {
             if (!isModelTimeoutError(text) && !text.startsWith("模型连接在输出中途中断")) {
@@ -603,8 +615,18 @@ export class AgentRunner {
           }, options);
           requestOk = true;
           requestUsage = response.usage;
+          if (mainRequest && !response.streamEnded && connectionFailures) {
+            onEvent({ type: "status", text: "模型连接已恢复，继续处理当前任务" });
+            connectionFailures = 0;
+          }
           return response;
         } catch (error) {
+          if (!callSignal.aborted && mainRequest && reconnect && recoverableModelConnectionError(error)) {
+            if (receivedOutput) return { content: partialContent, reasoning: partialReasoning, toolCalls: [],
+              usage: { input: 0, output: 0 }, truncated: true, streamEnded: true };
+            await waitForConnection(error, callSignal);
+            continue;
+          }
           if (callSignal.aborted || receivedOutput || !(isModelTimeoutError(error) || go && recoverableGoStreamError(error)) || attempt >= silentRetries) throw error;
           if (go) {
             const backoff = modelRetryDelay(undefined, attempt, "opencode-go");
@@ -723,7 +745,8 @@ export class AgentRunner {
           return { ok: false, text, steps: totalSteps, messages, stopReason: "context" as const, modelCalls, elapsedMs: Date.now() - runStartedAt };
         }
       }
-      totalSteps += 1;
+      const reconnectingStream = reconnect && completion.truncated && completion.streamEnded === true;
+      if (!reconnectingStream) totalSteps += 1;
       this.budgetUsed = totalSteps;
       onEvent({ type: "usage", ...completion.usage });
       // Running out of output budget is a property of the provider's cap, not a
@@ -738,7 +761,7 @@ export class AgentRunner {
         // output. Only a provider cap warrants changing reasoning/output
         // controls; dropped streams keep the separate network recovery path.
         const dropped = completion.streamEnded === true;
-        truncationContinues += 1;
+        if (!reconnectingStream) truncationContinues += 1;
         const starvedByReasoning = !dropped && !partial && reasoningChars > 0;
         if (starvedByReasoning && !reasoningRecovery) {
           const recovery = reasoningRecoveryOptions(this.config, lastMainOptions, Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS));
@@ -748,7 +771,7 @@ export class AgentRunner {
             continue;
           }
         }
-        if (truncationContinues > MAX_TRUNCATION_CONTINUES || starvedByReasoning) {
+        if (!reconnectingStream && (truncationContinues > MAX_TRUNCATION_CONTINUES || starvedByReasoning)) {
           const text = starvedByReasoning
             ? `模型推理耗尽输出预算（${consumed}），尚未生成正文${reasoningRecovery ? "；调整预算/推理参数后仍被截断" : "；当前参数已无可自动调整空间"}。请检查该模型原生 reasoning_effort/thinking 控制和服务端输出上限；max_tokens 在 luban 中最高为 ${MAX_OUTPUT_TOKENS}。`
             : dropped
@@ -768,6 +791,10 @@ export class AgentRunner {
           truncatedSpanCount += 2;
           lastText = truncatedText;
           await persist();
+        }
+        if (reconnectingStream) {
+          await waitForConnection(new Error("model stream disconnected before completion"), signal);
+          step -= 1; // Outages do not consume productive task steps.
         }
         if (!dropped) onEvent({ type: "status", text: `模型输出被输出上限截断（${consumed}），已保留并继续` });
         continue;

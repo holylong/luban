@@ -40,6 +40,16 @@ export function retryableModelError(error: unknown): boolean {
   return /model HTTP (408|409|425|429|529|5\d\d)|timed out|idle timeout|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|overloaded|rate[ -]?limit|temporarily unavailable|try again|service unavailable|bad gateway|gateway timeout/i.test(text);
 }
 
+/** Recover transport outages only; configuration, authentication and quota need intervention. */
+export function recoverableModelConnectionError(error: unknown): boolean {
+  const text = describeModelError(error);
+  if (isContextOverflowError(error) || isFreeTierError(error)
+    || /(?:HTTP|status(?:_code)?[\" :]*|status code)\s*(?:400|401|402|403|404|405|422)\b|authentication required|unauthorized|invalid[_ -]?(?:api[_ -]?)?key|token (?:has )?expired|refresh[_ -]?token|insufficient[_ -]quota|quota[_ -]exceeded|usage limit|billing|credit balance|permission denied/i.test(text)) return false;
+  return retryableModelError(new Error(text))
+    || /stream (?:disconnected|ended|closed)|connection (?:closed|reset|refused)|network (?:error|unreachable)|error sending request|failed to (?:connect|send request)|unexpected eof|UND_ERR_(?:SOCKET|CONNECT_TIMEOUT)|other side closed|server_error|(?:HTTP|status|status code)[\" :]*(?:408|429|5\d\d)\b|stream error.*(?:429|5\d\d)/i.test(text)
+    || (error instanceof Error && (error as Error & { code?: string }).code === "CODEX_OUTPUT_MISSING");
+}
+
 /**
  * A short, user-facing description of a transport failure.
  *

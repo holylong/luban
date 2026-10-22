@@ -9,7 +9,7 @@ function config(workspace: string): LubanConfig {
   const model = { id: "test/model", provider: "test", model: "model", name: "model", baseUrl: "", apiKey: "" };
   return {
     home: workspace, workspace, project: "test", model, models: [model], maxTokens: 1000,
-    temperature: 0, timeoutMs: 1000, maxSteps: 10, backendUrl: "", permissionMode: "ask",
+    temperature: 0, timeoutMs: 1000, maxSteps: 10, backendUrl: "", permissionMode: "ask", modelReconnect: false,
   };
 }
 
