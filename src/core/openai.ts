@@ -105,13 +105,19 @@ function retryableBody(status: number, body: string): boolean {
  * OpenAI-compatible chat templates that require one leading system message.
  * Image attachments become native vision parts; bytes are read from the
  * workspace at send time so saved sessions stay small. */
-export async function openAiWireMessages(messages: ChatMessage[], workspace = ""): Promise<Array<Record<string, unknown>>> {
+export async function openAiWireMessages(messages: ChatMessage[], workspace = "", model?: LubanConfig["model"]): Promise<Array<Record<string, unknown>>> {
+  const requireReasoning = /deepseek/iu.test(`${model?.id ?? ""} ${model?.model ?? ""} ${model?.provider ?? ""} ${model?.baseUrl ?? ""}`);
   const system = messages.filter((message) => message.role === "system")
     .map((message) => String(message.content ?? "").trim()).filter(Boolean).join("\n\n");
   const conversation: Array<Record<string, unknown>> = [];
   for (const message of messages) {
     if (message.role === "system") continue;
-    const { editPreview: _localPreview, images: _localImages, ...rest } = message;
+    const { editPreview: _localPreview, images: _localImages, reasoning_content, ...fields } = message;
+    const rest = {
+      ...fields,
+      ...(message.role === "assistant" && (reasoning_content !== undefined || requireReasoning)
+        ? { reasoning_content: reasoning_content ?? "" } : {}),
+    };
     if (!message.images?.length || message.role === "tool") {
       conversation.push({ ...rest });
       continue;
@@ -157,7 +163,7 @@ export class OpenAiClient {
     const thinkingFields = modelThinkingFields(this.config, options, Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS));
     const body = JSON.stringify({
       model: this.config.model.model,
-      messages: await openAiWireMessages(messages, this.config.workspace),
+      messages: await openAiWireMessages(messages, this.config.workspace, this.config.model),
       max_tokens: Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS),
       ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
       stream: true,

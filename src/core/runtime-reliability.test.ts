@@ -129,6 +129,48 @@ describe("long-running agent reliability", () => {
     } finally { runner.close(); }
   });
 
+  it.each([false, true])("allows diagnosis after a loop warning and blocks returning to the loop: %s", async retry => {
+    const { config, messages } = await setup();
+    let turns = 0;
+    const executed: string[] = [];
+    const runner = new AgentRunner(config, { async complete(history) {
+      expectPaired(history);
+      turns++;
+      if (turns === 6) {
+        expect(history.at(-1)?.content).toContain("Change strategy");
+        return completion([call(`new-${turns}`, "diagnose")]);
+      }
+      if (turns === 7 && !retry) return completion();
+      return completion([call(`new-${turns}`, "probe")]);
+    } });
+    for (const name of ["probe", "diagnose"]) runner.tools.set(name, {
+      name, description: name, risk: "read", parameters: {},
+      async execute() { executed.push(name); return name === "probe" ? "same result" : "different strategy"; },
+    });
+    try {
+      const result = await runner.run(messages, "agent", new AbortController().signal, () => {}, async () => "deny");
+      expect(executed).toEqual(["probe", "probe", "probe", "probe", "probe", "diagnose"]);
+      expect(result.ok).toBe(!retry);
+      if (retry) expect(result.stopReason).toBe("loop");
+      expectPaired(messages);
+    } finally { runner.close(); }
+  });
+
+  it("stops noisy repeated outputs even when every model call has a fresh ID", async () => {
+    const { config, messages } = await setup();
+    let turns = 0;
+    let executions = 0;
+    const runner = new AgentRunner(config, { async complete() { return completion([call(`unique-${++turns}`, "probe")]); } });
+    runner.tools.set("probe", { name: "probe", description: "probe", risk: "read", parameters: {},
+      async execute() { return `echo ${++executions % 2}`; } });
+    try {
+      const result = await runner.run(messages, "agent", new AbortController().signal, () => {}, async () => "deny");
+      expect(result.stopReason).toBe("loop");
+      expect(executions).toBe(5);
+      expectPaired(messages);
+    } finally { runner.close(); }
+  });
+
   it("keeps polling the same call while its result keeps changing", async () => {
     const { config, messages } = await setup();
     config.maxSteps = 12;

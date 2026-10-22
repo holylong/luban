@@ -561,20 +561,11 @@ export class AgentRunner {
       const mainRequest = callMessages === messages;
       const go = this.config.model.provider === "opencode-go";
       const automatic = this.config.enableThinking === undefined;
-      // SOTA pattern (opencode parity): think once to plan the turn, then run
-      // the following execution calls fast. A complex request used to think on
-      // EVERY call because lastUserQuestion never changes mid-task; now only
-      // the first call after user input thinks, later calls think again only
-      // when a tool just failed and diagnosis is needed.
-      let firstCallThisTurn = true;
-      for (let i = messages.length - 1; i >= 0; i -= 1) {
-        const m = messages[i]!;
-        if (m.role === "user" && m.name !== TRUNCATION_MARKER) break;
-        if (m.role === "assistant") { firstCallThisTurn = false; break; }
-      }
+      // Successful tools still need analysis. Keep the task's thinking policy
+      // throughout execution instead of disabling it after the first call.
       const thinking = automatic
-        ? (mainRequest && !firstCallThisTurn ? currentTurnHasToolError(messages)
-          : shouldThink(lastUserQuestion(messages)) || currentTurnHasToolError(messages))
+        ? shouldThink(lastUserQuestion(messages)) || currentTurnHasToolError(messages)
+          || (mainRequest && callTools.length > 0 && /deepseek/iu.test(this.config.model.id + " " + this.config.model.model))
         : this.config.enableThinking;
       let options: ModelRequestOptions | undefined = mainRequest
         ? { enableThinking: thinking,
@@ -846,6 +837,8 @@ export class AgentRunner {
       const assistant: ChatMessage = {
         role: "assistant",
         content: answer,
+        ...((this.config.model.api === "openai" || this.config.model.api === undefined) && completion.reasoning !== undefined
+          ? { reasoning_content: completion.reasoning } : {}),
         ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
       };
       if (stitches) { messages.splice(truncatedSpanStart, truncatedSpanCount, assistant); truncatedSpanCount = 0; truncatedSpanStart = -1; }
@@ -871,12 +864,15 @@ export class AgentRunner {
       if (thought.trim()) onEvent({ type: "thought", text: thought.trim() });
 
       const signature = toolCalls.map((call) => `${call.function.name}:${call.function.arguments}`).join("|");
-      if (repeatCount >= 5) {
+      // Check the requested call, so a warning does not block a new strategy.
+      const repeatedRounds = recentRounds.filter((round) => round.signature === signature);
+      const repeatedResults = new Set(repeatedRounds.map((round) => round.result));
+      if (repeatedRounds.length >= LOOP_LIMIT && repeatedResults.size <= Math.floor(repeatedRounds.length / 2)) {
         // Say what looped. A bare "repeated tool-call loop" left the user unable
         // to tell a stuck model from a guard misfiring on a legitimate poll.
         const detail = toolCalls.map((call) => `${call.function.name} ${clipContextText(call.function.arguments, 200)}`).join("; ");
         for (const call of toolCalls) messages.push({ role: "tool", name: call.function.name, tool_call_id: call.id, content: "TOOL ERROR: not executed; repeated tool-call loop stopped." });
-        onEvent({ type: "error", text: `Stopped a repeated tool-call loop: ${detail} returned the same result ${repeatCount} times` });
+        onEvent({ type: "error", text: `Stopped a repeated tool-call loop: ${detail} returned repeated results across ${repeatedRounds.length} rounds` });
         return { ok: false, text: lastText || `Repeated tool-call loop: ${detail}`, steps: totalSteps, messages, stopReason: "loop", modelCalls, elapsedMs: Date.now() - runStartedAt };
       }
 
@@ -1081,8 +1077,10 @@ export class AgentRunner {
       // keep repeating. A poll whose answer is genuinely new every time —
       // `git status` after edits, a background task reaching a new state —
       // has all-distinct results and never trips this.
+      // Compare result text only: tool_call_id is new every round, so folding
+      // it in made every result look fresh and the loop never registered.
       const resultSignature = messages.slice(-toolCalls.length)
-        .map((message) => `${message.tool_call_id ?? ""}:${message.content ?? ""}`).join("|");
+        .map((message) => String(message.content ?? "")).join("|");
       recentRounds.push({ signature, result: resultSignature });
       if (recentRounds.length > LOOP_WINDOW) recentRounds.shift();
       const sameCall = recentRounds.filter((round) => round.signature === signature);

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRunner, initialMessages } from "./agent.js";
+import { SessionStore } from "./session-store.js";
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 
 function config(workspace: string): LubanConfig {
@@ -44,6 +45,53 @@ describe("AgentRunner", () => {
           return decision;
         });
       expect(prompts).toBe(2);
+    } finally { runner.close(); }
+  });
+
+  it.each(["json", "sse"])("replays DeepSeek reasoning and tool results across successive %s requests and session reload", async format => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-deepseek-history-"));
+    const settings = config(workspace);
+    settings.model = { ...settings.model, id: "opencode-go/deepseek-v4.1-flash", provider: "opencode-go", model: "deepseek-v4.1-flash", api: "openai" };
+    settings.maxTokens = 32_000;
+    settings.maxRetries = 0;
+    const bodies: Record<string, unknown>[] = [];
+    const executions: number[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      bodies.push(body);
+      const index = bodies.length;
+      const history = body.messages as ChatMessage[];
+      expect(body.thinking).toEqual({ type: "enabled" });
+      expect(body.max_tokens).toBe(32_000);
+      expect(history.filter(message => message.role === "tool").map(message => message.content))
+        .toEqual(Array.from({ length: Math.min(index - 1, 2) }, (_, n) => `result-${n + 1}`));
+      expect(history.filter(message => message.role === "assistant").map(message => message.reasoning_content))
+        .toEqual(Array.from({ length: index - 1 }, (_, n) => `reasoning-${n + 1}`));
+      const message = { content: index < 3 ? "" : "done", reasoning_content: `reasoning-${index}`,
+        ...(index < 3 ? { tool_calls: [{ id: `step-${index}`, type: "function",
+          function: { name: "probe", arguments: JSON.stringify({ stage: index }) } }] } : {}) };
+      const finish_reason = index < 3 ? "tool_calls" : "stop";
+      return format === "json" ? Response.json({ choices: [{ message, finish_reason }] })
+        : new Response(`data: ${JSON.stringify({ choices: [{ delta: message, finish_reason }] })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } });
+    });
+    const runner = new AgentRunner(settings);
+    runner.tools.set("probe", { name: "probe", description: "diagnose", risk: "read", parameters: {},
+      async execute(args) { executions.push(Number(args.stage)); return `result-${args.stage}`; } });
+    const messages: ChatMessage[] = [...initialMessages(workspace), { role: "user", content: "你好" }];
+    const store = new SessionStore(workspace);
+    const record = store.create("test", workspace, "agent", settings.model.id, messages);
+    try {
+      const result = await runner.run(messages, "agent", new AbortController().signal, () => undefined, async () => "once", () => store.save(record));
+      expect(result).toMatchObject({ ok: true, text: "done" });
+      expect(executions).toEqual([1, 2]);
+      const loaded = (await store.load(record.id, "test"))!;
+      expect(loaded.messages.filter(message => message.role === "assistant").map(message => message.reasoning_content))
+        .toEqual(["reasoning-1", "reasoning-2", "reasoning-3"]);
+      loaded.messages.push({ role: "user", content: "继续" });
+      expect((await runner.run(loaded.messages, "agent", new AbortController().signal, () => undefined, async () => "once")).ok).toBe(true);
+      expect(bodies).toHaveLength(4);
+      expect(executions).toEqual([1, 2]);
     } finally { runner.close(); }
   });
 
@@ -561,11 +609,11 @@ describe("AgentRunner", () => {
     runner.tools.set("read_file", { name: "read_file", description: "read", risk: "read", parameters: {},
       async execute() { executions++; return "saved result"; } });
     try {
-      const result = await runner.run([...initialMessages(workspace), { role: "user", content: "hi" }],
+      const result = await runner.run([...initialMessages(workspace), { role: "user", content: "你好" }],
         "agent", new AbortController().signal, () => undefined, async () => "once");
       expect(result.ok).toBe(true);
       expect(executions).toBe(1);
-      expect(bodies.map(body => body.max_tokens)).toEqual([32_000, 8192, 32_000]);
+      expect(bodies.map(body => body.max_tokens)).toEqual([8192, 8192, 32_000]);
       expect((bodies[2]!.messages as ChatMessage[]).some(message => message.role === "tool" && message.content === "saved result")).toBe(true);
       expect(bodies[2]).not.toHaveProperty("reasoning_effort");
       expect(settings.enableThinking).toBeUndefined();
