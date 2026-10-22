@@ -250,6 +250,10 @@ interface ModelClient {
  * reasons loop forever.
  */
 const MAX_TRUNCATION_CONTINUES = 5;
+/** Loop detection window: how many recent rounds to inspect, and how many
+ * repeats of one call inside it count as stuck. */
+const LOOP_WINDOW = 8;
+const LOOP_LIMIT = 5;
 /** Marks the nudge that asks for the rest of an answer cut short mid-stream. */
 const TRUNCATION_MARKER = "output-limit";
 
@@ -648,7 +652,11 @@ export class AgentRunner {
     };
     let lastText = "";
     let lastToolSignature = "";
+    /** Result of the previous round, so a repeat means "same call, same answer". */
+    let lastResultSignature = "";
     let repeatCount = 0;
+    /** Recent rounds for loop detection that survives call rotation and noisy results. */
+    const recentRounds: Array<{ signature: string; result: string }> = [];
     // Text kept from responses the provider cut off, and where in the transcript
     // those pieces live, so the continuation can replace them with one answer.
     let truncatedText = "";
@@ -665,7 +673,7 @@ export class AgentRunner {
 
     modelLoop: for (let step = 0; step < maxSteps; step += 1) {
       if (signal.aborted) throw signal.reason ?? new Error("aborted");
-      if (await promote()) { step = 0; lastText = ""; lastToolSignature = ""; repeatCount = 0; }
+      if (await promote()) { step = 0; lastText = ""; lastToolSignature = ""; repeatCount = 0; recentRounds.length = 0; }
       // Refresh startup rules for resumed sessions and edits to root instructions.
       if (String(messages[0]?.content).startsWith(SYSTEM_PROMPT.split("\n")[0]!)) messages[0] = initialMessages(this.config.workspace, this.config.model.name, this.config.planning ?? "auto", this.config.kev?.mode ?? "model")[0]!;
       // Codex CLI owns its output budget; luban never sends max_tokens to it.
@@ -845,9 +853,9 @@ export class AgentRunner {
       await persist();
       lastText = answer || lastText;
       if (!toolCalls.length) {
-        if (await promote(true)) { step = -1; lastText = ""; lastToolSignature = ""; repeatCount = 0; continue; }
+        if (await promote(true)) { step = -1; lastText = ""; lastToolSignature = ""; repeatCount = 0; recentRounds.length = 0; continue; }
         while (this.inbox && !(await this.inbox.finish())) {
-          if (await promote(true)) { step = -1; lastText = ""; lastToolSignature = ""; repeatCount = 0; continue modelLoop; }
+          if (await promote(true)) { step = -1; lastText = ""; lastToolSignature = ""; repeatCount = 0; recentRounds.length = 0; continue modelLoop; }
         }
         const verification = planVerificationStatus(messages);
         const finalText = verification.plan && !verification.verified
@@ -863,12 +871,13 @@ export class AgentRunner {
       if (thought.trim()) onEvent({ type: "thought", text: thought.trim() });
 
       const signature = toolCalls.map((call) => `${call.function.name}:${call.function.arguments}`).join("|");
-      repeatCount = signature === lastToolSignature ? repeatCount + 1 : 0;
-      lastToolSignature = signature;
       if (repeatCount >= 5) {
+        // Say what looped. A bare "repeated tool-call loop" left the user unable
+        // to tell a stuck model from a guard misfiring on a legitimate poll.
+        const detail = toolCalls.map((call) => `${call.function.name} ${clipContextText(call.function.arguments, 200)}`).join("; ");
         for (const call of toolCalls) messages.push({ role: "tool", name: call.function.name, tool_call_id: call.id, content: "TOOL ERROR: not executed; repeated tool-call loop stopped." });
-        onEvent({ type: "error", text: "Stopped a repeated tool-call loop" });
-        return { ok: false, text: lastText || "Repeated tool-call loop", steps: totalSteps, messages, stopReason: "loop", modelCalls, elapsedMs: Date.now() - runStartedAt };
+        onEvent({ type: "error", text: `Stopped a repeated tool-call loop: ${detail} returned the same result ${repeatCount} times` });
+        return { ok: false, text: lastText || `Repeated tool-call loop: ${detail}`, steps: totalSteps, messages, stopReason: "loop", modelCalls, elapsedMs: Date.now() - runStartedAt };
       }
 
       // Prepare and commit each write before touching the next call. Safe reads
@@ -1064,11 +1073,30 @@ export class AgentRunner {
         index = end;
       }
       signal.throwIfAborted();
+      // A loop is the same call producing nothing new. Comparing only the last
+      // round misses two real patterns seen with DeepSeek on opencode-go:
+      // an A→B→C rotation (adjacent signatures always differ) and a noisy
+      // result (TTS token counts wobble by one). So keep a short window of
+      // rounds and stop when one call signature dominates it while its results
+      // keep repeating. A poll whose answer is genuinely new every time —
+      // `git status` after edits, a background task reaching a new state —
+      // has all-distinct results and never trips this.
+      const resultSignature = messages.slice(-toolCalls.length)
+        .map((message) => `${message.tool_call_id ?? ""}:${message.content ?? ""}`).join("|");
+      recentRounds.push({ signature, result: resultSignature });
+      if (recentRounds.length > LOOP_WINDOW) recentRounds.shift();
+      const sameCall = recentRounds.filter((round) => round.signature === signature);
+      const results = new Set(sameCall.map((round) => round.result));
+      const stuck = sameCall.length >= LOOP_LIMIT
+        && (results.size === 1 || results.size <= Math.floor(sameCall.length / 2));
+      repeatCount = stuck ? sameCall.length : 0;
+      lastToolSignature = signature;
+      lastResultSignature = resultSignature;
       if (repeatCount >= 3) {
         const lastResult = messages.at(-1)!;
         lastResult.content = `${lastResult.content ?? ""}\n[luban runtime] You repeated the identical tool call. Change strategy or give the final answer now.`;
       }
-      if (await promote()) { step = -1; lastText = ""; lastToolSignature = ""; repeatCount = 0; }
+      if (await promote()) { step = -1; lastText = ""; lastToolSignature = ""; repeatCount = 0; recentRounds.length = 0; }
       // A phase label, not an event: the run is still working, and this fires
       // once per step, so recording it once per step is pure noise.
       onEvent({ type: "status", text: "Reviewing tool results", progress: true });

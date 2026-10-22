@@ -129,6 +129,36 @@ describe("long-running agent reliability", () => {
     } finally { runner.close(); }
   });
 
+  it("keeps polling the same call while its result keeps changing", async () => {
+    const { config, messages } = await setup();
+    config.maxSteps = 12;
+    let polls = 0;
+    const runner = new AgentRunner(config, { async complete() { return completion([call("p", "probe")]); } });
+    runner.tools.set("probe", { name: "probe", description: "poll", risk: "read", parameters: {},
+      async execute() { return `status ${++polls}`; } });
+    try {
+      const result = await runner.run(messages, "agent", new AbortController().signal, () => {}, async () => "deny");
+      // Twelve identical calls, twelve different answers: a poll, not a loop.
+      // It runs to the step budget instead of tripping the repeat guard.
+      expect(polls).toBe(12);
+      expect(result.stopReason).toBe("max_steps");
+    } finally { runner.close(); }
+  });
+
+  it("names the looping call so the failure is diagnosable", async () => {
+    const { config, messages } = await setup();
+    const events: Array<{ type: string; text?: string }> = [];
+    const runner = new AgentRunner(config, { async complete() { return completion([call("a", "probe", '{"path":"a.txt"}')]); } });
+    runner.tools.set("probe", { name: "probe", description: "probe", risk: "read", parameters: {}, async execute() { return "same"; } });
+    try {
+      const result = await runner.run(messages, "agent", new AbortController().signal, (event) => events.push(event as { type: string; text?: string }), async () => "deny");
+      expect(result.stopReason).toBe("loop");
+      const error = events.find((event) => event.type === "error")?.text ?? "";
+      expect(error).toContain("probe");
+      expect(error).toContain("a.txt");
+    } finally { runner.close(); }
+  });
+
   it("cancels while approval is pending, skips remaining writes, and persists closed history", async () => {
     const { config, messages } = await setup();
     config.permissionMode = "ask";
