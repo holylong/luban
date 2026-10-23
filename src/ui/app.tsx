@@ -1084,7 +1084,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     return () => clearInterval(timer);
   }, [running]);
 
-  const save = async (nextMessages = messages) => {
+  const save = async (nextMessages = sessionRef.current.messages) => {
     const record = sessionRef.current;
     record.messages = nextMessages;
     record.model = runnerRef.current.config.model.id;
@@ -1591,6 +1591,32 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     // and silently did nothing. Canonicalize the command token once, here.
     const value = canonicalCommand(resolveCompletion(raw.trim(), commandIndex));
     if (!value) return;
+    if (!running) {
+      const previous = sessionRef.current;
+      try {
+        const latest = await store.refresh(previous);
+        if (latest && sessionRef.current === previous && !runningRef.current) {
+          titleAbortRef.current?.abort(new Error("session refreshed"));
+          sessionRef.current = latest;
+          setMessages(latest.messages);
+          setExecutionLog(toolHistory(latest.messages, latest.edits));
+          setPendingInputs([...(latest.pendingInputs ?? [])]);
+          setInputHistory(historyFromSession(latest));
+          setHistoryIndex(null);
+          setMode(latest.mode);
+          setActiveMode(latest.mode);
+          setRunOutcome(null);
+          setActivity([]);
+          const model = config.models.find(item => item.id === latest.model);
+          if (model) switchModel(model);
+          else swapRunner(() => new AgentRunner(config, undefined, mesh));
+          setNotice("已载入另一终端保存的新进度");
+        }
+      } catch (error) {
+        setNotice(`会话刷新失败，输入尚未提交：${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+    }
     const rememberInput = () => {
       const record = sessionRef.current;
       const history = pushInputHistory(historyFromSession(record), raw);
