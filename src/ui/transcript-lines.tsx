@@ -1,7 +1,7 @@
 ﻿import React from "react";
 import { Text } from "ink";
-import { layoutInput } from "./input-layout.js";
-import { parseMarkdownBlocks, HighlightedCodeLine } from "./markdown.js";
+import { displayWidth, layoutInput } from "./input-layout.js";
+import { parseMarkdownBlocks, parseMarkdownInline, MarkdownInlineView, HighlightedCodeLine, type MarkdownSpan } from "./markdown.js";
 import { ExecutionRowView, type ExecutionRow } from "./execution-view.js";
 import type { TranscriptBlock } from "./transcript-blocks.js";
 import { theme } from "./theme.js";
@@ -12,6 +12,7 @@ export interface TranscriptLine {
   kind: "text" | "heading" | "code" | "user" | "note" | "tool";
   tone?: TranscriptBlock["tone"];
   execution?: ExecutionRow;
+  spans?: MarkdownSpan[];
 }
 
 /** Produce physical terminal rows before paging, including rows inside long messages. */
@@ -20,9 +21,21 @@ export function transcriptLines(blocks: TranscriptBlock[], width: number): Trans
   const usable = Math.max(1, width);
   for (const block of blocks) {
     let index = 0;
-    const add = (text: string, kind: TranscriptLine["kind"], prefix = "") => {
-      const rows = layoutInput(text, 0, Math.max(1, usable - prefix.length), Number.MAX_SAFE_INTEGER).rows;
-      for (const row of rows) lines.push({ id: `${block.id}:${index++}`, text: prefix + row.text, kind, tone: block.tone });
+    const add = (text: string, kind: TranscriptLine["kind"], prefix = "", spans?: MarkdownSpan[], continuation = prefix) => {
+      const rows = layoutInput(text, 0, Math.max(1, usable - displayWidth(prefix)), Number.MAX_SAFE_INTEGER).rows;
+      const ranges = spans?.map(span => ({ span, start: 0, end: 0 }));
+      let offset = 0;
+      for (const range of ranges ?? []) { range.start = offset; offset += range.span.text.length; range.end = offset; }
+      for (const [rowIndex, row] of rows.entries()) {
+        const lead = rowIndex ? continuation : prefix;
+        const styled = ranges?.flatMap(({ span, start, end }) => {
+          const first = Math.max(start, row.start);
+          const last = Math.min(end, row.start + row.text.length);
+          return last > first ? [{ ...span, text: text.slice(first, last) }] : [];
+        });
+        lines.push({ id: `${block.id}:${index++}`, text: lead + row.text, kind, tone: block.tone,
+          ...(styled ? { spans: [...(lead ? [{ text: lead }] : []), ...styled] } : {}) });
+      }
     };
     if (block.kind === "tool") {
       for (const row of block.rows ?? []) {
@@ -35,15 +48,21 @@ export function transcriptLines(blocks: TranscriptBlock[], width: number): Trans
     if (block.kind === "user") {
       add(block.text ?? "", "user", "  ");
     } else {
-      for (const part of parseMarkdownBlocks(block.text ?? "")) {
+      const parts = parseMarkdownBlocks(block.text ?? "");
+      for (const [partIndex, part] of parts.entries()) {
+        const previous = parts[partIndex - 1];
+        if (previous && !(previous.kind === part.kind && (part.kind === "list" || part.kind === "quote"))) add("", "text");
         if (part.kind === "code") {
           add(part.language || "code", "heading");
           add(part.content, "code");
         } else if (part.kind === "rule") {
           add("─".repeat(Math.min(24, usable)), "note");
         } else {
-          const text = part.content.replace(/`([^`]+)`|\*\*([^*]+)\*\*/gu, (_, code: string, bold: string) => code ?? bold);
-          add(text, part.kind === "heading" ? "heading" : "text", part.kind === "list" ? "• " : part.kind === "quote" ? "┃ " : "");
+          const spans = parseMarkdownInline(part.content);
+          const text = spans.map(span => span.text).join("");
+          const prefix = part.kind === "list" ? `${part.marker ?? "•"} ` : part.kind === "quote" ? "┃ " : "";
+          add(text, part.kind === "heading" ? "heading" : "text", prefix, spans,
+            part.kind === "list" ? " ".repeat(displayWidth(prefix)) : prefix);
         }
       }
     }
@@ -79,5 +98,5 @@ export const TranscriptLineView = React.memo(function TranscriptLineView({ line,
     : line.kind === "note" ? (line.tone && line.tone in theme ? theme[line.tone as keyof typeof theme] : theme.dim)
       : theme.text;
   return <Text wrap="truncate-end" color={color} bold={line.kind === "heading"}
-    backgroundColor={selected ? theme.selected : line.kind === "user" ? theme.panel : undefined}>{line.text || " "}</Text>;
+    backgroundColor={selected ? theme.selected : line.kind === "user" ? theme.panel : undefined}>{line.spans?.length ? <MarkdownInlineView spans={line.spans} /> : line.text || " "}</Text>;
 });
