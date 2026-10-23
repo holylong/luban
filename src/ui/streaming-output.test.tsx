@@ -59,12 +59,24 @@ it.each([60, 100, 160])("does not erase the frame while streaming reasoning at %
     expect(updates).not.toContain("Message luban");
     expect(updates).not.toContain("reasoning test");
   } finally {
-    finish?.();
-    app.unmount();
-    app.cleanup();
-    run.mockRestore();
-    if (previousHome === undefined) delete process.env.LUBAN_HOME;
-    else process.env.LUBAN_HOME = previousHome;
-    await rm(home, { recursive: true, force: true });
+    try {
+      finish?.();
+      if (finish) {
+        // Completion paints before its final save resolves. Exit through the
+        // real command path so queued writes finish before removing the home.
+        await expect.poll(() => stripVTControlCharacters(raw)).toContain("任务已完成");
+        stdin.write("/exit");
+        await expect.poll(() => stripVTControlCharacters(raw)).toContain("/exit");
+        stdin.write("\r");
+        await app.waitUntilExit();
+      }
+    } finally {
+      app.unmount();
+      app.cleanup();
+      run.mockRestore();
+      if (previousHome === undefined) delete process.env.LUBAN_HOME;
+      else process.env.LUBAN_HOME = previousHome;
+      await rm(home, { recursive: true, force: true });
+    }
   }
 }, 10000);
