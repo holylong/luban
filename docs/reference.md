@@ -22,7 +22,7 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 }
 ```
 
-`active` 选择模型，`reasoning_effort` 是该模型的二级推理强度，可写 `low`、`medium`、`high`、`xhigh`、`max`，支持的模型还可选 `ultra`；省略时使用 Codex CLI 的默认设置。运行 `luban` 即按配置启动，也可用 `luban --model codex/gpt-6-sol` 临时指定模型。在 TUI 中输入 `/models`，先选择 Codex 模型，再选择推理强度；选择结果会保存到 `~/.luban/node-preferences.json`，供下次启动使用。内置模型有 `codex/default` 以及 Codex CLI 当前账号可用并标记为可见的模型（luban 读取 `~/.codex/models_cache.json` 自动同步，未获取到缓存时回退到内置清单），实际可用性以账号和 Codex CLI 为准；也可用 `codex/<模型名>` 指定 CLI 支持的其他模型。
+`active` 选择模型，`reasoning_effort` 是该模型的二级推理强度，可写 `low`、`medium`、`high`、`xhigh`、`max`，支持的模型还可选 `ultra`；省略时使用 Codex CLI 的默认设置。运行 `luban` 即按配置启动，也可用 `luban --model codex/gpt-6-sol` 临时指定模型。在 TUI 中输入 `/models`，先选择 `codex` provider，再选择 Codex 模型和推理强度；选择结果会保存到 `~/.luban/node-preferences.json`，供下次启动使用。内置模型有 `codex/default` 以及 Codex CLI 当前账号可用并标记为可见的模型（luban 读取 `~/.codex/models_cache.json` 自动同步，未获取到缓存时回退到内置清单），实际可用性以账号和 Codex CLI 为准；也可用 `codex/<模型名>` 指定 CLI 支持的其他模型。
 
 `codex/default` 使用 `~/.codex/config.toml` 中的默认模型；未在 luban 中设置 `reasoning_effort` 时，也使用其中的默认推理强度，例如 `model_reasoning_effort = "high"`。`LUBAN_CODEX_EFFORT=xhigh luban` 可覆盖本次进程的推理强度。这个后端复用 Codex CLI 的登录状态，无需 OpenAI API key；登录失效时重新运行 `luban login codex`。当前每次模型调用会启动一次 CLI，回答在调用完成后显示，暂不支持图片附件。
 
@@ -436,7 +436,7 @@ luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或在 OpenCode �
 | 操作 | 作用 |
 |---|---|
 | `Shift+Tab` | 循环切换 AUTO / AGENT / ASK |
-| `Ctrl+P` | 打开模型选择器 |
+| `Ctrl+P` | 打开两级模型选择器：先选择 provider（显示模型数量），再选择组内模型；默认定位当前 provider 和模型，每级可输入过滤，`Esc` / `←` 返回上一级，provider 页 `Esc` 关闭 |
 | `Ctrl+O` | 打开会话选择器 |
 | `Ctrl+Y` | 复制上次回答到剪贴板（运行中也可用）；任意输出用终端 `Shift+拖选` 原生复制 |
 | `Ctrl+J` | 在输入框插入换行，多行任务/贴代码用 |
