@@ -5,6 +5,7 @@ import { createTranscriptLayout, transcriptLines, TranscriptLineView } from "./t
 import { buildTranscript } from "./transcript-blocks.js";
 import { listWindow } from "./scroll.js";
 import { displayWidth } from "./input-layout.js";
+import { selectedTranscriptText } from "./transcript-selection.js";
 
 const options = { expanded: true, width: 30 };
 describe("physical transcript rows", () => {
@@ -86,6 +87,50 @@ describe("physical transcript rows", () => {
     expect(line).toBeDefined();
     expect(line).toContain("│");
     expect(line).toContain("new code");
+  });
+
+  it("preserves Markdown styles across Chinese and emoji line wraps", () => {
+    const text = "**中文😀加粗内容继续** `inline-code-long`";
+    const rows = transcriptLines(buildTranscript([{ role: "assistant", content: text }], options), 10);
+    const styled = rows.filter(row => row.spans?.length);
+    expect(styled.length).toBeGreaterThan(2);
+    expect(styled.map(row => row.text).join("")).toBe("中文😀加粗内容继续 inline-code-long");
+    expect(styled.flatMap(row => row.spans ?? []).filter(span => span.bold).map(span => span.text).join("")).toBe("中文😀加粗内容继续");
+    expect(styled.flatMap(row => row.spans ?? []).filter(span => span.code).map(span => span.text).join("")).toBe("inline-code-long");
+    for (const row of styled) {
+      expect(row.spans!.map(span => span.text).join("")).toBe(row.text);
+      expect(displayWidth(row.text)).toBeLessThanOrEqual(10);
+    }
+    const output = renderToString(<Box flexDirection="column">{rows.map(row => <TranscriptLineView key={row.id} line={row} />)}</Box>, { columns: 10 });
+    expect(output.split("\n")).toHaveLength(rows.length);
+    expect(output).not.toContain("**");
+    expect(output).not.toContain("`");
+  });
+
+  it("separates paragraphs and indents wrapped numbered list items", () => {
+    const text = "## 结果\n\n已完成\n\n1. **abcdefghijklm**\n2. 下一项\n\n验证通过";
+    const rows = transcriptLines(buildTranscript([{ role: "assistant", content: text }], options), 12);
+    expect(rows.map(row => row.text)).toEqual([
+      "luban", "结果", "", "已完成", "",
+      "1. abcdefghi", "   jklm", "2. 下一项", "", "验证通过", "",
+    ]);
+    expect(rows.find(row => row.text === "   jklm")?.spans).toEqual([
+      { text: "   " }, { text: "jklm", bold: true },
+    ]);
+    const restored = JSON.parse(JSON.stringify([{ role: "assistant", content: text }]));
+    expect(transcriptLines(buildTranscript(restored, options), 12)).toEqual(rows);
+  });
+
+  it("copies formatted rows with link destinations and no style markers", () => {
+    const text = "**完成**：查看 [文档](https://example.com/docs) 和 `代码`";
+    const rows = transcriptLines(buildTranscript([{ role: "assistant", content: text }], options), 24);
+    const last = rows.length - 2;
+    const copied = selectedTranscriptText(rows.map(row => row.text), {
+      anchor: { row: 1, column: 0 },
+      focus: { row: last, column: displayWidth(rows[last]!.text) },
+    });
+    expect(copied).toBe(rows.slice(1, last + 1).map(row => row.text).join("\n"));
+    expect(copied.replaceAll("\n", "")).toBe("完成：查看 文档 (https://example.com/docs) 和 代码");
   });
 
   it("shows user text literally with an explicit speaker", () => {

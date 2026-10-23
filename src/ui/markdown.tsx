@@ -6,7 +6,7 @@ import { codeTokens, type TokenKind } from "./syntax.js";
 export type MarkdownBlock =
   | { kind: "paragraph"; content: string }
   | { kind: "heading"; content: string; level: number }
-  | { kind: "list"; content: string }
+  | { kind: "list"; content: string; marker?: string }
   | { kind: "quote"; content: string }
   | { kind: "code"; content: string; language: string }
   | { kind: "rule"; content: "" };
@@ -50,10 +50,10 @@ export function parseMarkdownBlocks(value: string): MarkdownBlock[] {
       blocks.push({ kind: "heading", content: heading[2]!, level: heading[1]!.length });
       continue;
     }
-    const list = line.match(/^\s*[-*+]\s+(.+)$/u);
+    const list = line.match(/^\s*(?:([-*+])|(\d+[.)]))\s+(.+)$/u);
     if (list) {
       flushParagraph();
-      blocks.push({ kind: "list", content: list[1]! });
+      blocks.push({ kind: "list", content: list[3]!, ...(list[2] ? { marker: list[2] } : {}) });
       continue;
     }
     const quote = line.match(/^\s*>\s?(.*)$/u);
@@ -74,21 +74,45 @@ export function parseMarkdownBlocks(value: string): MarkdownBlock[] {
   return blocks;
 }
 
+export interface MarkdownSpan {
+  text: string;
+  bold?: boolean;
+  code?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  link?: boolean;
+}
+
+/** Keep display text separate from styles so paging and selection use real columns. */
+export function parseMarkdownInline(value: string): MarkdownSpan[] {
+  const spans: MarkdownSpan[] = [];
+  const pattern = /`([^`\n]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\[([^\]\n]+)\]\(([^\s)]+)\)|~~([^~]+)~~|\*([^*\n]+)\*/gu;
+  let offset = 0;
+  for (const match of value.matchAll(pattern)) {
+    if (match.index > offset) spans.push({ text: value.slice(offset, match.index) });
+    if (match[1] !== undefined) spans.push({ text: match[1], code: true });
+    else if (match[2] !== undefined || match[3] !== undefined) {
+      spans.push(...parseMarkdownInline(match[2] ?? match[3]!).map(span => ({ ...span, bold: true })));
+    } else if (match[4] !== undefined) {
+      spans.push(...parseMarkdownInline(match[4]).map(span => ({ ...span, link: true })));
+      // Terminal output and copied selections must retain the destination.
+      if (match[4] !== match[5]) spans.push({ text: ` (${match[5]})`, link: true });
+    } else if (match[6] !== undefined) spans.push({ text: match[6], strike: true });
+    else spans.push({ text: match[7]!, italic: true });
+    offset = match.index + match[0].length;
+  }
+  if (offset < value.length) spans.push({ text: value.slice(offset) });
+  return spans;
+}
+
+export function MarkdownInlineView({ spans }: { spans: MarkdownSpan[] }) {
+  return <>{spans.map((span, index) => <Text key={index}
+    color={span.code ? theme.code : span.link ? theme.accent : span.bold ? theme.primary : undefined}
+    bold={span.bold} italic={span.italic} strikethrough={span.strike} underline={span.link}>{span.text}</Text>)}</>;
+}
+
 function InlineText({ value }: { value: string }) {
-  const pieces = value.split(/(`[^`]+`|\*\*[^*]+\*\*)/gu);
-  return (
-    <Text color={theme.text} wrap="wrap">
-      {pieces.map((piece, index) => {
-        if (piece.startsWith("`") && piece.endsWith("`")) {
-          return <Text key={index} color={theme.code}>{piece.slice(1, -1)}</Text>;
-        }
-        if (piece.startsWith("**") && piece.endsWith("**")) {
-          return <Text key={index} color={theme.primary} bold>{piece.slice(2, -2)}</Text>;
-        }
-        return piece;
-      })}
-    </Text>
-  );
+  return <Text color={theme.text} wrap="wrap"><MarkdownInlineView spans={parseMarkdownInline(value)} /></Text>;
 }
 const tokenColors: Record<TokenKind, string> = {
   keyword: theme.purple, variable: "#9cdcfe", function: "#ffd580",
@@ -109,7 +133,7 @@ export function MarkdownView({ content }: { content: string }) {
           return <Box key={index} marginTop={index ? 1 : 0}><Text color={theme.primary} bold>{block.content}</Text></Box>;
         }
         if (block.kind === "list") {
-          return <Box key={index}><Text color={theme.muted}>• </Text><InlineText value={block.content} /></Box>;
+          return <Box key={index}><Text color={theme.muted}>{block.marker ?? "•"} </Text><InlineText value={block.content} /></Box>;
         }
         if (block.kind === "quote") {
           return <Box key={index}><Text color={theme.dim}>┃ </Text><Text color={theme.muted}>{block.content}</Text></Box>;
