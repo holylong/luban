@@ -281,8 +281,13 @@ interface QuestionRequest {
 }
 
 interface DialogState {
-  type: "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme";
+  type: "model-providers" | "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme";
   index: number;
+  provider?: string;
+  parentIndex?: number;
+  parentQuery?: string;
+  modelIndex?: number;
+  modelQuery?: string;
   modelId?: string;
   creditId?: string;
   title?: string;
@@ -653,12 +658,14 @@ export function SelectDialog({
   index,
   query,
   activeKey,
+  back = false,
 }: {
   title: string;
   rows: Array<{ key: string; title: string; detail: string; project?: string; date?: string; turns?: number; color?: string }>;
   index: number;
   query?: string;
   activeKey?: string;
+  back?: boolean;
 }) {
   const visibleRows = 12;
   const start = Math.min(Math.max(0, index - Math.floor(visibleRows / 2)), Math.max(0, rows.length - visibleRows));
@@ -678,7 +685,7 @@ export function SelectDialog({
       ))}
       {start + visibleRows < rows.length ? <Text color={theme.dim}>  ↓ 还有 {rows.length - start - visibleRows} 条</Text> : null}
       {!rows.length ? <Text color={theme.dim}>无匹配 · 退格修改过滤</Text> : null}
-      <Box marginTop={1}><Text color={theme.dim}>↑↓ navigate · enter select · esc close · 直接输入过滤</Text></Box>
+      <Box marginTop={1}><Text color={theme.dim}>↑↓ navigate · enter select · {back ? "← / esc back" : "esc close"} · 直接输入过滤</Text></Box>
     </Box>
   );
 }
@@ -801,6 +808,15 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const statusAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => { statusAbortRef.current?.abort(); }, []);
   const [dialogQuery, setDialogQuery] = useState("");
+  const modelProviders = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const model of config.models) counts.set(model.provider, (counts.get(model.provider) ?? 0) + 1);
+    return [...counts].map(([provider, count]) => ({ key: provider, title: provider, detail: `${count} 个模型 ›` }));
+  }, [config.models]);
+  const openModels = () => {
+    setDialogQuery("");
+    setDialog({ type: "model-providers", index: Math.max(0, modelProviders.findIndex(item => item.key === config.model.provider)) });
+  };
   /** Counts palette swaps: the colors live outside React, so a change needs a frame. */
   const [themeRevision, setThemeRevision] = useState(0);
   /** Theme that was active when the picker opened, so Esc can put it back. */
@@ -1716,7 +1732,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setNotice(`Branched as ${forked.title} · ${forked.messages.length} messages`);
       return;
     }
-    if (command === "/models") { setDialogQuery(""); setDialog({ type: "models", index: Math.max(0, config.models.findIndex((item) => item.id === config.model.id)) }); return; }
+    if (command === "/models") { openModels(); return; }
     if (command === "/sessions") { await openSessions(); return; }
     if (command === "/mode") {
       if (MODES.includes(argument as AgentMode)) {
@@ -2225,7 +2241,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           setDialog(current => current?.type === "codex-effort"
             ? { ...current, index: (current.index + delta + efforts.length) % efforts.length } : current);
         }
-        else if (key.escape) setDialog({ type: "models", index: Math.max(0, config.models.findIndex((item) => item.id === dialog.modelId)) });
+        else if (key.escape || key.leftArrow) {
+          setDialog({ ...dialog, type: "models", index: dialog.modelIndex ?? 0 });
+          setDialogQuery(dialog.modelQuery ?? "");
+        }
         else if (key.return) {
           const selected = efforts[dialog.index];
           if (model && selected) switchModel({ ...model, reasoningEffort: selected.value });
@@ -2234,21 +2253,35 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         return;
       }
       const needle = dialogQuery.trim().toLowerCase();
-      const visibleModels = needle
-        ? config.models.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(needle))
-        : config.models;
       const visibleSessions = sessionChoices(sessions, sessionRef.current.id, needle);
-      const visibleCount = dialog.type === "models" ? visibleModels.length : dialog.type === "sessions" ? visibleSessions.length : 1;
+      const visibleCount = dialog.type === "model-providers" ? providerRows.length
+        : dialog.type === "models" ? modelRows.length : dialog.type === "sessions" ? visibleSessions.length : 1;
+      if (dialog.type === "models" && (key.escape || key.leftArrow)) {
+        setDialog({ type: "model-providers", index: dialog.parentIndex ?? 0 });
+        setDialogQuery(dialog.parentQuery ?? "");
+        return;
+      }
       const count = Math.max(1, visibleCount);
       if (key.upArrow) setDialog({ ...dialog, index: (dialog.index - 1 + count) % count });
       else if (key.downArrow) setDialog({ ...dialog, index: (dialog.index + 1) % count });
       else if (key.escape) { setDialog(null); setDialogQuery(""); }
       else if (key.return) {
+        if (dialog.type === "model-providers") {
+          const provider = providerRows[dialog.index]?.key;
+          if (!provider) return;
+          const models = config.models.filter(item => item.provider === provider);
+          setDialog({ type: "models", provider, index: Math.max(0, models.findIndex(item => item.id === config.model.id)),
+            parentIndex: dialog.index, parentQuery: dialogQuery });
+          setDialogQuery("");
+          return;
+        }
         if (dialog.type === "models") {
-          const target = visibleModels[dialog.index];
+          const target = config.models.find(item => item.id === modelRows[dialog.index]?.key);
+          if (!target) return;
           if (target?.api === "codex") {
             const efforts = CODEX_EFFORTS.filter((item) => item.value !== "ultra" || target.model !== "gpt-6-luna");
-            setDialog({ type: "codex-effort", index: Math.max(0, efforts.findIndex((item) => item.value === target.reasoningEffort)), modelId: target.id });
+            setDialog({ ...dialog, type: "codex-effort", index: Math.max(0, efforts.findIndex((item) => item.value === target.reasoningEffort)),
+              modelId: target.id, modelIndex: dialog.index, modelQuery: dialogQuery });
             setDialogQuery("");
             return;
           }
@@ -2348,11 +2381,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setNotice(`Mode switched to ${next.toUpperCase()}`);
       return;
     }
-    if (key.ctrl && character === "p") {
-      setDialogQuery("");
-      setDialog({ type: "models", index: Math.max(0, config.models.findIndex((item) => item.id === config.model.id)) });
-      return;
-    }
+    if (key.ctrl && character === "p") { openModels(); return; }
     if (!running && key.ctrl && character === "o") { setDialogQuery(""); void openSessions(); return; }
     if (key.tab && !key.shift && commandOptions.length) {
       const match = commandOptions[Math.min(commandIndex, commandOptions.length - 1)];
@@ -2393,7 +2422,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     turns: record.messages.filter((message) => message.role === "user").length,
     detail: `${record.project} · ${record.updatedAt.slice(0, 16).replace("T", " ")}`,
   }));
-  const modelRows = filterDialogRows(config.models.map((model) => ({ key: model.id, title: model.name,
+  const providerRows = filterDialogRows(modelProviders);
+  const modelRows = filterDialogRows(config.models.filter(model => model.provider === dialog?.provider).map((model) => ({ key: model.id, title: model.name,
     detail: `${model.id}${model.provider === "opencode-zen" && !model.apiKey && !isZenFreeModel(model) ? " · 需连接 Zen / 设置 OPENCODE_ZEN_API_KEY" : ""}${model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}` })));
   const rows = terminalSize.rows;
   const narrow = terminalSize.columns < 110;
@@ -2517,8 +2547,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         paddingBottom={1}
         justifyContent={dialog ? "flex-start" : "flex-end"}
       >
-        {dialog?.type === "models" ? <SelectDialog title="Models" rows={modelRows} index={Math.min(dialog.index, Math.max(0, modelRows.length - 1))} query={dialogQuery} /> : null}
-        {dialog?.type === "codex-effort" ? <SelectDialog title={`Reasoning · ${config.models.find((item) => item.id === dialog.modelId)?.name ?? "Codex"}`} rows={CODEX_EFFORTS.filter((item) => item.value !== "ultra" || config.models.find((model) => model.id === dialog.modelId)?.model !== "gpt-6-luna").map((item) => ({ key: item.value ?? "default", title: item.title, detail: item.detail }))} index={dialog.index} query="" /> : null}
+        {dialog?.type === "model-providers" ? <SelectDialog title="Model providers" rows={providerRows} index={Math.min(dialog.index, Math.max(0, providerRows.length - 1))} query={dialogQuery} activeKey={config.model.provider} /> : null}
+        {dialog?.type === "models" ? <SelectDialog title={`Models · ${dialog.provider}`} rows={modelRows} index={Math.min(dialog.index, Math.max(0, modelRows.length - 1))} query={dialogQuery} activeKey={config.model.id} back /> : null}
+        {dialog?.type === "codex-effort" ? <SelectDialog title={`Reasoning · ${config.models.find((item) => item.id === dialog.modelId)?.name ?? "Codex"}`} rows={CODEX_EFFORTS.filter((item) => item.value !== "ultra" || config.models.find((model) => model.id === dialog.modelId)?.model !== "gpt-6-luna").map((item) => ({ key: item.value ?? "default", title: item.title, detail: item.detail }))} index={dialog.index} query="" back /> : null}
         {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} /> : null}
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}

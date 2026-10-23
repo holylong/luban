@@ -35,7 +35,10 @@ it("opens reasoning effort after choosing a Codex model and saves it", async () 
     stdin.write("/models");
     await new Promise((resolve) => setTimeout(resolve, 80));
     stdin.write("\r");
-    await expect.poll(() => frame).toContain("Models");
+    await expect.poll(() => frame).toContain("Model providers");
+    expect(frame).toContain("› codex");
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("Models · codex");
     stdin.write("\u001b[B");
     await expect.poll(() => frame).toContain("› gpt-6-astra");
     stdin.write("\u001b[B");
@@ -43,6 +46,11 @@ it("opens reasoning effort after choosing a Codex model and saves it", async () 
     stdin.write("\r");
     await expect.poll(() => frame).toContain("Reasoning · gpt-6-sol");
     expect(frame).toContain("Extra high");
+    stdin.write("\u001b");
+    await expect.poll(() => frame).toContain("Models · codex");
+    expect(frame).toContain("› gpt-6-sol");
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("Reasoning · gpt-6-sol");
     for (const title of ["Low", "Medium", "High", "Extra high"]) {
       stdin.write("\u001b[B");
       await expect.poll(() => frame).toContain(`› ${title}`);
