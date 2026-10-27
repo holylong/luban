@@ -197,6 +197,11 @@ function resolveKey(providerName: string, provider: JsonObject, fallback: JsonOb
     keyEnv ? process.env[keyEnv] : "", process.env.OPENCODE_ZEN_API_KEY,
     shared, opencodeAuthKey("opencode"),
   );
+  if (["codex", "opencode-go", "deepseek", "dashscope", "qwen-local", "strata-local"].includes(providerName)) return text(
+    provider.api_key, provider.apiKey, options.api_key, options.apiKey,
+    keyEnv ? process.env[keyEnv] : "", process.env[`${envKey(providerName)}_API_KEY`],
+    ...(providerName === "opencode-go" ? [process.env.OPENCODE_API_KEY, shared, opencodeAuthKey()] : []),
+  );
   const opencode = providerName === "opencode-go";
   return text(
     provider.api_key,
@@ -320,7 +325,7 @@ const OPENCODE_ZEN_FREE_MODELS: Record<string, { name: string; api: "openai" | "
  */
 const CODEX_FALLBACK_MODELS = [
   "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
-  "gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+  "gpt-6.1-sol", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 ];
 
 function codexModelCatalog(): Record<string, JsonObject> {
@@ -347,13 +352,9 @@ function codexModelCatalog(): Record<string, JsonObject> {
 }
 
 /**
- * Providers luban knows without any config file. Subscription providers are
- * offered only after login or explicit selection.
+ * Catalog visibility is independent of credentials, including on fresh installs.
  */
-function builtinProviders(includeCodex = false, session = "", shared = ""): Record<string, JsonObject> {
-  const goKey = text(process.env.OPENCODE_GO_API_KEY, process.env.OPENCODE_API_KEY, opencodeAuthKey(), shared);
-  // OPENCODE_API_KEY has historically selected Go in luban; only a Zen-specific
-  // credential may auto-register Zen, so an existing Go setup keeps its models.
+function builtinProviders(session = "", shared = ""): Record<string, JsonObject> {
   const zenKey = text(session, process.env.OPENCODE_ZEN_API_KEY, opencodeAuthKey("opencode"), shared);
   // Keep model visibility independent of whether a Console login was found.
   const zenCatalog = {
@@ -361,11 +362,11 @@ function builtinProviders(includeCodex = false, session = "", shared = ""): Reco
     ...OPENCODE_ZEN_FREE_MODELS,
   };
   return {
-    ...(includeCodex ? { codex: {
+    codex: {
       api: "codex",
       models: codexModelCatalog(),
-    } } : {}),
-    ...(goKey ? { "opencode-go": {
+    },
+    "opencode-go": {
       api_key_env: "OPENCODE_API_KEY",
       base_url: "https://opencode.ai/zen/go/v1",
       headers: { "x-opencode-client": "luban" },
@@ -378,7 +379,7 @@ function builtinProviders(includeCodex = false, session = "", shared = ""): Reco
           ...(model.temperature === false ? { temperature: false } : {}),
         },
       }])),
-    } } : {}),
+    },
     "opencode-zen": {
       api_key: zenKey,
       base_url: "https://opencode.ai/zen/v1",
@@ -392,6 +393,26 @@ function builtinProviders(includeCodex = false, session = "", shared = ""): Reco
           ...(model.temperature === false ? { temperature: false } : {}),
         },
       }])),
+    },
+    deepseek: {
+      api_key_env: "DEEPSEEK_API_KEY",
+      base_url: "https://api.deepseek.com/chat/completions",
+      models: ["deepseek-flash", "deepseek-v4-pro"],
+    },
+    dashscope: {
+      api_key_env: "DASHSCOPE_API_KEY",
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      models: ["deepseek-v4-flash-0731", "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-max", "glm5.3-flash"],
+    },
+    "qwen-local": {
+      api_key_env: "QWEN_LOCAL_API_KEY",
+      base_url: "http://127.0.0.1:8000/v1",
+      models: ["qwen3.8-flash-next"],
+    },
+    "strata-local": {
+      api_key_env: "STRATA_LOCAL_API_KEY",
+      base_url: "http://127.0.0.1:8080/v1",
+      models: ["qwen3.8-flash-next-iq2_xs"],
     },
   };
 }
@@ -540,21 +561,15 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const mergedModel = { ...record(globalConfig.model), ...record(projectConfig.model) };
   const preferences = readJson(join(home, "node-preferences.json"));
   const requestedModel = text(options.model, process.env.LUBAN_MODEL, preferences.model, mergedModel.active, mergedModel.model);
-  // A config that describes a single model (Python luban's style) keeps that
-  // model as the default. Adding OpenCode Go there would silently outrank it,
-  // so built-ins are only skipped when the config relies on that single-model
-  // fallback; an explicit provider list or an OpenCode Go selection gets them.
   const singleModel = text(mergedModel.model, mergedModel.base_url, mergedModel.baseURL);
   const hasExplicitProviders = Object.keys(explicitProviders).length > 0;
-  const wantsBuiltin = hasExplicitProviders || !singleModel
-    || ["opencode-go/", "opencode-zen/"].some(prefix => requestedModel.toLowerCase().startsWith(prefix));
   const codexModelId = [options.model, process.env.LUBAN_MODEL, preferences.model, mergedModel.active]
     .find((value) => typeof value === "string" && value.toLowerCase().startsWith("codex/")) as string | undefined;
   const codexEnabled = preferences.codexEnabled === true || Boolean(codexModelId);
   // Read the Console session once: a refresh can cost a network round trip.
   const consoleSession = consoleAccessToken();
   const sharedOpenCode = sharedOpenCodeKey(explicitProviders);
-  const builtins = wantsBuiltin || codexEnabled ? builtinProviders(codexEnabled, consoleSession, sharedOpenCode) : {};
+  const builtins = builtinProviders(consoleSession, sharedOpenCode);
   // User providers stay first (and win) so defaults and ordering do not shift;
   // built-ins are appended only when the user has not defined that provider.
   const providers: JsonObject = { ...explicitProviders };
@@ -603,19 +618,24 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const storedEfforts = record(preferences.codexEfforts);
   const forcedEffort = codexEffort(process.env.LUBAN_CODEX_EFFORT);
   const configuredEffort = codexEffort(text(modelConfig.reasoning_effort, modelConfig.reasoningEffort));
-  // A fresh install must keep its historical fallback as the active model;
-  // an unconnected Zen catalog is visible in /models but cannot be the default.
-  const fallbackModels = !hasExplicitProviders && Object.keys(providers).length === 1
-    && "opencode-zen" in providers && !text(record(providers["opencode-zen"]).api_key)
+  // Preserve historical defaults independently of catalog visibility.
+  const goConnected = Boolean(text(process.env.OPENCODE_GO_API_KEY, process.env.OPENCODE_API_KEY, opencodeAuthKey(), sharedOpenCode));
+  const zenConnected = Boolean(text(record(builtins["opencode-zen"]).api_key));
+  const fallbackModels = !hasExplicitProviders && (singleModel || (!codexEnabled && !goConnected && !zenConnected))
     ? collectModels({ model: mergedModel }, consoleSession, sharedOpenCode) : [];
-  const models = [...fallbackModels, ...collectModels(raw, consoleSession, sharedOpenCode)].map((model) => {
+  const catalog = collectModels(raw, consoleSession, sharedOpenCode);
+  const defaultModel = fallbackModels[0] ?? (hasExplicitProviders ? catalog.find(model => model.provider in explicitProviders) : undefined)
+    ?? catalog.find(model => model.provider === (codexEnabled ? "codex" : goConnected ? "opencode-go" : "opencode-zen"))
+    ?? catalog[0]!;
+  const models = [...fallbackModels, ...catalog].map((model) => {
     if (model.api !== "codex") return model;
     const stored = storedEfforts[model.id];
     const effort = forcedEffort ?? (stored === "" ? undefined : codexEffort(stored) ?? configuredEffort);
     return effort ? { ...model, reasoningEffort: effort } : model;
   });
   const requested = requestedModel;
-  const active = models.find((item) => item.id === requested || item.model === requested) ?? models[0]!;
+  const active = models.find((item) => item.id === requested || item.model === requested)
+    ?? models.find(item => item.id === defaultModel.id)!;
   const nodeConfig = record(raw.node);
   const nodeFrontend = record(raw.node_frontend);
   const meshConfig = record(raw.mesh);

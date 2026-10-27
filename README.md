@@ -58,6 +58,8 @@ npm link
 
 以下配置示例按需选择；已有配置只需合并对应的 `model` 和 `providers` 字段。
 
+全新安装无需配置即可在 `/models` 中浏览 codex、opencode-go、opencode-zen、deepseek、dashscope、qwen-local 和 strata-local 的内置模型。实际调用前，Codex 需要安装 Codex CLI 并运行 `luban login codex`；云端服务需要本机对应凭据（DeepSeek / DashScope 使用 `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`）。本地 Qwen / Strata 默认连接 `127.0.0.1:8000/v1` / `127.0.0.1:8080/v1`，须自行启动服务或配置地址。模型目录随安装包分发，不包含开发机器的密钥；已有默认模型和自定义 provider 配置继续生效。
+
 ### OpenCode Go / Zen
 
 先登录 OpenCode 控制台，开通 Go 或启用 Zen 并复制 API key。[Go](https://opencode.ai/docs/go/) 是订阅服务，[Zen](https://opencode.ai/docs/zen/) 按量计费。

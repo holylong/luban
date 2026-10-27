@@ -378,7 +378,7 @@ describe("config", () => {
     expect(go.find((item) => item.id === "opencode-go/qwen3.8-flash")?.api).toBe("anthropic");
   });
 
-  it("registers Zen metered models from its own key without enabling Go", async () => {
+  it("registers Zen credentials while keeping Go visible", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opencode-zen-"));
     const workspace = join(home, "project");
     await mkdir(workspace);
@@ -388,7 +388,8 @@ describe("config", () => {
     expect(config.model.baseUrl).toBe("https://opencode.ai/zen/v1");
     expect(config.model.apiKey).toBe("sk-zen-test");
     expect(config.model.api).toBe("openai");
-    expect(config.models.some(item => item.provider === "opencode-go")).toBe(false);
+    expect(config.models.some(item => item.provider === "opencode-go")).toBe(true);
+    expect(config.models.find(item => item.provider === "opencode-go")?.apiKey).toBe("");
     expect(config.models.find(item => item.id === "opencode-zen/gpt-6-luna")?.api).toBe("responses");
     expect(config.models.some(item => item.id === "opencode-zen/ling-3.1-flash-free")).toBe(true);
   });
@@ -579,12 +580,23 @@ describe("config", () => {
     expect(config.models.some((item) => item.provider === "opencode-go")).toBe(true);
   });
 
-  it("does not register OpenCode Go without a credential", async () => {
+  it("lists all shipped providers without credentials and preserves the legacy default", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opencode-none-"));
-    const workspace = join(home, "project");
-    await mkdir(workspace);
     process.env.LUBAN_HOME = home;
-    expect(loadConfig({ workspace }).models.some((item) => item.provider === "opencode-go")).toBe(false);
+    const config = loadConfig({ workspace: home });
+    for (const provider of ["codex", "opencode-go", "opencode-zen", "deepseek", "dashscope", "qwen-local", "strata-local"]) {
+      expect(config.models.some(item => item.provider === provider)).toBe(true);
+    }
+    expect(config.model.id).toBe("gpt-4.1-mini");
+    expect(config.models.find(item => item.id === "codex/gpt-6.1-terra")?.api).toBe("codex");
+    expect(loadConfig({ workspace: home, model: "opencode-go/gpt-6-luna" }).model.api).toBe("responses");
+    expect(loadConfig({ workspace: home, model: "opencode-go/qwen3.8-flash" }).model.api).toBe("anthropic");
+    await writeFile(join(home, "config.json"), JSON.stringify({ model: { model: "legacy-local", base_url: "http://localhost:1234/v1" } }));
+    const legacy = loadConfig({ workspace: home });
+    expect(legacy.model).toMatchObject({ id: "legacy-local", baseUrl: "http://localhost:1234/v1" });
+    expect(legacy.models.some(item => item.provider === "codex")).toBe(true);
+    expect(legacy.models.some(item => item.provider === "opencode-go")).toBe(true);
+    expect(loadConfig({ workspace: home, model: "codex/default" }).model.api).toBe("codex");
   });
 
   it("lists Zen models without a key but keeps the default model and does not borrow an OpenAI key", async () => {
@@ -599,6 +611,9 @@ describe("config", () => {
       expect(config.model.id).toBe("gpt-4.1-mini");
       expect(config.models.some(item => item.id === "opencode-zen/gpt-6-luna")).toBe(true);
       expect(config.models.find(item => item.provider === "opencode-zen")?.apiKey).toBe("");
+      for (const provider of ["opencode-go", "codex", "dashscope", "qwen-local", "strata-local"]) {
+        expect(config.models.find(item => item.provider === provider)?.apiKey).not.toBe("sk-openai-not-zen");
+      }
     } finally {
       if (oldOpenAI === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = oldOpenAI;
