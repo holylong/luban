@@ -27,6 +27,8 @@ jobs:
       # Publish the tail of the test log into the job summary so a red release
       # run is diagnosable without admin log access.
       - name: Run tests
+        env:
+          NO_COLOR: "1"
         run: |
           set +e
           # Two-core runners are easy to starve: retry flakes before failing.
@@ -39,6 +41,12 @@ jobs:
             tail -160 vitest.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # Also surface the failing suites as check annotations: the summary is
+          # not readable without admin rights, annotations are.
+          grep -E '^ FAIL |^ Tests +[0-9]+ failed|^ Test Files +[0-9]+ failed' vitest.log |
+            head -40 | while IFS= read -r line; do
+              echo "::error title=vitest::$line"
+            done
           tail -40 vitest.log
           exit $status
 
