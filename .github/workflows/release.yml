@@ -291,3 +291,43 @@ jobs:
           set -e
           test "$uploaded" = "1"
           test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -ge 2
+
+  notes:
+    # Every packaging job creates the release with its own notes, so the body
+    # ended up describing whichever platform published first. Rewrite it once
+    # with the full list after all packages are uploaded.
+    needs: [linux, windows, macos]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Rewrite the release body with every platform
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          cat > notes.md <<EOF
+          **Linux**（\`.deb\`，安装后直接运行）
+
+          - \`luban-cli_${version}_amd64.deb\`：终端版，安装后运行 \`luban\` 或 \`luban-cli\`。
+          - \`luban-desktop_${version}_amd64.deb\`：图形桌面版，安装后运行 \`luban-desktop\`。
+
+          **Windows x64**（ZIP，解压即用，已内置 Node.js）
+
+          - \`luban-cli-${version}-win-x64.zip\`：解压后运行 \`luban.cmd\`。
+          - \`luban-desktop-${version}-win-x64.zip\`：解压后运行 \`luban-desktop.cmd\`（含 \`luban.cmd\`）。
+
+          **macOS**（ZIP，解压即用，已内置 Node.js；x64 与 arm64 各一份）
+
+          - \`luban-cli-${version}-mac-x64.zip\` / \`luban-cli-${version}-mac-arm64.zip\`：解压后运行 \`./luban\`。
+          - \`luban-desktop-${version}-mac-x64.zip\` / \`luban-desktop-${version}-mac-arm64.zip\`：解压后打开 \`luban Desktop.app\`（同时提供 \`./luban\`）。
+
+          macOS 包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
+
+          配置目录：Linux/macOS 为 \`~/.luban/config.json\`，Windows 为 \`%USERPROFILE%\\.luban\\config.json\`。
+          EOF
+          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
