@@ -53,6 +53,7 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
 - [安装](#安装)
 - [配置](#配置)
 - [日常交互](#日常交互)
+- [工作日报、周报、月报与年报](#工作日报周报月报与年报)
 - [运行时的实时反馈](#运行时的实时反馈)
 - [速度与规划](#速度与规划)
 - [局域网协作](#局域网协作)
@@ -169,7 +170,18 @@ Windows 包是自带 Node.js 的 zip，解压后即可运行，不写注册表�
 
 在 Windows x64 上运行 `npm ci && npm run package:windows`，产物在 `release/`。也可以单独运行 `npm run package:windows:cli` 或 `npm run package:windows:desktop`。
 
-在 macOS（x64 或 arm64）上运行 `npm ci && node node_modules/electron/install.js && npm run package:macos`，会在 `release/` 生成 `luban-cli-<version>-mac-<arch>.zip` 与 `luban-desktop-<version>-mac-<arch>.zip`；也可单独运行 `npm run package:macos:cli` 或 `npm run package:macos:desktop`。桌面包内是重新签名的（ad-hoc）`luban Desktop.app`，其 `Contents/Resources/app` 会把内置的 `node` 与 `dist/cli.js` 传给桌面主进程，因此从 Finder 双击也能启动。
+### macOS 便携包（x64 / arm64）
+
+macOS 包同样是自带 Node.js 的 zip，按 CPU 架构下载后解压即可：
+
+| 文件名 | 入口 | 内容 |
+| --- | --- | --- |
+| `luban-cli-<版本>-mac-<arch>.zip` | `./luban` | 终端 Agent，内置 Node.js |
+| `luban-desktop-<版本>-mac-<arch>.zip` | 打开 `luban Desktop.app`，或 `./luban-desktop` | 图形工作台，内置 Node.js 和 Electron，同时包含 `./luban` |
+
+`<arch>` 为 `x64` 或 `arm64`（Apple Silicon 用 `arm64`）。安装包为 ad-hoc 签名，从浏览器下载后首次打开若被 Gatekeeper 拦截，执行 `xattr -dr com.apple.quarantine .` 即可。
+
+维护者在 macOS 上运行 `npm ci && node node_modules/electron/install.js && npm run package:macos`，会在 `release/` 生成两份 zip；也可单独运行 `npm run package:macos:cli` 或 `npm run package:macos:desktop`。桌面包内是重新签名的 `luban Desktop.app`，其 `Contents/Resources/app` 会把内置的 `node` 与 `dist/cli.js` 传给桌面主进程，因此从 Finder 双击也能启动。
 
 ### 从源码安装
 
@@ -562,6 +574,29 @@ luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或在 OpenCode �
 以“继续”、单个词或大段日志开头的会话因此不会再被叫成“继续”。标题会写入会话记录并标记来源，
 之后的每次逐步保存都不会再用首行把它覆盖掉；模型不可用或回答不像标题时保留原有首行标题，
 同一会话也不会为此反复重试。这次调用只产生一次很小的 token 开销，照常计入底栏计数。
+
+### 皮肤与加载宠物
+
+在 TUI 输入 `/skin`（也可用 `/theme`）打开皮肤选择器，↑/↓ 即时预览，Enter 保存，Esc 还原。`/skin ollobot` 切换为紫色 Ollo 宠物皮肤，`/skin midnight` 恢复默认；Nord、Dracula、樱花粉、浅色等配色也通过同一入口切换。选择会保存到 `~/.luban/node-preferences.json`，下次启动继续使用；也可用 `luban --theme ollobot` 或配置文件的 `theme` 设置。
+
+Ollobot 复用 lasini 的透明四帧跳跃素材，在本地或 Mesh 任务执行时于进度文字上方播放。终端使用 4 列 × 2 行的细点阵轮廓绘制，避免半格色块并减少占用；这是字符画，无法还原原图五官细节。保留阶段、耗时和停滞提示；窗口小于 80 列或 28 行时只显示原有进度文字。设置 `LUBAN_ANIMATION=0` 可显示静态宠物，屏幕阅读器模式只显示名称。此功能目前用于终端工作台。
+
+## 工作日报、周报、月报与年报
+
+在 TUI 输入 `/report daily`、`/report weekly`、`/report monthly` 或 `/report yearly`。可指定日期和输出文件，例如 `/report weekly 2026-10-20 reports/week.md`。默认汇总本机所有项目的 luban、Codex、Claude Code、OpenCode 会话，不限当前 session。
+
+```bash
+luban report daily
+luban report weekly --date 2026-10-20 -o reports/week.md
+luban report monthly --sources luban,codex --format json -o reports/month.json
+luban report yearly --date 2026-01-01
+```
+
+按本机时区划分自然日、周一至周日、自然月和自然年；日期用于选中所在周期。默认 Markdown 输出适合发给领导的工作日记或阶段汇报，按项目合并重复事项，整理工作内容、实际进展、问题及明确的后续安排，省略无资料的栏目，不附会话编号、工具来源和本地路径。周报、月报和年报按 P0 紧急且重要、P1 重要、P2 常规跟进三档组织，并在末尾列出本期硬节点（含日期与交付物，素材无明确日期时不编造）。长材料分批提炼后合并。正文通过当前配置的模型服务生成，会将所选时段的用户与助手文本发送给该服务；生成失败时不写入文件。Zen 免费模型要求请求携带编码工具，luban 会附带一个不会被调用的占位工具，因此免费模型同样可以生成工作日记。JSON 保留本机收集的原始素材、来源和读取说明，不调用模型。已存在的目标文件不会被覆盖，请使用新文件名。
+
+默认读取 `$LUBAN_HOME/sessions-node`（未设置时为 `~/.luban/sessions-node`）、`$CODEX_HOME`（默认 `~/.codex`）下的 sessions/archived_sessions、`$CLAUDE_CONFIG_DIR/projects`（默认 `~/.claude/projects`）、`$XDG_DATA_HOME/opencode`（默认 `~/.local/share/opencode`）中的旧 JSON 与 SQLite。CLI 支持 `--codex-home`、`--claude-home`、`--opencode-home` 指定其他数据目录。OpenCode SQLite 需要支持 `node:sqlite` 的 Node 22.5+；不可读或缺失来源会在 CLI 或 TUI 提示，并保留于 JSON 素材中。
+
+旧 luban 会话没有逐条消息时间时，按最后更新时间归档，生成时将其标为时间归属待核实，避免直接写成当期已完成成果；外部会话按消息时间过滤。模型根据会话素材整理，发送前请核对实际完成情况。未保存、已删除或保存在其他目录的会话无法自动恢复。
 
 ## 运行时的实时反馈
 
