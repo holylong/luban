@@ -19,6 +19,10 @@ coverage/
 # private deployment/ops files (systemd units, cert renewal, ssh helpers)
 .deploy/
 
+# local probe scratch (heap snapshots and replays can contain credentials)
+.probe/
+*.heapsnapshot
+
 # python bytecode
 __pycache__/
 *.pyc
