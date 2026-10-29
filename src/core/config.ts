@@ -197,7 +197,7 @@ function resolveKey(providerName: string, provider: JsonObject, fallback: JsonOb
     keyEnv ? process.env[keyEnv] : "", process.env.OPENCODE_ZEN_API_KEY,
     shared, opencodeAuthKey("opencode"),
   );
-  if (["codex", "opencode-go", "deepseek", "dashscope", "qwen-local", "strata-local"].includes(providerName)) return text(
+  if (["codex", "opendesign", "opencode-go", "deepseek", "dashscope", "qwen-local", "strata-local"].includes(providerName)) return text(
     provider.api_key, provider.apiKey, options.api_key, options.apiKey,
     keyEnv ? process.env[keyEnv] : "", process.env[`${envKey(providerName)}_API_KEY`],
     ...(providerName === "opencode-go" ? [process.env.OPENCODE_API_KEY, shared, opencodeAuthKey()] : []),
@@ -328,6 +328,32 @@ const CODEX_FALLBACK_MODELS = [
   "gpt-6.1-sol", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 ];
 
+/**
+ * Open Design's AMR gateway publishes every model on three protocols that share
+ * `https://amr-link.open-design.ai/v1`: Chat Completions, the Responses API used
+ * by Codex, and the Anthropic Messages API used by Claude Code. The catalog
+ * mirrors `/v1/models` (the gateway marks `deepseek-v4.1-flash` as its default)
+ * and routes Claude through Messages. No credential ships with the source: set
+ * `OPEN_DESIGN_API_KEY` or write `providers.opendesign.api_key`.
+ */
+const OPEN_DESIGN_MODELS: Record<string, { name: string; vision: boolean; api?: "openai" | "anthropic"; temperature?: boolean }> = {
+  "deepseek-v4.1-flash": { name: "DeepSeek V4.1 Flash", vision: true },
+  "deepseek-v4-flash": { name: "DeepSeek V4 Flash", vision: false },
+  "deepseek-v4-flash-vision-exp": { name: "DeepSeek V4 Flash Vision Exp", vision: true },
+  "deepseek-v4-pro": { name: "DeepSeek V4 Pro", vision: false },
+  // Claude is native on the Messages API that Claude Code speaks.
+  "claude-haiku-5.5": { name: "Claude Haiku 5.5", vision: true, api: "anthropic" },
+  "glm-5.3-flash": { name: "GLM-5.3-Flash", vision: true },
+  "glm-5.3-flashx": { name: "GLM-5.3-FlashX", vision: true },
+  // The gateway rejects an explicit temperature for GPT reasoning models.
+  "gpt-6-luna": { name: "GPT-6 Luna", vision: true, temperature: false },
+  "hy4-preview": { name: "Hy4 preview", vision: false },
+  "kimi-k2.7-code": { name: "Kimi K2.7 Code", vision: true },
+  "mimo-v2.6-flash": { name: "MiMo V2.6 Flash", vision: true },
+  "mimo-v2.6-pro": { name: "MiMo V2.6 Pro", vision: true },
+  "minimax-m3.1-flash": { name: "MiniMax M3.1 Flash", vision: true },
+};
+
 function codexModelCatalog(): Record<string, JsonObject> {
   const catalog: Record<string, JsonObject> = {
     default: { name: "Codex (CLI default)", capabilities: { vision: true, thinking: true, tools: true } },
@@ -388,6 +414,20 @@ function builtinProviders(session = "", shared = ""): Record<string, JsonObject>
         api: model.api,
         capabilities: {
           vision: "vision" in model ? model.vision : false,
+          thinking: true,
+          tools: true,
+          ...(model.temperature === false ? { temperature: false } : {}),
+        },
+      }])),
+    },
+    opendesign: {
+      api_key_env: "OPEN_DESIGN_API_KEY",
+      base_url: "https://amr-link.open-design.ai/v1",
+      models: Object.fromEntries(Object.entries(OPEN_DESIGN_MODELS).map(([id, model]) => [id, {
+        name: model.name,
+        api: model.api ?? "openai",
+        capabilities: {
+          vision: model.vision,
           thinking: true,
           tools: true,
           ...(model.temperature === false ? { temperature: false } : {}),
@@ -574,11 +614,12 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   // built-ins are appended only when the user has not defined that provider.
   const providers: JsonObject = { ...explicitProviders };
   for (const [name, definition] of Object.entries(builtins)) {
-    // A hand-written OpenCode block usually pins the endpoint and a couple of
-    // models, which used to hide the rest of the catalog. Merge the built-in
-    // model table in instead of dropping it; explicit entries win. An explicit
-    // model array remains a full override.
-    if (name in explicitProviders && (name === "opencode-zen" || name === "opencode-go")) {
+    // A hand-written OpenCode or Open Design block usually pins the endpoint and
+    // a couple of models (for example to switch one model to the Responses API),
+    // which used to hide the rest of the catalog. Merge the built-in model table
+    // in instead of dropping it; explicit entries win. An explicit model array
+    // remains a full override.
+    if (name in explicitProviders && (name === "opencode-zen" || name === "opencode-go" || name === "opendesign")) {
       providers[name] = mergeModelCatalog(record(explicitProviders[name]), definition);
       continue;
     }

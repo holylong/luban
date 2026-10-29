@@ -52,6 +52,26 @@
         }
       }
     },
+    "opendesign": {
+      "api_key_env": "OPEN_DESIGN_API_KEY",
+      "api_key": "",
+      "base_url": "https://amr-link.open-design.ai/v1",
+      "models": [
+        "deepseek-v4.1-flash",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4-pro",
+        "claude-haiku-5.5",
+        "glm-5.3-flash",
+        "glm-5.3-flashx",
+        "gpt-6-luna",
+        "hy4-preview",
+        "kimi-k2.7-code",
+        "mimo-v2.6-flash",
+        "mimo-v2.6-pro",
+        "minimax-m3.1-flash"
+      ]
+    },
     "deepseek": {
       "api_key": "",
       "api_key_env": "DEEPSEEK_API_KEY",

@@ -38,6 +38,14 @@ export interface ThemePalette {
   codeRemovedBackground: string;
 }
 
+export interface LoadingAnimation {
+  /** Packaged PNG atlas, relative to assets/. */
+  asset: string;
+  /** Normalized 1280 × 1280 atlas rectangles, in playback order. */
+  frames: readonly (readonly [number, number, number, number])[];
+  intervalMs: number;
+}
+
 export interface ThemeDefinition {
   /** Stable id used by config, `--theme`, and `/theme`. */
   id: string;
@@ -48,6 +56,8 @@ export interface ThemeDefinition {
   /** One line for the picker row. */
   description: string;
   palette: ThemePalette;
+  /** Skins can extend their palette with loading artwork. */
+  loadingAnimation?: LoadingAnimation;
 }
 
 /** The palette every consumer reads; replaced in place by `applyTheme`. */
@@ -188,6 +198,24 @@ export const THEMES: readonly ThemeDefinition[] = [
       yellow: "#f9e2af", red: "#f38ba8", text: "#cdd6f4", muted: "#a6adc8",
       dim: "#7f849c", border: "#45475a", code: "#a6e3a1", codeBackground: "#181825",
       codeAddedBackground: "#193a29", codeRemovedBackground: "#3d1c28",
+    },
+  },
+  {
+    id: "ollobot",
+    label: "Ollobot",
+    mode: "dark",
+    description: "Ollo 宠物 · 紫色夜空，加载时跳跃陪伴",
+    palette: {
+      ...theme,
+      background: "#140f1c", panel: "#1c1526", element: "#281d36", selected: "#372748",
+      primary: "#f2e8ff", accent: "#c4a7ff", purple: "#d5a6ff", green: "#8fdfb0",
+      text: "#e2d4f2", muted: "#b39fc6", dim: "#8b7799", border: "#42325a",
+      codeBackground: "#1f1729", codeAddedBackground: "#1c2e26", codeRemovedBackground: "#3a1a24",
+    },
+    loadingAnimation: {
+      asset: "skins/ollobot-jump.png",
+      frames: [[80, 35, 520, 580], [680, 30, 520, 560], [70, 640, 540, 560], [680, 695, 530, 500]],
+      intervalMs: 180,
     },
   },
   {

@@ -63,7 +63,7 @@ it("lists the palettes, switches on a name, and persists the choice", async () =
     expect(frame).toContain("即时切换并写入");
     // The catalog is longer than a terminal, so the list is windowed and says so
     // rather than silently dropping the schemes past the bottom edge.
-    expect(frame).toContain("↓ 还有 2 个配色");
+    expect(frame).toContain("↓ 还有 3 个配色");
     expect(frame).not.toContain("↑ 还有");
 
     // Scrolling to the end keeps the highlighted row on screen: the palette is
@@ -115,6 +115,24 @@ it("lists the palettes, switches on a name, and persists the choice", async () =
     await expect.poll(() => frame).not.toContain("主题 · ");
     expect(activeThemeId()).toBe("nord");
     await expect.poll(savedTheme).toContain('"theme": "nord"');
+
+    // Skin commands share preview, rollback, persistence and theme compatibility.
+    await type("/skin ollobot");
+    await expect.poll(() => frame).toContain("主题 ollobot");
+    expect(activeThemeId()).toBe("ollobot");
+    expect(theme.background).toBe("#140f1c");
+    await expect.poll(savedTheme).toContain('"theme": "ollobot"');
+    expect(loadConfig({ workspace }).theme).toBe("ollobot");
+    await type("/skin");
+    await expect.poll(() => frame).toContain("主题 · ollobot");
+    stdin.write("\u001b[B");
+    await expect.poll(() => frame).toContain("主题 · amber");
+    stdin.write("\u001b");
+    await expect.poll(() => frame).not.toContain("主题 · ");
+    expect(activeThemeId()).toBe("ollobot");
+    await type("/skin midnight");
+    await expect.poll(() => frame).toContain("主题 midnight");
+    expect(activeThemeId()).toBe("midnight");
 
     // 5. A name switches directly; a light scheme is reachable by alias, and it
     // really is a bright canvas.

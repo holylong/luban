@@ -21,6 +21,12 @@ luban 是一个 AI 编程助手，帮助你阅读代码、修改文件、运行�
 - **自由选择模型**：支持云端与本地模型，也可复用 Codex CLI 的账号登录；在工作台中切换模型和推理强度。
 - **按需扩展**：通过技能和 MCP 接入专用工具，也可通过编辑器集成在开发环境中使用。
 
+## 终端皮肤与加载宠物
+
+在 TUI 输入 `/skin`（也可用 `/theme`）打开皮肤选择器，↑/↓ 即时预览，Enter 保存，Esc 还原。`/skin ollobot` 切换为紫色 Ollo 宠物皮肤，`/skin midnight` 恢复默认；Nord、Dracula、樱花粉、浅色等现有配色也可通过同一入口切换。选择会保存到 `~/.luban/node-preferences.json`，下次启动继续使用；也可通过 `luban --theme ollobot` 或配置文件的 `theme` 设置。
+
+Ollobot 复用 lasini 的透明四帧跳跃素材，在本地或 Mesh 任务执行时于进度文字上方播放。终端使用 4 列 × 2 行的细点阵轮廓绘制，避免半格色块并减少占用；这是字符画，无法还原原图五官细节。保留阶段、耗时和停滞提示；窗口小于 80 列或 28 行时只显示原有进度文字。设置 `LUBAN_ANIMATION=0` 可显示静态宠物，屏幕阅读器模式只显示名称。此功能目前用于终端工作台。
+
 ## 工作日报、周报、月报与年报
 
 在 TUI 输入 `/report daily`、`/report weekly`、`/report monthly` 或 `/report yearly`。可指定日期和输出文件，例如 `/report weekly 2026-10-20 reports/week.md`。默认汇总本机所有项目的 luban、Codex、Claude Code、OpenCode 会话，不限当前 session。
@@ -58,7 +64,7 @@ npm link
 
 以下配置示例按需选择；已有配置只需合并对应的 `model` 和 `providers` 字段。
 
-全新安装无需配置即可在 `/models` 中浏览 codex、opencode-go、opencode-zen、deepseek、dashscope、qwen-local 和 strata-local 的内置模型。实际调用前，Codex 需要安装 Codex CLI 并运行 `luban login codex`；云端服务需要本机对应凭据（DeepSeek / DashScope 使用 `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`）。本地 Qwen / Strata 默认连接 `127.0.0.1:8000/v1` / `127.0.0.1:8080/v1`，须自行启动服务或配置地址。模型目录随安装包分发，不包含开发机器的密钥；已有默认模型和自定义 provider 配置继续生效。
+全新安装无需配置即可在 `/models` 中浏览 codex、opendesign、opencode-go、opencode-zen、deepseek、dashscope、qwen-local 和 strata-local 的内置模型。实际调用前，Codex 需要安装 Codex CLI 并运行 `luban login codex`；云端服务需要本机对应凭据（DeepSeek / DashScope 使用 `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`）。Open Design 的 `opendesign` 内置了默认地址 `https://amr-link.open-design.ai/v1`，设置 `OPEN_DESIGN_API_KEY` 后即可选择。本地 Qwen / Strata 默认连接 `127.0.0.1:8000/v1` / `127.0.0.1:8080/v1`，须自行启动服务或配置地址。模型目录随安装包分发；已有默认模型和自定义 provider 配置继续生效。
 
 ### OpenCode Go / Zen
 
@@ -90,6 +96,74 @@ luban --model opencode-zen/gpt-6-luna
 ```
 
 使用 Zen 时把 `active` 换成 `opencode-zen/gpt-6-luna`；其余 Zen 模型可在 `providers.opencode-zen.models` 中添加，配置方式见下方 API 示例。Go 地址为 `https://opencode.ai/zen/go/v1`，Zen 地址为 `https://opencode.ai/zen/v1`，内置服务无需重复填写地址。
+
+### Open Design（opendesign）
+
+luban 内置 Open Design 的 AMR 网关，默认地址 `https://amr-link.open-design.ai/v1`；源码不含任何凭据，用 `OPEN_DESIGN_API_KEY` 或配置里的 `api_key` 提供：
+
+```bash
+luban --model opendesign/deepseek-v4.1-flash    # 网关默认模型
+luban --model opendesign/gpt-6-luna
+```
+
+内置模型：`deepseek-v4.1-flash`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`deepseek-v4-pro`、`claude-haiku-5.5`、`glm-5.3-flash`、`glm-5.3-flashx`、`gpt-6-luna`、`hy4-preview`、`kimi-k2.7-code`、`mimo-v2.6-flash`、`mimo-v2.6-pro`、`minimax-m3.1-flash`。全部走 OpenAI 兼容的 `chat/completions`，推理内容以 `delta.reasoning` 流式返回。
+
+换成自己的 key：设置 `OPEN_DESIGN_API_KEY`，或在配置中写 `providers.opendesign.api_key`（显式 `api_key` 优先于环境变量）：
+
+```json
+{
+  "model": { "active": "opendesign/deepseek-v4.1-flash" },
+  "providers": {
+    "opendesign": { "base_url": "https://amr-link.open-design.ai/v1", "api_key_env": "OPEN_DESIGN_API_KEY" }
+  }
+}
+```
+
+#### 走 Codex 的 Responses 接口
+
+同一网关的 `/v1/responses` 也覆盖全部 13 个模型（流式、function call、`reasoning.effort` 已实测）。luban 内置默认走 Chat Completions，想用 Responses 就给该模型加 `"api": "responses"`：
+
+```json
+{
+  "model": { "active": "opendesign/gpt-6-luna" },
+  "providers": {
+    "opendesign": {
+      "base_url": "https://amr-link.open-design.ai/v1",
+      "api_key_env": "OPEN_DESIGN_API_KEY",
+      "models": { "gpt-6-luna": { "name": "GPT-6 Luna", "api": "responses" } }
+    }
+  }
+}
+```
+
+对象写法的 `models` 会与内置清单合并（只有数组写法才是整体覆盖），所以上面只把 `gpt-6-luna` 切到 Responses，其余内置模型照常可选。`codex/*` 模型走的是本机 Codex CLI（`codex exec`），不是 HTTP 请求；要直接调这个网关的 Responses 接口，用 `opendesign/*` 即可。
+
+#### 走 Claude Code 的 Messages 接口
+
+网关同时暴露 Anthropic Messages：`https://amr-link.open-design.ai/v1/messages`（`x-api-key`
+或 `Authorization: Bearer` 都接受，返回 Claude Code 用的 SSE 事件）。luban 内置已经把
+`claude-haiku-5.5` 配成 `"api": "anthropic"`，直接选它就走 Messages：
+
+```bash
+luban --model opendesign/claude-haiku-5.5
+```
+
+其余模型也可以在配置里逐个切换（13 个模型在 Messages 上都实测可用；GPT 推理模型不接受
+`temperature`，内置已用 `"capabilities": { "temperature": false }` 标注）：
+
+```json
+{
+  "providers": {
+    "opendesign": {
+      "models": { "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash", "api": "anthropic" } }
+    }
+  }
+}
+```
+
+luban 会自动把 `/messages` 追加到 `base_url` 后面，不用手写。把这个网关直接给 Claude Code
+用也可以：`ANTHROPIC_BASE_URL=https://amr-link.open-design.ai`、`ANTHROPIC_AUTH_TOKEN=<key>`；
+注意网关没有实现 `/v1/messages/count_tokens`（返回 404），依赖它的统计功能会缺失。
 
 ### OpenAI API / 兼容接口
 

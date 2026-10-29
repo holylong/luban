@@ -38,6 +38,7 @@ import { sessionColor } from "./session-color.js";
 import { sessionChoices } from "./session-picker.js";
 import { toolLabel } from "./tool-labels.js";
 import { Spinner, ThinkingLine, type LivePhase } from "./thinking-line.js";
+import { SkinLoading } from "./skin-loading.js";
 import { currentStreamLine } from "./transcript.js";
 import { displayWidth, layoutInput } from "./input-layout.js";
 import { createTranscriptLayout, TranscriptLineView } from "./transcript-lines.js";
@@ -130,6 +131,7 @@ const COMMANDS = [
   ["/plan", "show current task plan"],
   ["/verify", "verification records"],
   ["/theme", "terminal color scheme"],
+  ["/skin", "皮肤与加载宠物 · ollobot / midnight / …"],
   ["/details", "expand / collapse execution details"],
   ["/diff", "review code changes"],
   ["/mesh", "switch local conversation / mesh activity"],
@@ -143,13 +145,14 @@ const RUN_IMMEDIATE_COMMANDS = new Set([
   "/status", "/usage", "/ping", "/peers", "/jobs", "/inbox", "/cancel-job", "/add-contact",
   "/models", "/mode", "/settings", "/permissions",
   "/token",
-  "/plan", "/theme", "/details", "/mesh", "/help", "/diff", "/verify",
+  "/plan", "/theme", "/skin", "/details", "/mesh", "/help", "/diff", "/verify",
 ]);
 
 const COMMAND_USAGE: Record<string, string> = {
   "/report": "/report daily|weekly|monthly|yearly [YYYY-MM-DD] [输出路径] — 汇总本机所有项目会话",
   "/mode": "/mode auto|agent|ask",
   "/theme": "/theme [名称] — 不带参数列出全部配色，带名称即时切换并保存",
+  "/skin": "/skin [名称] — 选择皮肤与加载动画，例如 /skin ollobot；/skin midnight 恢复默认",
   "/permissions": "/permissions ask|edits|allow",
   "/queue": "/queue <task> — current task finishes first",
   "/export": "/export [文件名|路径] — markdown transcript (默认 luban-export-<项目>-<sessionId>.md)",
@@ -446,14 +449,14 @@ function themeWindow(total: number, index: number): { start: number; end: number
  * row is painted onto the workbench as it moves, which is why `index` comes
  * from the keyboard handler rather than from the palette module.
  */
-function ThemeDialog({ index }: { index: number }) {
+function ThemeDialog({ index, preview }: { index: number; preview: boolean }) {
   const active = activeThemeId();
   const { start, end } = themeWindow(THEMES.length, index);
   const visible = THEMES.slice(start, end);
   return <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} flexShrink={0}>
     <Text color={theme.accent} bold>主题 · {active} · ↑/↓ 预览 · Enter 确认 · Esc 取消</Text>
     <Text color={theme.dim} wrap="truncate-end">/theme &lt;名称&gt; 即时切换并写入 ~/.luban/node-preferences.json</Text>
-    <Text color={theme.dim} wrap="truncate-end">config.json 里 theme 可写名称，或用 colors 只覆盖某几个颜色</Text>
+    <Text color={theme.dim} wrap="truncate-end">/skin ollobot 启用宠物皮肤 · config.json 的 theme 支持名称或 colors 配色覆盖</Text>
     {start > 0 ? <Text color={theme.dim}>  ↑ 还有 {start} 个配色</Text> : null}
     {visible.map((item, offset) => {
       const row = start + offset;
@@ -468,6 +471,7 @@ function ThemeDialog({ index }: { index: number }) {
       );
     })}
     {end < THEMES.length ? <Text color={theme.dim}>  ↓ 还有 {THEMES.length - end} 个配色</Text> : null}
+    {preview ? <SkinLoading /> : null}
   </Box>;
 }
 
@@ -538,7 +542,7 @@ function HelpPanel() {
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /usage /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
       <Text color={theme.muted}>直接输入任务，!command 执行 shell，/ 命令补全（含参数用法）</Text>
-      <Text color={theme.dim}>/new /sessions /models /mode /permissions /theme /plan /details /mesh /copy /export /help /exit</Text>
+      <Text color={theme.dim}>/new /sessions /models /mode /permissions /theme /skin /plan /details /mesh /copy /export /help /exit</Text>
     </Box>
   );
 }
@@ -576,7 +580,7 @@ export function argumentMatches(input: string): string[] {
   const command = match[1]!.toLowerCase();
   const options = command === "/report" ? ["daily", "weekly", "monthly", "yearly"] : command === "/mode" ? MODES
     : command === "/permissions" ? ["ask", "edits", "allow"]
-      : command === "/theme" ? THEMES.map((item) => item.id)
+      : command === "/theme" || command === "/skin" ? THEMES.map((item) => item.id)
         : command === "/sync" ? ["push", "pull"] : [];
   return options.filter((option) => option.startsWith(match[2]!.toLowerCase()));
 }
@@ -1866,7 +1870,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       }
       return;
     }
-    if (command === "/theme") {
+    if (command === "/theme" || command === "/skin") {
       const requested = argument.trim();
       if (!requested || requested.toLowerCase() === "list") {
         // Remember what was painted before the picker: Esc has to undo a
@@ -2581,7 +2585,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
         {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} loading={dialog.loading} /> : null}
         {dialog?.type === "codex-reset" ? <ResetDialog content={dialog.content ?? ""} /> : null}
-        {dialog?.type === "theme" ? <ThemeDialog index={dialog.index} /> : null}
+        {dialog?.type === "theme" ? <ThemeDialog index={dialog.index} preview={rows >= 36 && terminalSize.columns >= 80} /> : null}
         {dialog?.type === "export" ? <ExportDialog value={dialogQuery} defaultName={defaultExportFilename(config.project, sessionRef.current.id)} dest={expandExportPath(dialogQuery, config.project, sessionRef.current.id)} /> : null}
         {!dialog && !hasActivity ? showMesh
           ? <Text color={theme.dim}>No mesh activity. /mesh returns to the local conversation.</Text>
@@ -2596,6 +2600,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             </Box>;
           })}
         </Box> : null}
+        {!dialog && rows >= 28 && terminalSize.columns >= 80 && (showMesh ? focusedActive : running) ? <SkinLoading /> : null}
         {!dialog && !showMesh && running && livePhase ? (
           <ThinkingLine
             phase={livePhase}

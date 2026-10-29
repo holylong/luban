@@ -14,6 +14,8 @@ describe("responses API", () => {
     expect(responsesEndpoint("https://api.openai.com/v1")).toBe("https://api.openai.com/v1/responses");
     expect(responsesEndpoint("https://x/v1/chat/completions")).toBe("https://x/v1/responses");
     expect(responsesEndpoint("https://x/v1/responses")).toBe("https://x/v1/responses");
+    // The Open Design gateway serves the same models on /v1/responses.
+    expect(responsesEndpoint("https://amr-link.open-design.ai/v1")).toBe("https://amr-link.open-design.ai/v1/responses");
   });
 
   it("converts transcripts and tool schemas", async () => {

@@ -584,7 +584,7 @@ describe("config", () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opencode-none-"));
     process.env.LUBAN_HOME = home;
     const config = loadConfig({ workspace: home });
-    for (const provider of ["codex", "opencode-go", "opencode-zen", "deepseek", "dashscope", "qwen-local", "strata-local"]) {
+    for (const provider of ["codex", "opendesign", "opencode-go", "opencode-zen", "deepseek", "dashscope", "qwen-local", "strata-local"]) {
       expect(config.models.some(item => item.provider === provider)).toBe(true);
     }
     expect(config.model.id).toBe("gpt-4.1-mini");
@@ -611,7 +611,7 @@ describe("config", () => {
       expect(config.model.id).toBe("gpt-4.1-mini");
       expect(config.models.some(item => item.id === "opencode-zen/gpt-6-luna")).toBe(true);
       expect(config.models.find(item => item.provider === "opencode-zen")?.apiKey).toBe("");
-      for (const provider of ["opencode-go", "codex", "dashscope", "qwen-local", "strata-local"]) {
+      for (const provider of ["opencode-go", "opendesign", "codex", "dashscope", "qwen-local", "strata-local"]) {
         expect(config.models.find(item => item.provider === provider)?.apiKey).not.toBe("sk-openai-not-zen");
       }
     } finally {
@@ -632,6 +632,86 @@ describe("config", () => {
     const config = loadConfig({ workspace });
     expect(config.models.filter(item => item.provider === "opencode-go").map((item) => item.model)).toEqual(["custom"]);
     expect(config.models[0]?.baseUrl).toBe("https://example.test/v1");
+  });
+
+  it("registers the Open Design gateway without shipping a credential", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opendesign-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    const config = loadConfig({ workspace, model: "opendesign/deepseek-v4.1-flash" });
+    expect(config.model).toMatchObject({
+      id: "opendesign/deepseek-v4.1-flash",
+      baseUrl: "https://amr-link.open-design.ai/v1",
+      api: "openai",
+      apiKey: "",
+    });
+    // The source carries no key; the environment supplies it.
+    process.env.OPEN_DESIGN_API_KEY = "sk-design-env";
+    try {
+      expect(loadConfig({ workspace, model: "opendesign/deepseek-v4.1-flash" }).model.apiKey).toBe("sk-design-env");
+    } finally {
+      delete process.env.OPEN_DESIGN_API_KEY;
+    }
+    expect(config.model.capabilities).toMatchObject({ vision: true, tools: true });
+    for (const id of ["deepseek-v4-flash", "deepseek-v4-pro", "claude-haiku-5.5", "glm-5.3-flash",
+      "gpt-6-luna", "kimi-k2.7-code", "minimax-m3.1-flash"]) {
+      expect(config.models.some(item => item.id === `opendesign/${id}`)).toBe(true);
+    }
+    // Claude rides the Anthropic Messages API that Claude Code speaks; the rest
+    // keep Chat Completions.
+    expect(config.models.find(item => item.id === "opendesign/claude-haiku-5.5")?.api).toBe("anthropic");
+    expect(config.models.filter(item => item.provider === "opendesign" && item.model !== "claude-haiku-5.5")
+      .every(item => item.api === "openai")).toBe(true);
+    // The gateway rejects an explicit temperature for GPT reasoning models.
+    expect(config.models.find(item => item.id === "opendesign/gpt-6-luna")?.capabilities.temperature).toBe(false);
+    expect(config.models.find(item => item.id === "opendesign/deepseek-v4-pro")?.capabilities.vision).toBe(false);
+  });
+
+  it("lets the environment or an explicit block override the Open Design key", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opendesign-override-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    process.env.OPEN_DESIGN_API_KEY = "sk-env-design";
+    try {
+      expect(loadConfig({ workspace, model: "opendesign/deepseek-v4.1-flash" }).model.apiKey).toBe("sk-env-design");
+      await writeFile(join(home, "config.json"), JSON.stringify({
+        providers: { opendesign: {
+          base_url: "https://gateway.example.test/v1",
+          api_key: "sk-own-design",
+          models: ["deepseek-v4.1-flash"],
+        } },
+      }));
+      const custom = loadConfig({ workspace, model: "opendesign/deepseek-v4.1-flash" });
+      expect(custom.model.apiKey).toBe("sk-own-design");
+      expect(custom.model.baseUrl).toBe("https://gateway.example.test/v1");
+    } finally {
+      delete process.env.OPEN_DESIGN_API_KEY;
+    }
+  });
+
+  it("routes an Open Design model through the Responses API without hiding the catalog", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-opendesign-responses-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { opendesign: {
+        base_url: "https://amr-link.open-design.ai/v1",
+        models: { "gpt-6-luna": { name: "GPT-6 Luna", api: "responses" } },
+      } },
+    }));
+    const config = loadConfig({ workspace, model: "opendesign/gpt-6-luna" });
+    expect(config.model).toMatchObject({
+      id: "opendesign/gpt-6-luna",
+      baseUrl: "https://amr-link.open-design.ai/v1",
+      api: "responses",
+    });
+    expect(config.model.capabilities.responses).toBe(true);
+    // One per-model override keeps the rest of the built-in gateway catalog.
+    expect(config.models.some(item => item.id === "opendesign/deepseek-v4.1-flash")).toBe(true);
+    expect(config.models.find(item => item.id === "opendesign/deepseek-v4.1-flash")?.api).toBe("openai");
   });
 
   // The mirror writes a database, so an existing install must not start

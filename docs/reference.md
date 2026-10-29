@@ -343,6 +343,79 @@ JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会
 跑 Strata 时请把 luban 的 Web 端口改成别的值。`api_key_env` 留空时，`resolveKey` 会回退到
 `DEEPSEEK_API_KEY` 等环境变量；本地服务不看这个头，但若要彻底干净，就显式设一个专用变量。
 
+### Open Design（opendesign）
+
+luban 内置 Open Design 的 AMR 网关 `opendesign`，默认地址为
+`https://amr-link.open-design.ai/v1`，不带任何内置凭据；设置 `OPEN_DESIGN_API_KEY`
+（或配置里的 `api_key`）后即可在 `/models` 里选择：
+
+```bash
+luban --model opendesign/deepseek-v4.1-flash
+```
+
+网关的所有模型（包括 Claude、GPT、Kimi、GLM、MiMo、MiniMax 条目）都走同一套
+OpenAI 兼容的 `chat/completions`，因此内置定义统一使用 `"api": "openai"`，推理内容
+通过 `delta.reasoning` 流式返回。内置模型表来自网关的 `/v1/models`：
+`deepseek-v4.1-flash`（网关默认）、`deepseek-v4-flash`、
+`deepseek-v4-flash-vision-exp`、`deepseek-v4-pro`、`claude-haiku-5.5`、
+`glm-5.3-flash`、`glm-5.3-flashx`、`gpt-6-luna`、`hy4-preview`、
+`kimi-k2.7-code`、`mimo-v2.6-flash`、`mimo-v2.6-pro`、`minimax-m3.1-flash`。
+
+要换成自己的 key，设置 `OPEN_DESIGN_API_KEY`，或在配置里写 `providers.opendesign.api_key`；
+优先级是显式 `api_key` > `api_key_env` / `OPEN_DESIGN_API_KEY`。
+写法与示例见 [config.example.json](config.example.json)；想把它设为默认模型，把
+`model.active` 改成 `opendesign/deepseek-v4.1-flash` 即可。
+
+#### 走 Codex 的 Responses 接口
+
+同一网关的 `https://amr-link.open-design.ai/v1/responses` 覆盖全部 13 个模型：流式
+SSE、function call、`reasoning.effort`（`gpt-*` 模型）和 `store: false` 均已实测通过。
+luban 内置默认用 Chat Completions，需要 Responses 时给单个模型加 `"api": "responses"`：
+
+```json
+{
+  "model": { "active": "opendesign/gpt-6-luna" },
+  "providers": {
+    "opendesign": {
+      "base_url": "https://amr-link.open-design.ai/v1",
+      "api_key_env": "OPEN_DESIGN_API_KEY",
+      "models": { "gpt-6-luna": { "name": "GPT-6 Luna", "api": "responses" } }
+    }
+  }
+}
+```
+
+`models` 写成对象会与内置模型表合并（数组写法才是整体覆盖），所以上面只把
+`gpt-6-luna` 切到 Responses，其余内置模型照常可选。luban 会按 `base_url` 自动推导
+`/responses` 端点，不用手写后缀。`codex/*` 系列走的是本机 Codex CLI（`codex exec`
+加 `--output-schema`），与这个 HTTP 接口无关；要直接请求网关的 Responses 接口，用
+`opendesign/*` 模型。
+
+#### 走 Claude Code 的 Messages 接口
+
+网关同时提供 Anthropic Messages：`https://amr-link.open-design.ai/v1/messages`，`x-api-key`
+与 `Authorization: Bearer` 两种鉴权都接受，SSE 事件（`message_start` / `content_block_delta`
+/ `message_stop`、`tool_use` 的 `input_json_delta`）与 Claude Code 一致。内置定义已把
+`claude-haiku-5.5` 路由到 Messages（`"api": "anthropic"`），`luban --model
+opendesign/claude-haiku-5.5` 即走该协议；luban 会自动在 `base_url` 后追加 `/messages`。
+
+其余模型也能在配置里逐个切换（13 个模型在 Messages 上均已实测）。GPT 推理模型不接受
+`temperature`，内置用 `"capabilities": { "temperature": false }` 标注，切换协议时同样生效：
+
+```json
+{
+  "providers": {
+    "opendesign": {
+      "models": { "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash", "api": "anthropic" } }
+    }
+  }
+}
+```
+
+Claude Code 本身也能直接指向这个网关：`ANTHROPIC_BASE_URL=https://amr-link.open-design.ai`、
+`ANTHROPIC_AUTH_TOKEN=<key>`。网关未实现 `/v1/messages/count_tokens`（404），依赖 token
+统计的功能会缺数据。
+
 ### OpenCode Go
 
 luban 内置 `opencode-go` provider：只要在本机找得到 OpenCode 的凭据（`OPENCODE_API_KEY`

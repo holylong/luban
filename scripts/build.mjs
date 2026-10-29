@@ -13,7 +13,7 @@
  * is always a hard error.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,6 +53,7 @@ try {
   run("server (tsc)", process.execPath, [tsc, "-p", "tsconfig.json"]);
   mkdirSync(join(root, "dist", "assets"), { recursive: true });
   copyFileSync(join(root, "assets", "luban-mascot.png"), join(root, "dist", "assets", "luban-mascot.png"));
+  cpSync(join(root, "assets", "skins"), join(root, "dist", "assets", "skins"), { recursive: true });
 } catch (error) {
   process.stderr.write(`\n${error.message}\n`);
   process.exit(1);

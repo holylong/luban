@@ -16,6 +16,9 @@ describe("slash command suggestions", () => {
     expect(argumentMatches("/mode a")).toEqual(["auto", "agent", "ask"]);
     expect(argumentMatches("/permissions e")).toEqual(["edits"]);
     expect(argumentMatches("/THEME nord")).toEqual(["nord"]);
+    expect(argumentMatches("/skin ol")).toEqual(["ollobot"]);
+    expect(commandMatches("/ski")[0]?.[0]).toBe("/skin");
+    expect(resolveCompletion("/skin ol", 0)).toBe("/skin ollobot");
     expect(argumentMatches("/sync p")).toEqual(["push", "pull"]);
     expect(argumentMatches("/sessions ")).toEqual([]);
   });
