@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "1.16.135",
+  "version": "1.16.136",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -35,6 +35,9 @@
     "package:windows": "node scripts/package-windows.mjs",
     "package:windows:cli": "node scripts/package-windows.mjs cli",
     "package:windows:desktop": "node scripts/package-windows.mjs desktop",
+    "package:macos": "node scripts/package-macos.mjs",
+    "package:macos:cli": "node scripts/package-macos.mjs cli",
+    "package:macos:desktop": "node scripts/package-macos.mjs desktop",
     "build:web": "tsc -p tsconfig.client.json && vite build",
     "dev:web": "vite",
     "build:server": "tsc -p tsconfig.json",

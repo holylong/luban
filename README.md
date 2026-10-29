@@ -48,7 +48,7 @@ luban report yearly --date 2026-01-01
 
 ## 安装
 
-Linux 用户可选择对应架构的 `.deb` 安装包：终端版 `luban-cli` 或桌面版 `luban-desktop`。Windows 用户解压对应的便携包后，运行 `luban.cmd` 或 `luban-desktop.cmd`。
+Linux 用户可选择对应架构的 `.deb` 安装包：终端版 `luban-cli` 或桌面版 `luban-desktop`。Windows 用户解压对应的便携包后，运行 `luban.cmd` 或 `luban-desktop.cmd`。macOS 用户解压 `luban-cli-*-mac-{x64,arm64}.zip` 后运行 `./luban`，或解压 `luban-desktop-*-mac-*.zip` 后打开 `luban Desktop.app`；两者都已内置 Node.js 运行时，首次打开若被 Gatekeeper 拦截，执行 `xattr -dr com.apple.quarantine .`。
 
 从源码安装需要 Node.js 20 或更高版本：
 

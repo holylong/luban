@@ -1,0 +1,6 @@
+#!/bin/sh
+# Open the luban desktop workspace from a terminal, reusing the bundled runtime.
+root=$(cd "$(dirname "$0")" && pwd)
+export LUBAN_NODE_BIN="$root/node"
+export LUBAN_CLI="$root/app/dist/cli.js"
+exec "$root/luban Desktop.app/Contents/MacOS/Electron" "$@"

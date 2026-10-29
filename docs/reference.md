@@ -169,6 +169,8 @@ Windows 包是自带 Node.js 的 zip，解压后即可运行，不写注册表�
 
 在 Windows x64 上运行 `npm ci && npm run package:windows`，产物在 `release/`。也可以单独运行 `npm run package:windows:cli` 或 `npm run package:windows:desktop`。
 
+在 macOS（x64 或 arm64）上运行 `npm ci && node node_modules/electron/install.js && npm run package:macos`，会在 `release/` 生成 `luban-cli-<version>-mac-<arch>.zip` 与 `luban-desktop-<version>-mac-<arch>.zip`；也可单独运行 `npm run package:macos:cli` 或 `npm run package:macos:desktop`。桌面包内是重新签名的（ad-hoc）`luban Desktop.app`，其 `Contents/Resources/app` 会把内置的 `node` 与 `dist/cli.js` 传给桌面主进程，因此从 Finder 双击也能启动。
+
 ### 从源码安装
 
 需要 Node.js 20 或更高版本。

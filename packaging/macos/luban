@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run the luban CLI with the Node.js runtime bundled next to this script.
+root=$(cd "$(dirname "$0")" && pwd)
+exec "$root/node" "$root/app/dist/cli.js" "$@"

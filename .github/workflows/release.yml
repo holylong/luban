@@ -179,3 +179,79 @@ jobs:
           if (-not $uploaded) { throw "release publish did not succeed after 5 attempts" }
           $count = gh release view $env:GITHUB_REF_NAME --json assets --jq '.assets | length'
           if ([int]$count -lt 2) { throw "expected at least 2 assets, found $count" }
+
+  macos:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Verify version tag
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $version"
+            exit 1
+          fi
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      # electron@44 publishes no scripts field, so its binary-download postinstall
+      # never runs during `npm ci`. Fetch the runtime explicitly before packaging.
+      - name: Ensure Electron runtime
+        run: node node_modules/electron/install.js
+      - name: Build macOS CLI and Desktop packages
+        run: npm run package:macos
+      - name: Write release notes
+        run: |
+          version=$(node -p "require('./package.json').version")
+          cat > macos-release-notes.md <<EOF
+          macOS ${{ matrix.arch }} ZIP 包（解压即用，无需安装）：
+
+          - **luban-cli-${version}-mac-${{ matrix.arch }}.zip**：终端版，解压后运行 \`./luban\`。
+          - **luban-desktop-${version}-mac-${{ matrix.arch }}.zip**：图形桌面版，解压后打开 \`luban Desktop.app\`（同时提供 \`./luban\`）。
+
+          两份 ZIP 均已内置 Node.js 运行时，无需预装 Node.js。安装包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
+          配置目录：\`~/.luban/config.json\`。
+          EOF
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          cli="release/luban-cli-${version}-mac-${{ matrix.arch }}.zip"
+          desktop="release/luban-desktop-${version}-mac-${{ matrix.arch }}.zip"
+          for asset in "$cli" "$desktop"; do
+            if [ ! -s "$asset" ]; then
+              echo "missing or empty asset: $asset"
+              exit 1
+            fi
+          done
+          # Every matrix leg and platform job publishes to the same release
+          # concurrently, so a lost create race is retryable instead of fatal.
+          set +e
+          uploaded=0
+          for attempt in 1 2 3 4 5; do
+            uploaded=0
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" "$cli" "$desktop" --clobber && uploaded=1
+            else
+              gh release create "$GITHUB_REF_NAME" "$cli" "$desktop" --verify-tag --title "luban ${version}" --notes-file macos-release-notes.md && uploaded=1
+            fi
+            [ "$uploaded" = "1" ] && break
+            echo "release not published yet (attempt ${attempt}/5); retrying"
+            sleep 10
+          done
+          set -e
+          test "$uploaded" = "1"
+          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -ge 2
