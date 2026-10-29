@@ -145,10 +145,11 @@ describe("workspace tools", () => {
     const { tools, signal } = await setup();
     const started = await tools.get("bash")!.execute({ command: "printf bg-ok", background: true }, signal);
     const id = started.split(" ")[2]!;
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    const status = JSON.parse(await tools.get("get_background_task")!.execute({ task_id: id }, signal));
-    expect(status.status).toBe("done");
-    expect(status.output).toBe("bg-ok");
+    // Poll instead of sleeping a fixed 40 ms: a slow runner needs longer than
+    // that before the child process has exited.
+    const status = async () => JSON.parse(await tools.get("get_background_task")!.execute({ task_id: id }, signal));
+    await expect.poll(async () => (await status()).status, { timeout: 10_000 }).toBe("done");
+    expect((await status()).output).toBe("bg-ok");
   });
 
   it("automatically moves a long-lived foreground command to the background", async () => {
