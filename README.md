@@ -21,7 +21,7 @@ luban 是一个 AI 编程助手：读代码、改文件、运行命令，把一�
 
 | 平台 | 下载 | 启动 |
 | --- | --- | --- |
-| Linux x64 / arm64 | `luban-cli_<版本>_amd64.deb`<br>`luban-desktop_<版本>_amd64.deb` | `luban`<br>`luban-desktop` |
+| Linux x64 / arm64 | `luban-cli_<版本>_<arch>.deb`<br>`luban-desktop_<版本>_<arch>.deb` | `luban`<br>`luban-desktop` |
 | Windows x64 | `luban-cli-<版本>-win-x64.zip`<br>`luban-desktop-<版本>-win-x64.zip` | `luban.cmd`<br>`luban-desktop.cmd` |
 | macOS x64 / arm64 | `luban-cli-<版本>-mac-<arch>.zip`<br>`luban-desktop-<版本>-mac-<arch>.zip` | `./luban`<br>打开 `luban Desktop.app` |
 
