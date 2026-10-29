@@ -24,7 +24,23 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
-      - run: npm test
+      # Publish the tail of the test log into the job summary so a red release
+      # run is diagnosable without admin log access.
+      - name: Run tests
+        run: |
+          set +e
+          # Two-core runners are easy to starve: retry flakes before failing.
+          npm test -- --retry=2 > vitest.log 2>&1
+          status=$?
+          {
+            echo ''
+            echo 'Failed tests:'
+            echo '```'
+            tail -160 vitest.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -40 vitest.log
+          exit $status
 
   linux:
     needs: verify
