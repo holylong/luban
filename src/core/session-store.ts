@@ -21,6 +21,23 @@ function progress(record: SessionRecord): string {
 
 interface SavedState { token: string | null; progress: string }
 
+/**
+ * True once a session holds a real exchange. A CLI start writes a
+ * system-prompt-only record before the first prompt; quitting after typing a
+ * partial command leaves one behind with only `inputHistory`. Those drafts must
+ * not flood a session picker, though explicit id lookups still resolve them.
+ */
+export function hasConversation(record: Pick<SessionRecord, "messages">): boolean {
+  return record.messages.some((message) => message.role !== "system");
+}
+
+/** Drafts are still worth writing when they carry queued input or command history. */
+function shouldPersist(record: Pick<SessionRecord, "messages" | "pendingInputs" | "inputHistory">): boolean {
+  return hasConversation(record)
+    || (record.pendingInputs?.length ?? 0) > 0
+    || (record.inputHistory?.length ?? 0) > 0;
+}
+
 export class SessionConflictError extends Error {
   constructor(id: string) {
     super(`会话已由另一终端更新，已阻止旧进度覆盖。请用 luban --resume ${id} 重新打开后继续。`);
@@ -90,8 +107,7 @@ export class SessionStore {
       edits.set(message.tool_call_id, { id: message.tool_call_id, name: message.name || "edit_file", preview: message.editPreview });
     }
     if (edits.size) record.edits = [...edits.values()];
-    const meaningful = record.messages.some((message) => message.role !== "system");
-    if (!meaningful && !record.pendingInputs?.length && !record.inputHistory?.length) return;
+    if (!shouldPersist(record)) return;
     // Only a derived title is re-derived. A title the model wrote is the whole
     // point of the naming round trip, and recomputing it here would replace it
     // with the raw opening line on the very next save.
@@ -176,7 +192,8 @@ export class SessionStore {
   }
 
   async load(reference: string, project?: string, workspace?: string): Promise<SessionRecord | undefined> {
-    const entries = await this.list(project, workspace);
+    // "latest" must never resolve to a draft, but an explicit id stays reachable.
+    const entries = await this.list(project, workspace, reference !== "latest");
     const selected = reference === "latest"
       ? entries[0]
       : entries.find((entry) => entry.id === reference || entry.id.startsWith(reference));
@@ -189,7 +206,8 @@ export class SessionStore {
     }
   }
 
-  async list(project?: string, workspace?: string): Promise<SessionRecord[]> {
+  /** @param includeEmpty keeps system-prompt-only drafts (explicit id lookups). */
+  async list(project?: string, workspace?: string, includeEmpty = false): Promise<SessionRecord[]> {
     let projectNames: string[] = [];
     try {
       projectNames = project ? [safeName(project)] : await readdir(this.root);
@@ -210,6 +228,7 @@ export class SessionStore {
           const path = join(directory, name);
           const data = JSON.parse(await readFile(path, "utf8")) as SessionRecord;
           if (workspace && (typeof data.workspace !== "string" || resolve(data.workspace) !== resolve(workspace))) continue;
+          if (!includeEmpty && !hasConversation(data)) continue;
           const info = await stat(path);
           this.remember(data);
           data.updatedAt ||= info.mtime.toISOString();

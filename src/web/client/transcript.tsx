@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { Markdown } from "./markdown";
 import { ToolCard } from "./tool-card";
+import { followTranscript } from "./transcript-scroll";
 import { deriveTimeline, formatClock, sameTimelineItem, withOutcome } from "./timeline";
 import type { MeshJob, TimelineItem } from "./types";
 
@@ -56,36 +57,35 @@ const ItemView = React.memo(function ItemView({ item }: { item: TimelineItem }):
   }
 }, (previous, next) => sameTimelineItem(previous.item, next.item));
 
-export function Transcript({ job, events, onCancel, onResume }: {
+export function Transcript({ job, events, onCancel, onResume, history, compactEdits }: {
+  history?: React.ReactNode;
+  compactEdits?: boolean;
   job?: MeshJob;
   events: TimelineItem[];
   onCancel: () => void;
   onResume: () => void;
 }): React.ReactElement {
   const ref = useRef<HTMLElement>(null);
-  const pinned = useRef(true);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const scroll = useRef<ReturnType<typeof followTranscript> | undefined>(undefined);
 
   useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const onScroll = (): void => {
-      pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
-    };
-    element.addEventListener("scroll", onScroll, { passive: true });
-    return () => element.removeEventListener("scroll", onScroll);
+    if (!ref.current || !contentRef.current) return;
+    const controller = followTranscript(ref.current, contentRef.current);
+    scroll.current = controller;
+    return () => { controller.dispose(); scroll.current = undefined; };
   }, []);
 
-  useEffect(() => {
-    const element = ref.current;
-    if (element && pinned.current) element.scrollTop = element.scrollHeight;
-  }, [events, job?.status]);
+  useEffect(() => { scroll.current?.reset(); }, [job?.id]);
+  useEffect(() => { scroll.current?.follow(); }, [events, job?.status, history]);
 
   const active = job ? ["queued", "pending", "working"].includes(job.status) : false;
 
   return (
     <section className="thread" ref={ref}>
-      <div className="thread-inner">
-        {!job && (
+      <div className="thread-inner" ref={contentRef}>
+        {history}
+        {!job && !history && (
           <div className="empty">
             <div className="big">◈</div>
             <h1>今天想完成什么？</h1>
@@ -93,7 +93,9 @@ export function Transcript({ job, events, onCancel, onResume }: {
             <p style={{ marginTop: 10 }}><kbd>Enter</kbd> 执行 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>Ctrl</kbd>+<kbd>K</kbd> 新任务</p>
           </div>
         )}
-        {job && events.map(item => <ItemView key={item.id} item={item} />)}
+        {job && events.map(item => compactEdits && item.kind === "tool" && item.run.editPreview
+          ? <div className="note" key={item.id}>{item.run.summary || item.run.name} · 修改详情见中间代码区</div>
+          : <ItemView key={item.id} item={item} />)}
         {active && (
           <div className="runbar">
             <span className="spin" />

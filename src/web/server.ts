@@ -8,6 +8,9 @@ import type { JobStreamRecord, MeshEvent, MeshRuntime } from "../core/mesh/runti
 import { SessionStore } from "../core/session-store.js";
 import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
+import { savePreferredModel, saveTheme } from "../core/config.js";
+import { THEMES, findTheme, resolveTheme } from "../ui/theme.js";
+import { supportedReasoningEfforts } from "../core/model-controls.js";
 import { VERSION } from "../version.js";
 import { DASHBOARD_HTML, DOCS_HTML, webAssetPath, WEB_CONTENT_TYPES } from "./assets.js";
 import { ApprovalBroker, type ApprovalDecision } from "./approval.js";
@@ -334,14 +337,21 @@ export class LubanWebServer {
         projects: this.mesh.projectMap(),
         serving: this.mesh.isServing(),
         model: this.config.model.model,
+        model_id: this.config.model.id,
         provider: this.config.model.provider,
-        models: this.config.models.map(model => ({ id: model.id, name: model.name, provider: model.provider })),
+        reasoning_effort: this.config.model.reasoningEffort ?? null,
+        models: this.config.models.map(model => ({ id: model.id, name: model.name, provider: model.provider,
+          reasoning_effort: model.reasoningEffort ?? null, reasoning_efforts: supportedReasoningEfforts(model) })),
         version: VERSION,
         runtime: "nodejs",
         interactive: Boolean(this.approvals),
         auth_required: this.requiresToken,
         web: { host: this.host, port: this.port },
       });
+    }
+    if (url.pathname === "/api/themes") {
+      return json(res, { active: resolveTheme(this.config.theme || "midnight", this.config.themeColors),
+        themes: THEMES.map(({ id, label, mode, description }) => ({ id, label, mode, description })) });
     }
     if (url.pathname === "/api/peers") {
       return json(res, this.mesh.peers().map((peer) => ({
@@ -421,7 +431,8 @@ export class LubanWebServer {
         mode: session.mode,
         updatedAt: session.updatedAt,
         createdAt: session.createdAt,
-        messages: session.messages.length,
+        // The system prompt is harness plumbing, not a message the user sent.
+        messages: session.messages.filter(message => message.role !== "system").length,
         edits: (session.edits || []).length,
       }));
       return json(res, sessions);
@@ -489,13 +500,53 @@ export class LubanWebServer {
 
   private async post(url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await readBody(req);
+    if (url.pathname === "/api/theme") {
+      const theme = typeof body.id === "string" ? findTheme(body.id) : undefined;
+      if (!theme) throw new HttpError(400, "unknown theme");
+      await saveTheme(this.config.home, theme.id);
+      this.config.theme = theme.id;
+      return json(res, { active: resolveTheme(theme.id, this.config.themeColors) });
+    }
+    if (url.pathname === "/api/model") {
+      const model = this.config.models.find(item => item.id === body.model);
+      if (!model) throw new HttpError(400, "unknown model");
+      const effort = body.reasoning_effort;
+      if (effort !== undefined && effort !== null && !supportedReasoningEfforts(model).some(value => value === effort)) {
+        throw new HttpError(400, "unsupported reasoning effort for this model");
+      }
+      const selected = effort === undefined ? model : { ...model, reasoningEffort: effort === null ? undefined : effort as typeof model.reasoningEffort };
+      await savePreferredModel(this.config.home, model.id, effort as typeof model.reasoningEffort | null);
+      this.config.models = this.config.models.map(item => item.id === selected.id ? selected : item);
+      this.config.model = selected;
+      return json(res, { ok: true });
+    }
+    if (url.pathname === "/api/models/active") {
+      const requested = String(body.id || body.model || "").trim();
+      const found = this.config.models.find(model => model.id === requested || model.model === requested);
+      if (!found) throw new HttpError(404, "unknown model");
+      // Jobs snapshot config.model when they start, so switching here applies to
+      // the next task without disturbing one already running.
+      this.config.model = found;
+      try { await savePreferredModel(this.config.home, found.id, found.reasoningEffort); }
+      catch (error) { throw new HttpError(500, `could not save model choice: ${error instanceof Error ? error.message : String(error)}`); }
+      return json(res, { ok: true, model_id: found.id, model: found.model, provider: found.provider, name: found.name });
+    }
     if (url.pathname === "/api/jobs") {
       const interaction = String(body.interaction || "auto");
+      const project = String(body.project_id || this.config.project);
+      const requestedSession = typeof body.session_id === "string" ? body.session_id.trim() : "";
+      // A continuation must reuse the session's own workspace, not the project
+      // mapping: sessions record the directory the Agent actually worked in.
+      const continued = requestedSession
+        ? await new SessionStore(this.config.home, sharedHistory(this.config.history, this.config.home)).load(requestedSession, project)
+        : undefined;
+      if (requestedSession && !continued) throw new HttpError(404, "unknown session");
       const job = await this.mesh.submitLocalJob({
         instruction: String(body.instruction || ""),
-        project: String(body.project_id || this.config.project),
+        project,
         title: String(body.title || ""),
         kind: String(body.kind || "task"),
+        ...(continued ? { session_id: continued.id, workspace: continued.workspace } : {}),
       });
       const mode = ["edits", "agent", "read"].includes(String(body.mode)) ? String(body.mode) as "edits" | "agent" | "read" : "edits";
       this.jobModes.set(job.id, mode);

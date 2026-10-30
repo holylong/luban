@@ -102,6 +102,23 @@ describe("config", () => {
     expect(loadConfig({ workspace: home, model: "codex/gpt-6-sol" }).model.reasoningEffort).toBeUndefined();
   });
 
+  it("reloads per-model native efforts, migrates legacy Codex choices, and clears configured defaults", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-model-efforts-"));
+    process.env.LUBAN_HOME = home;
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { native: { models: { "gpt-5": { reasoning_effort: "medium" }, "o3": {} } } },
+    }));
+    await writeFile(join(home, "node-preferences.json"), JSON.stringify({ codexEfforts: { "codex/gpt-6-sol": "high" } }));
+    await savePreferredModel(home, "native/gpt-5", "high");
+    await savePreferredModel(home, "native/o3", "low");
+    expect(loadConfig({ workspace: home, model: "native/gpt-5" }).model.reasoningEffort).toBe("high");
+    expect(loadConfig({ workspace: home }).model.reasoningEffort).toBe("low");
+    expect(loadConfig({ workspace: home, model: "codex/gpt-6-sol" }).model.reasoningEffort).toBe("high");
+    await savePreferredModel(home, "native/gpt-5", null);
+    await savePreferredModel(home, "native/gpt-5");
+    expect(loadConfig({ workspace: home }).model.reasoningEffort).toBeUndefined();
+  });
+
   it("uses the output budget supported by the default Qwen service", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-default-config-"));
     const workspace = join(home, "project");

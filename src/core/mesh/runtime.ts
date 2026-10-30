@@ -632,6 +632,10 @@ export class MeshRuntime {
     project?: string;
     title?: string;
     kind?: string;
+    /** Continue an existing saved conversation instead of starting a new one. */
+    session_id?: string;
+    /** Working directory of the continued session; defaults to the project mapping. */
+    workspace?: string;
   }): Promise<MeshJob> {
     if (!this.runner) throw new Error("node agent runner is not configured");
     const instruction = input.instruction.trim();
@@ -641,10 +645,11 @@ export class MeshRuntime {
       source: this.config.mesh.nodeName,
       kind: input.kind || "task",
       project,
-      workspace: await this.workspaceFor(project),
+      workspace: input.workspace || await this.workspaceFor(project),
       instruction,
       title: input.title || instruction.slice(0, 60),
       leaseSeconds: 0,
+      ...(input.session_id ? { session_id: input.session_id, continuesSession: true } : {}),
     });
   }
 
@@ -657,6 +662,8 @@ export class MeshRuntime {
     instruction: string;
     title?: string;
     leaseSeconds: number;
+    session_id?: string;
+    continuesSession?: boolean;
   }): Promise<MeshJob> {
     const job = await this.store.create({
       ...(input.id ? { id: input.id } : {}),
@@ -672,6 +679,8 @@ export class MeshRuntime {
       lease_deadline: input.leaseSeconds ? now() + input.leaseSeconds : undefined,
       runtime: "nodejs",
       instance_id: this.instanceId,
+      ...(input.session_id ? { session_id: input.session_id } : {}),
+      ...(input.continuesSession ? { continues_session: true } : {}),
     });
     this.ownedJobs.add(job.id);
     this.queuedJobs.push(job.id);

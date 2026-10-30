@@ -25,6 +25,7 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
   const running = Boolean(store.job && ["queued", "pending", "working"].includes(store.job.status));
   useTick(running);
   const live = useMemo(() => liveProgress(store.events), [store.events]);
+  const activeModel = store.node?.models.find(model => model.id === (store.node?.model_id ?? `${store.node?.provider}/${store.node?.model}`));
 
   const resize = (): void => {
     const element = area.current;
@@ -35,7 +36,7 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
 
   const send = async (): Promise<void> => {
     const text = value.trim();
-    if (!text || store.busy) return;
+    if (!text || store.busy || running) return;
     setHistory(current => [text, ...current].slice(0, 50));
     setCursor(-1);
     setValue("");
@@ -57,7 +58,9 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
         <textarea
           ref={area}
           value={value}
-          placeholder={running ? "描述后续目标，提交后会排队到当前任务之后…" : "说明目标，Agent 会读取项目、调用工具并验证结果…"}
+          placeholder={store.activeSessionId
+            ? "继续这段会话：已带上此前的对话与工具结果，直接说下一步…"
+            : running ? "本轮执行中，可先草拟下一条消息…" : "说明目标，Agent 会读取项目、调用工具并验证结果…"}
           onChange={event => { setValue(event.target.value); resize(); }}
           onKeyDown={event => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); return; }
@@ -66,6 +69,17 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
           }}
         />
         <div className="composer-row">
+          <select aria-label="模型" title="模型" value={activeModel?.id ?? ""} disabled={!store.connected || store.busy}
+            onChange={event => void store.setModel(event.target.value)}>
+            {!activeModel && <option value="">选择模型</option>}
+            {store.node?.models.map(model => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}
+          </select>
+          {Boolean(activeModel?.reasoning_efforts?.length) && <select aria-label="推理强度" title="推理强度"
+            value={activeModel?.reasoning_effort ?? ""} disabled={!store.connected || store.busy}
+            onChange={event => void store.setModel(activeModel!.id, event.target.value as import("./types").ReasoningEffort || null)}>
+            <option value="">Default</option>
+            {activeModel?.reasoning_efforts?.map(effort => <option key={effort} value={effort}>{effort}</option>)}
+          </select>}
           <select value={store.mode} onChange={event => store.setMode(event.target.value as TaskMode)} title="权限模式">
             {(Object.keys(MODE_LABELS) as TaskMode[]).map(key => <option key={key} value={key}>{MODE_LABELS[key]}</option>)}
           </select>
@@ -75,9 +89,10 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
               <option key={name} value={name}>{name} · {path.split(/[\\/]/u).pop()}</option>
             ))}
           </select>
+          {store.activeSessionId && <button className="session-chip" title="下一条消息将续写这段会话；点此改为新任务" onClick={store.leaveSession}>继续会话 ×</button>}
           <span className="hint">Enter 执行 · Shift+Enter 换行 · ↑ 历史</span>
           {running && <button className="stop" onClick={() => void store.cancel()}>停止任务</button>}
-          <button className="send" onClick={() => void send()} disabled={!value.trim() || store.busy} title="提交">↑</button>
+          <button className="send" onClick={() => void send()} disabled={!value.trim() || store.busy || running} title="提交">↑</button>
         </div>
       </div>
       {running && (
@@ -86,7 +101,7 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
           {live
             ? `${live.label}${live.detail ? ` · ${live.detail}` : ""} · ${live.stalled ? `已 ${live.silentSeconds}s 无输出` : `本步 ${live.seconds}s`}`
             : "当前任务执行中"}
-          ，新消息会在其结束后按顺序执行
+          ，本轮结束或停止后可继续对话
         </div>
       )}
     </div>

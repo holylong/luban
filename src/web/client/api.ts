@@ -56,6 +56,10 @@ const query = (params: Record<string, string | number | undefined>): string => {
 };
 
 export const api = {
+  themes: () => request<import("./desktop-theme").ThemeCatalog>("/api/themes"),
+  setTheme: (id: string) => post<{ active: import("./desktop-theme").DesktopTheme }>("/api/theme", { id }),
+  setModel: (model: string, effort?: import("./types").ReasoningEffort | null) =>
+    post<{ ok: boolean }>("/api/model", { model, reasoning_effort: effort }),
   node: () => request<NodeInfo>("/api/node"),
   peers: () => request<PeerView[]>("/api/peers"),
   inbox: (limit = 20) => request<InboxMessage[]>(`/api/inbox${query({ limit })}`),
@@ -65,7 +69,7 @@ export const api = {
     ok: boolean; job_id: string; next: number; complete: boolean;
     events: Array<{ seq: number; at: number; event: import("./types").JobStreamEvent }>;
   }>(`/api/jobs/${encodeURIComponent(id)}/stream${query({ since })}`),
-  submit: (input: { instruction: string; project_id: string; mode: string; interaction: string }) =>
+  submit: (input: { instruction: string; project_id: string; mode: string; interaction: string; session_id?: string }) =>
     post<{ ok: boolean; job_id: string; status: JobStatus; interactive: boolean }>("/api/jobs", input),
   cancel: (id: string) => post<{ ok: boolean; status: string }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, {}),
   resume: (id: string) => post<{ ok: boolean; job_id: string; status: JobStatus }>(`/api/jobs/${encodeURIComponent(id)}/resume`, {}),

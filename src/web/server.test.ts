@@ -44,6 +44,72 @@ async function waitForJob(base: string, id: string, status: string): Promise<Rec
 }
 
 describe("LubanWebServer", () => {
+  it("shares CLI themes, validates choices and persists without forgetting the model", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-theme-"));
+    const config = testConfig(root);
+    config.theme = "nord";
+    config.themeColors = { accent: "#123456" };
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh);
+    await mkdir(config.home, { recursive: true });
+    await writeFile(join(config.home, "node-preferences.json"), JSON.stringify({ model: "test/model" }));
+    const base = await web.start();
+    try {
+      const catalog = await jsonRequest(`${base}api/themes`);
+      expect(catalog.body.active).toMatchObject({ id: "nord", palette: { accent: "#123456" } });
+      expect(catalog.body.themes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "github-light", mode: "light" })]));
+      const choose = (id: string) => jsonRequest(`${base}api/theme`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
+      expect((await choose("missing")).status).toBe(400);
+      expect(config.theme).toBe("nord");
+      expect((await choose("light")).body.active).toMatchObject({ id: "github-light", mode: "light" });
+      expect((await jsonRequest(`${base}api/themes`)).body.active).toMatchObject({ id: "github-light" });
+      expect(JSON.parse(await readFile(join(config.home, "node-preferences.json"), "utf8"))).toMatchObject({ model: "test/model", theme: "github-light" });
+    } finally {
+      await web.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("exposes supported effort choices and validates and persists model changes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-model-"));
+    const config = testConfig(root);
+    const baseModel = config.model;
+    config.models = [
+      { ...baseModel, id: "codex/gpt-6-luna", model: "gpt-6-luna", api: "codex" },
+      { ...baseModel, id: "native/gpt-5", model: "gpt-5", api: "responses" },
+      { ...baseModel, id: "native/qwen", model: "qwen", api: "openai" },
+    ];
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh);
+    await mesh.start();
+    const base = await web.start();
+    const select = (model: string, reasoning_effort?: unknown) => jsonRequest(`${base}api/model`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, reasoning_effort }),
+    });
+    try {
+      const node = await jsonRequest(`${base}api/node`);
+      expect(node.body.models).toMatchObject([
+        { reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+        { reasoning_efforts: ["low", "medium", "high"] }, { reasoning_efforts: [] },
+      ]);
+      expect((await select("missing", "high")).status).toBe(400);
+      expect((await select("codex/gpt-6-luna", "ultra")).status).toBe(400);
+      expect((await select("native/qwen", "high")).status).toBe(400);
+      expect((await select("native/gpt-5", "xhigh")).status).toBe(400);
+      expect((await select("native/gpt-5", "high")).status).toBe(200);
+      expect(config.model.reasoningEffort).toBe("high");
+      await select("native/qwen");
+      await select("native/gpt-5");
+      expect((await jsonRequest(`${base}api/node`)).body).toMatchObject({ model_id: "native/gpt-5", reasoning_effort: "high" });
+      expect(JSON.parse(await readFile(join(config.home, "node-preferences.json"), "utf8"))).toMatchObject({ modelEfforts: { "native/gpt-5": "high" } });
+      await select("native/gpt-5", null);
+      expect(config.model.reasoningEffort).toBeUndefined();
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  });
+
   it("resumes saved agent history after restart and rejects duplicate resume requests", async () => {
     const root = await mkdtemp(join(tmpdir(), "luban-web-resume-"));
     const config = testConfig(root);
@@ -188,6 +254,119 @@ describe("LubanWebServer", () => {
       });
       expect(cancelled.body).toMatchObject({ ok: true, status: "cancelled" });
       await waitForJob(base, id, "cancelled");
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
+
+  it("lists only real conversations and counts messages without the system prompt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-sessions-"));
+    const config = testConfig(root);
+    await mkdir(config.workspace, { recursive: true });
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh, { port: 0 });
+    await mesh.start();
+    const base = await web.start();
+    try {
+      const store = new SessionStore(config.home);
+      const real = store.create(config.project, config.workspace, "agent", "test/model", [
+        { role: "system", content: "system prompt" },
+        { role: "user", content: "run the tests" },
+        { role: "assistant", content: "they pass" },
+      ]);
+      await store.save(real);
+      // What a CLI start leaves behind before the user types anything.
+      const draftDirectory = join(config.home, "sessions-node", config.project);
+      await mkdir(draftDirectory, { recursive: true });
+      await writeFile(join(draftDirectory, "20260101000000-draft.json"), JSON.stringify({
+        ...real, id: "20260101000000-draft", title: "New session", messages: [{ role: "system", content: "system prompt" }],
+      }));
+
+      const listed = await jsonRequest(`${base}api/sessions?project=${config.project}`);
+      expect(listed.body).toEqual([expect.objectContaining({ id: real.id, messages: 2 })]);
+      expect((await jsonRequest(`${base}api/sessions/20260101000000-draft?project=${config.project}`)).body).toMatchObject({ id: "20260101000000-draft" });
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
+
+  it("continues a saved conversation when a job carries its session id", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-continue-"));
+    const config = testConfig(root);
+    config.maxSteps = 1;
+    await mkdir(config.workspace, { recursive: true });
+    const prompts: string[][] = [];
+    const configure = (mesh: MeshRuntime) => configureRemoteJobs(mesh, config, settings => new AgentRunner(settings, { async complete(messages) {
+      prompts.push(messages.map(message => message.content ?? ""));
+      return { content: "continued answer", toolCalls: [], usage: { input: 1, output: 1 } };
+    } }));
+    const mesh = new MeshRuntime(config);
+    configure(mesh);
+    const web = new LubanWebServer(config, mesh);
+    await mesh.start();
+    const base = await web.start();
+    try {
+      const store = new SessionStore(config.home);
+      const session = store.create(config.project, config.workspace, "agent", config.model.id, [
+        { role: "system", content: "sys" },
+        { role: "user", content: "first turn" },
+        { role: "assistant", content: "first answer" },
+      ]);
+      await store.save(session);
+
+      const rejected = await jsonRequest(`${base}api/jobs`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ instruction: "lost turn", project_id: config.project, session_id: "missing-session" }),
+      });
+      expect(rejected.status).toBe(404);
+
+      const submitted = await jsonRequest(`${base}api/jobs`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ instruction: "second turn", project_id: config.project, session_id: session.id }),
+      });
+      expect(submitted.body.ok).toBe(true);
+      const done = await waitForJob(base, String(submitted.body.job_id), "done");
+      expect(done.session_id).toBe(session.id);
+      // The continuation runs in the session's recorded workspace, not the project mapping.
+      expect(done.workspace).toBe(config.workspace);
+      expect(prompts[0]).toEqual(expect.arrayContaining(["first turn", "first answer", "second turn"]));
+      const saved = await store.load(session.id, config.project, config.workspace);
+      expect(saved?.messages.map(message => message.content)).toEqual(expect.arrayContaining(["second turn", "continued answer"]));
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
+
+  it("switches the active model from the web UI and remembers it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-model-"));
+    const config = testConfig(root);
+    config.models = [...config.models, { ...config.models[0]!, id: "test/alt", name: "Alt Model" }];
+    await mkdir(config.workspace, { recursive: true });
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh);
+    await mesh.start();
+    const base = await web.start();
+    try {
+      expect((await jsonRequest(`${base}api/node`)).body).toMatchObject({ model_id: "test/model" });
+      const switched = await jsonRequest(`${base}api/models/active`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "test/alt" }),
+      });
+      expect(switched.status).toBe(200);
+      expect(switched.body).toMatchObject({ ok: true, model_id: "test/alt", name: "Alt Model" });
+      expect(config.model.id).toBe("test/alt");
+      expect((await jsonRequest(`${base}api/node`)).body).toMatchObject({ model_id: "test/alt" });
+      expect(JSON.parse(await readFile(join(config.home, "node-preferences.json"), "utf8"))).toMatchObject({ model: "test/alt" });
+      expect((await jsonRequest(`${base}api/models/active`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "test/missing" }),
+      })).status).toBe(404);
     } finally {
       await web.stop();
       await mesh.stop();

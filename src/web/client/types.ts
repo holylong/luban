@@ -100,6 +100,8 @@ export interface FileEntry {
   children?: FileEntry[];
 }
 
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
 export interface NodeInfo {
   name: string;
   /** Workspace this node runs in; shown when a phone picks between nodes. */
@@ -112,8 +114,11 @@ export interface NodeInfo {
   projects: Record<string, string>;
   serving: boolean;
   model: string;
+  /** Catalog id of the active model, used by the model picker. */
+  model_id?: string;
   provider: string;
-  models: Array<{ id: string; name: string; provider: string }>;
+  reasoning_effort?: ReasoningEffort | null;
+  models: Array<{ id: string; name: string; provider: string; reasoning_effort?: ReasoningEffort | null; reasoning_efforts?: ReasoningEffort[] }>;
   version: string;
   runtime: string;
   interactive: boolean;

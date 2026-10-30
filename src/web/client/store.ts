@@ -27,6 +27,8 @@ export interface WorkbenchStore {
   inbox: InboxMessage[];
   sessions: SessionSummary[];
   selectedId?: string;
+  /** Saved conversation the next submission continues, if any. */
+  activeSessionId?: string;
   job?: MeshJob;
   events: JobStreamRecord[];
   approvals: ApprovalView[];
@@ -53,12 +55,15 @@ export interface WorkbenchStore {
   decide: (id: string, decision: "once" | "tool" | "always" | "deny") => Promise<void>;
   answerQuestion: (id: string, answer: string) => Promise<void>;
   setProject: (project: string) => void;
+  /** Switches the active model for subsequent tasks; the server persists it. */
+  setModel: (id: string, effort?: import("./types").ReasoningEffort | null) => Promise<void>;
   setMode: (mode: TaskMode) => void;
   setSideTab: (tab: SideTab) => void;
   setPreviewTab: (tab: PreviewTab) => void;
   browse: (sub: string) => Promise<void>;
   openFile: (path: string) => Promise<void>;
   openSession: (id: string) => Promise<void>;
+  leaveSession: () => void;
   refreshDiff: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   syncPeer: (direction: "push" | "pull") => Promise<void>;
@@ -90,6 +95,7 @@ export function useWorkbench(): WorkbenchStore {
   const [fileError, setFileError] = useState<string>();
   const [diff, setDiff] = useState<DiffPayload>();
   const [session, setSession] = useState<SessionDetail>();
+  const [activeSessionId, setActiveSessionId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const toastId = useRef(0);
   const selectedRef = useRef<string | undefined>(undefined);
@@ -104,6 +110,7 @@ export function useWorkbench(): WorkbenchStore {
 
   const loadJob = useCallback(async (id: string) => {
     const detail = await api.job(id);
+    if (selectedRef.current !== id) return detail;
     setJob(detail);
     setEvents(current => (selectedRef.current === id ? mergeEvents(current, detail.events ?? []) : (detail.events ?? [])));
     setApprovals(detail.approvals ?? []);
@@ -112,8 +119,8 @@ export function useWorkbench(): WorkbenchStore {
   }, []);
 
   const selectJob = useCallback((id: string) => {
+    selectedRef.current = id;
     setSelectedId(id);
-    setSession(undefined);
     setEvents([]);
     setApprovals([]);
     setJob(undefined);
@@ -121,10 +128,13 @@ export function useWorkbench(): WorkbenchStore {
   }, [loadJob, notify]);
 
   const startNew = useCallback(() => {
+    selectedRef.current = undefined;
     setSelectedId(undefined);
     setJob(undefined);
     setEvents([]);
     setApprovals([]);
+    setSession(undefined);
+    setActiveSessionId(undefined);
   }, []);
 
   const refreshOverview = useCallback(async () => {
@@ -144,6 +154,14 @@ export function useWorkbench(): WorkbenchStore {
       return undefined;
     }
   }, [project]);
+
+  const setModel = useCallback(async (id: string, effort?: import("./types").ReasoningEffort | null) => {
+    try {
+      await api.setModel(id, effort);
+      await refreshOverview();
+      notify(`模型设置已保存（下一轮生效）`);
+    } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
+  }, [notify, refreshOverview]);
 
   const refreshSessions = useCallback(async () => {
     if (!project) return;
@@ -174,9 +192,17 @@ export function useWorkbench(): WorkbenchStore {
   const openSession = useCallback(async (id: string) => {
     if (!project) return;
     setPreviewTab("session");
-    try { setSession(await api.session(id, project)); }
-    catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
-  }, [project, notify]);
+    try {
+      const detail = await api.session(id, project);
+      setSession(detail);
+      setActiveSessionId(detail.id);
+      const related = jobs.filter(item => item.session_id === detail.id).sort((a, b) => b.created_at - a.created_at)[0];
+      if (related) selectJob(related.id);
+      else { selectedRef.current = undefined; setSelectedId(undefined); setJob(undefined); setEvents([]); setApprovals([]); setQuestions([]); }
+    } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
+  }, [project, notify, jobs, selectJob]);
+
+  const leaveSession = startNew;
 
   const refreshDiff = useCallback(async () => {
     if (!project) return;
@@ -187,16 +213,23 @@ export function useWorkbench(): WorkbenchStore {
 
   const submit = useCallback(async (instruction: string) => {
     if (!instruction.trim()) return;
+    if (job && ["queued", "pending", "working"].includes(job.status)) {
+      notify("请等当前一轮完成或停止后再继续，避免同一会话并发覆盖。", true);
+      return;
+    }
     setBusy(true);
     try {
-      const reply = await api.submit({ instruction, project_id: project, mode, interaction: "on" });
+      const reply = await api.submit({
+        instruction, project_id: project, mode, interaction: "on",
+        ...(activeSessionId ? { session_id: activeSessionId } : {}),
+      });
       if (!reply.interactive) notify("服务器未启用交互审批：本任务按自动放行执行");
       await refreshOverview();
       selectJob(reply.job_id);
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), true);
     } finally { setBusy(false); }
-  }, [project, mode, notify, refreshOverview, selectJob]);
+  }, [project, mode, activeSessionId, job, notify, refreshOverview, selectJob]);
 
   const cancel = useCallback(async () => {
     if (!selectedId) return;
@@ -229,6 +262,7 @@ export function useWorkbench(): WorkbenchStore {
     setFile(undefined);
     setDiff(undefined);
     setSession(undefined);
+    setActiveSessionId(undefined);
     setTree([]);
     setTreePath("");
   }, []);
@@ -335,6 +369,20 @@ export function useWorkbench(): WorkbenchStore {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadJob, notify, refreshOverview]);
 
+  // A continuation job writes into the same transcript; mirror it once it settles.
+  useEffect(() => {
+    if (!project) return;
+    if (!activeSessionId && job?.session_id) { setActiveSessionId(job.session_id); return; }
+    if (!activeSessionId) return;
+    if (job && ["queued", "pending", "working"].includes(job.status) && session) return;
+    if (job?.session_id && job.session_id !== activeSessionId) return;
+    let active = true;
+    api.session(activeSessionId, project)
+      .then(next => { if (active) { setSession(next); void refreshSessions(); } })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [activeSessionId, project, job?.status, job?.updated_at, job?.session_id, refreshSessions]);
+
   // Approval prompts refresh alongside the stream, since they arrive out of band.
   useEffect(() => {
     if (!selectedId) { setApprovals([]); setQuestions([]); return; }
@@ -351,16 +399,16 @@ export function useWorkbench(): WorkbenchStore {
   }, [selectedId]);
 
   return useMemo<WorkbenchStore>(() => ({
-    node, connected, live, jobs, peers, inbox, sessions, selectedId, job, events, approvals, questions, toasts,
+    node, connected, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
     project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy,
     notify, dismiss, selectJob, startNew, submit, cancel, resume, decide, answerQuestion,
-    setProject, setMode, setSideTab, setPreviewTab, browse, openFile, openSession,
+    setProject, setModel, setMode, setSideTab, setPreviewTab, browse, openFile, openSession, leaveSession,
     refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   }), [
-    node, connected, live, jobs, peers, inbox, sessions, selectedId, job, events, approvals, questions, toasts,
+    node, connected, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
     project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy,
     notify, dismiss, selectJob, startNew, submit, cancel, resume, decide, answerQuestion,
-    setProject, browse, openFile, openSession, refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
+    setProject, setModel, browse, openFile, openSession, leaveSession, refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   ]);
 }
 

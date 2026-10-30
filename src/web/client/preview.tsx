@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { HighlightedLine, Markdown } from "./markdown";
+import { EditRecord } from "./tool-card";
 import { parseEditRecord, relativeTime, toolLabel } from "./timeline";
 import type { DiffPayload, FileContent, SessionDetail } from "./types";
 
@@ -96,7 +97,7 @@ function DiffView({ diff, onOpen }: { diff: DiffPayload; onOpen: (path: string) 
   );
 }
 
-function SessionView({ session }: { session: SessionDetail }): React.ReactElement {
+export function SessionView({ session, compactTools = false }: { session: SessionDetail; compactTools?: boolean }): React.ReactElement {
   const edits = session.edits ?? [];
   return (
     <>
@@ -129,9 +130,13 @@ function SessionView({ session }: { session: SessionDetail }): React.ReactElemen
         {session.messages.filter(message => message.role !== "system" && !message.tool_calls?.length).map((message, index) => (
           <div className="session-msg" key={index}>
             <div className="role">{message.role === "user" ? (message.name || "user") : message.role === "tool" ? `tool${message.tool_call_id ? ` · ${message.tool_call_id}` : ""}` : message.role}</div>
-            {message.role === "assistant"
+            {compactTools && message.role === "tool"
+              ? <div className="content muted">{message.editPreview ? "代码修改详情见中间代码区" : "工具执行记录已保存"}</div>
+              : message.role === "assistant"
               ? <div className="content"><Markdown text={message.content || ""} /></div>
-              : <div className="content">{message.editPreview || message.content}</div>}
+              : message.editPreview
+              ? <EditRecord preview={message.editPreview} />
+              : <div className="content">{message.content}</div>}
           </div>
         ))}
       </div>

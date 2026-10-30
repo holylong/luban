@@ -1,6 +1,16 @@
 import type { LubanConfig, ModelRef } from "./types.js";
 import type { ModelRequestOptions } from "./openai.js";
 
+/** Only native effort controls belong in the effort picker, not thinking toggles. */
+export function supportedReasoningEfforts(model: ModelRef): NonNullable<ModelRef["reasoningEffort"]>[] {
+  if (model.api === "codex") return model.model === "gpt-6-luna"
+    ? ["low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max", "ultra"];
+  if (model.thinkingControl === "reasoning-effort" || (!model.thinkingControl && /^(?:gpt-[56]|o[134])(?:[-.]|$)/iu.test(model.model))) {
+    return ["low", "medium", "high"];
+  }
+  return [];
+}
+
 /** Recovery must change what the provider actually receives. Unknown models
  * may ignore thinking options, so only a real budget increase helps those. */
 export function reasoningRecoveryOptions(config: LubanConfig, current: ModelRequestOptions | undefined,

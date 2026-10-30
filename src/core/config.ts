@@ -656,7 +656,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   };
 
   const modelConfig = record(raw.model);
-  const storedEfforts = record(preferences.codexEfforts);
+  const storedEfforts = { ...record(preferences.codexEfforts), ...record(preferences.modelEfforts) };
   const forcedEffort = codexEffort(process.env.LUBAN_CODEX_EFFORT);
   const configuredEffort = codexEffort(text(modelConfig.reasoning_effort, modelConfig.reasoningEffort));
   // Preserve historical defaults independently of catalog visibility.
@@ -669,10 +669,10 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     ?? catalog.find(model => model.provider === (codexEnabled ? "codex" : goConnected ? "opencode-go" : "opencode-zen"))
     ?? catalog[0]!;
   const models = [...fallbackModels, ...catalog].map((model) => {
-    if (model.api !== "codex") return model;
     const stored = storedEfforts[model.id];
-    const effort = forcedEffort ?? (stored === "" ? undefined : codexEffort(stored) ?? configuredEffort);
-    return effort ? { ...model, reasoningEffort: effort } : model;
+    const effort = (model.api === "codex" ? forcedEffort : undefined)
+      ?? (stored === "" ? undefined : codexEffort(stored) ?? model.reasoningEffort ?? configuredEffort);
+    return { ...model, reasoningEffort: effort };
   });
   const requested = requestedModel;
   const active = models.find((item) => item.id === requested || item.model === requested)
@@ -845,8 +845,8 @@ export async function savePreferredModel(home: string, model: string, effort?: M
   await savePreferences(home, {
     model,
     ...(model.startsWith("codex/") ? { codexEnabled: true } : {}),
-    ...(model.startsWith("codex/") && effort !== undefined ? {
-      codexEfforts: { ...record(readJson(join(home, "node-preferences.json")).codexEfforts), [model]: effort ?? "" },
+    ...(effort !== undefined ? {
+      modelEfforts: { ...record(readJson(join(home, "node-preferences.json")).modelEfforts), [model]: effort ?? "" },
     } : {}),
   });
 }

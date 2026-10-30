@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "./session-store.js";
@@ -40,6 +40,27 @@ describe("SessionStore", () => {
     const latest = await store.load("latest", "demo");
     expect(latest?.id).toBe(draft.id);
     expect(latest?.title).toBe("fix the parser");
+  });
+
+  it("hides legacy system-prompt-only drafts but keeps explicit ids loadable", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-session-drafts-"));
+    const store = new SessionStore(home);
+    const directory = join(home, "sessions-node", "demo");
+    await mkdir(directory, { recursive: true });
+    const draft = {
+      id: "20260101000000-legacy", project: "demo", workspace: home, title: "New session", titleSource: "auto",
+      mode: "agent", model: "local/coder", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+      messages: [{ role: "system", content: "system prompt" }],
+    };
+    await writeFile(join(directory, `${draft.id}.json`), JSON.stringify(draft));
+    // Quitting after a partial slash command leaves only command history.
+    const commandOnly = { ...draft, id: "20260101000001-commands", inputHistory: ["/se"] };
+    await writeFile(join(directory, `${commandOnly.id}.json`), JSON.stringify(commandOnly));
+
+    expect(await store.list("demo")).toEqual([]);
+    expect(await store.load("latest", "demo")).toBeUndefined();
+    expect((await store.load(draft.id, "demo"))?.id).toBe(draft.id);
+    expect((await store.load(commandOnly.id, "demo"))?.inputHistory).toEqual(["/se"]);
   });
 
   it("persists raw input history even for sessions containing only commands", async () => {

@@ -33,6 +33,8 @@ export interface MeshJob {
   runtime?: string;
   instance_id?: string;
   session_id?: string;
+  /** A new job that appends its instruction to an existing session. */
+  continues_session?: boolean;
   resume_count?: number;
   queued_at?: number;
 }
@@ -75,6 +77,8 @@ export class MeshJobStore {
       ...(fields.lease_deadline ? { lease_deadline: fields.lease_deadline } : {}),
       ...(fields.runtime ? { runtime: fields.runtime } : {}),
       ...(fields.instance_id ? { instance_id: fields.instance_id } : {}),
+      ...(fields.session_id ? { session_id: fields.session_id } : {}),
+      ...(fields.continues_session ? { continues_session: true } : {}),
     };
     await this.put(job);
     return job;

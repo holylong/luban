@@ -60,7 +60,7 @@ export function Approvals({ store }: { store: WorkbenchStore }): React.ReactElem
   );
 }
 
-function Questions({ store }: { store: WorkbenchStore }): React.ReactElement | null {
+export function Questions({ store }: { store: WorkbenchStore }): React.ReactElement | null {
   const [custom, setCustom] = useState<Record<string, string>>({});
   if (!store.questions.length) return null;
   return <div className="block">

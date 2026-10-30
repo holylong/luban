@@ -53,6 +53,12 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
     const store = new SessionStore(config.home, sharedHistory(config.history, config.home));
     let session = job.session_id ? await store.load(job.session_id, settings.project, settings.workspace) : undefined;
     if ((job.resume_count || 0) > 0 && !session) throw new Error("Cannot resume: saved task history is missing; inspect the workspace before starting a new task.");
+    if (job.continues_session && job.session_id && !session) throw new Error("Cannot continue: the saved conversation is missing; open it from the session list first.");
+    if (job.continues_session && session) {
+      // A continuation job carries the next user turn; the resumed job (same id)
+      // already has its instruction in the transcript and must not duplicate it.
+      session.messages.push({ role: "user", content: job.instruction });
+    }
     if (!session) {
       session = store.create(settings.project, settings.workspace, "agent", settings.model.id,
         [...initialMessages(settings.workspace, settings.model.name, settings.planning, settings.kev?.mode, settings.sandbox?.allowOutsideWorkspace === true), { role: "user", content: job.instruction }]);

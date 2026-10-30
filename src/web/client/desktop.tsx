@@ -1,13 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Composer, Toasts, TopBar } from "./app";
 import { api } from "./api";
-import { Approvals } from "./inspector";
-import { Preview } from "./preview";
+import { Approvals, Questions } from "./inspector";
+import { DesktopEditor } from "./desktop-editor";
+import { DesktopConsole } from "./desktop-console";
+import { SessionView } from "./preview";
 import { useWorkbench, type WorkbenchStore } from "./store";
 import { buildTimeline, Transcript } from "./transcript";
-import type { FileEntry } from "./types";
+import type { FileEntry, SessionDetail, TimelineItem } from "./types";
+import { latestDesktopPlan } from "./desktop-plan";
+import { conversationEntries, historyBeforeRun } from "./desktop-conversation";
+import { DesktopChanges, currentDesktopEdit } from "./desktop-changes";
 
-type ExplorerTab = "files" | "tasks" | "sessions";
+import { DesktopThemePicker } from "./desktop-theme-picker";
+
+type ExplorerTab = "files" | "sessions";
 
 function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
   const [tab, setTab] = useState<ExplorerTab>("files");
@@ -61,14 +68,14 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
       <div className="desktop-brand"><span className="desktop-mark">L</span><b>luban</b><span className="desktop-version">v{store.node?.version ?? "…"}</span></div>
       <div className="desktop-project">
         <label htmlFor="desktop-project">项目</label>
-        <select id="desktop-project" value={store.project} onChange={event => store.setProject(event.target.value)}>
+        <select id="desktop-project" value={store.project} disabled={Boolean(window.lubanDesktop)} title="桌面端请使用 文件 → 打开项目文件夹 切换项目" onChange={event => store.setProject(event.target.value)}>
           {Object.keys(store.node?.projects ?? {}).length === 0 && <option value="">当前工作区</option>}
           {Object.entries(store.node?.projects ?? {}).map(([name, path]) => <option key={name} value={name}>{name} · {path}</option>)}
         </select>
       </div>
+      <DesktopThemePicker notify={store.notify} />
       <div className="desktop-explorer-tabs">
         <button className={tab === "files" ? "active" : ""} onClick={() => setTab("files")}>文件</button>
-        <button className={tab === "tasks" ? "active" : ""} onClick={() => { setTab("tasks"); store.setSideTab("runs"); }}>任务</button>
         <button className={tab === "sessions" ? "active" : ""} onClick={() => { setTab("sessions"); store.setSideTab("sessions"); }}>会话</button>
       </div>
       {tab === "files" && <>
@@ -80,21 +87,66 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
           {draw(folders[""] ?? [])}
         </div>
       </>}
-      {tab === "tasks" && <div className="desktop-explorer-scroll">
-        <button className="desktop-new" onClick={store.startNew}>＋ 新任务</button>
-        {store.jobs.map(job => <button key={job.id} className={`desktop-list-row${store.selectedId === job.id ? " active" : ""}`} onClick={() => store.selectJob(job.id)}>
-          <span>{job.title || job.instruction || job.id}</span><small>{job.status} · {job.project_id}</small>
-        </button>)}
-        {!store.jobs.length && <div className="desktop-muted">还没有任务</div>}
-      </div>}
       {tab === "sessions" && <div className="desktop-explorer-scroll">
-        {store.sessions.map(session => <button key={session.id} className="desktop-list-row" onClick={() => void store.openSession(session.id)}>
-          <span>{session.title}</span><small>{session.model} · {session.messages} 条消息</small>
+        <button className="desktop-new" onClick={store.startNew}>＋ 新会话</button>
+        {conversationEntries(store.sessions, store.jobs, store.project).map(entry => <button key={entry.id} className={`desktop-list-row${store.activeSessionId === entry.id || store.selectedId === entry.job?.id ? " active" : ""}`} onClick={() => entry.sessionId ? void store.openSession(entry.sessionId) : entry.job && store.selectJob(entry.job.id)}>
+          <span>{entry.title}</span><small>{entry.job ? `最近一轮 · ${entry.job.status}` : "历史会话"}</small>
         </button>)}
-        {!store.sessions.length && <div className="desktop-muted">还没有会话</div>}
+        {!store.sessions.length && !store.jobs.length && <div className="desktop-muted">还没有会话</div>}
       </div>}
     </aside>
   );
+}
+
+/** Saved transcript shown in the agent column, with the composer wired to continue it. */
+export function DesktopSessionHistory({ session }: { session: SessionDetail }): React.ReactElement {
+  const count = session.messages.filter(message => message.role !== "system").length;
+  return <div className="desktop-session-panel">
+    <div className="desktop-session-note">下面的输入框会继续这段会话：已带上此前 {count} 条消息与工具结果，不另开新会话。</div>
+    <SessionView session={session} />
+  </div>;
+}
+
+/**
+ * Right column. Picking a saved session puts its transcript here and points the
+ * shared composer at it, so the click continues the conversation instead of
+ * opening a read-only page in the code area.
+ */
+export function AgentPanel({ store, timeline }: { store: WorkbenchStore; timeline: TimelineItem[] }): React.ReactElement {
+  const history = store.session ? historyBeforeRun(store.session, store.job) : undefined;
+  const plan = latestDesktopPlan(timeline);
+  return <>
+    <TopBar store={store} />
+    {store.session && <div className="desktop-agent-tabs"><span>{store.session.title}</span><button onClick={store.startNew}>＋ 新会话</button></div>}
+    {store.approvals.length > 0 && <div className="desktop-approvals"><Approvals store={store} /></div>}
+    {store.questions.length > 0 && <div className="desktop-approvals"><Questions store={store} /></div>}
+    {plan.length > 0 && <details className="desktop-task-plan" open><summary>本轮计划</summary><ol>{plan.map((item, index) => <li key={index} className={item.status}><span>{item.status === "completed" ? "✓" : item.status === "in_progress" ? "◉" : "○"}</span>{item.step}</li>)}</ol></details>}
+    <Transcript job={store.job} events={timeline}
+      history={history && <DesktopSessionHistory session={history} />}
+      onCancel={() => void store.cancel()} onResume={() => void store.resume()} />
+    <Composer store={store} />
+  </>;
+}
+
+export function DesktopCodeArea({ store, timeline }: { store: WorkbenchStore; timeline: TimelineItem[] }): React.ReactElement {
+  const [tab, setTab] = useState<"code" | "changes">("code");
+  const latest = currentDesktopEdit(timeline);
+  useEffect(() => { if (latest) setTab("changes"); }, [latest?.id, latest?.preview]);
+  useEffect(() => { if (store.file?.path) setTab("code"); }, [store.file?.path]);
+  useEffect(() => { setTab("code"); }, [store.project]);
+  return <div className="desktop-code-area">
+    <div className="desktop-code-tabs" role="tablist" aria-label="代码工作区">
+      <button role="tab" aria-selected={tab === "code"} onClick={() => setTab("code")}>代码</button>
+      <button role="tab" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>当前修改</button>
+    </div>
+    <div className="desktop-code-pane" role="tabpanel" aria-label="代码" hidden={tab !== "code"}>
+      <DesktopEditor store={store} activeView={tab === "code"} />
+    </div>
+    <div className="desktop-code-pane" role="tabpanel" aria-label="修改对比" hidden={tab !== "changes"}>
+      <DesktopChanges timeline={timeline} />
+      {!latest && <div className="desktop-muted">暂无当前修改，完整编辑记录请在 Agent 中查看</div>}
+    </div>
+  </div>;
 }
 
 export function DesktopApp(): React.ReactElement {
@@ -111,14 +163,11 @@ export function DesktopApp(): React.ReactElement {
   return <div className="desktop-app">
     <Explorer store={store} />
     <main className="desktop-editor">
-      <div className="desktop-editor-head"><span className="desktop-editor-title">{store.file?.path || store.node?.workspace || "代码浏览"}</span><span>只读预览</span></div>
-      <Preview store={store} />
+      <DesktopCodeArea store={store} timeline={timeline} />
+      <DesktopConsole store={store} />
     </main>
     <aside className="desktop-agent">
-      <TopBar store={store} />
-      {store.approvals.length > 0 && <div className="desktop-approvals"><Approvals store={store} /></div>}
-      <Transcript job={store.job} events={timeline} onCancel={() => void store.cancel()} onResume={() => void store.resume()} />
-      <Composer store={store} />
+      <AgentPanel store={store} timeline={timeline} />
     </aside>
     <footer className="desktop-status"><span className={`dot ${store.connected ? "online" : "offline"}`} />{store.connected ? "本地 Agent 已连接" : "正在连接本地 Agent"}<span>{store.project || store.node?.workspace || ""}</span><span>{store.file ? `${store.file.lines ?? 0} 行 · ${store.file.language}` : ""}</span></footer>
     <Toasts store={store} />

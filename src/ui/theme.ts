@@ -337,12 +337,18 @@ let activeColors: Partial<ThemePalette> | undefined;
  * so a caller can tell the user what actually happened.
  */
 export function applyTheme(value: string, colors?: Record<string, string>): ThemeDefinition {
-  const definition = findTheme(value) ?? THEMES[0]!;
+  const definition = resolveTheme(value, colors);
   const overrides = validColors(colors);
   activeId = definition.id;
   activeColors = overrides;
   Object.assign(theme, definition.palette, overrides ?? {});
   return { ...definition, palette: { ...theme } };
+}
+
+/** Resolve a palette without changing the process-global terminal theme. */
+export function resolveTheme(value: string, colors?: Record<string, string>): ThemeDefinition {
+  const definition = findTheme(value) ?? THEMES[0]!;
+  return { ...definition, palette: { ...definition.palette, ...validColors(colors) } };
 }
 
 /** Id of the palette currently painted. */

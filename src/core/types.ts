@@ -38,7 +38,7 @@ export interface ModelRef {
   baseUrl: string;
   apiKey: string;
   api: "openai" | "anthropic" | "responses" | "codex";
-  /** Codex CLI model_reasoning_effort override; absent uses Codex config.toml. */
+  /** Native reasoning effort override; absent uses the provider/CLI default. */
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** Override automatic reasoning-control detection for compatible gateways. */
   thinkingControl?: "qwen" | "thinking" | "reasoning-effort" | "adaptive" | "budget" | "none";
