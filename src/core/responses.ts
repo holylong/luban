@@ -102,6 +102,42 @@ function incompleteReason(value: JsonObject | undefined): string | undefined {
   return reason === "content_filter" ? undefined : reason;
 }
 
+/**
+ * Some gateways (ChatGPT's own /backend-api/codex) stream SSE without any
+ * content-type header. Peek the first bytes so the stream is not mistaken for
+ * a JSON body, then replay them to the caller.
+ */
+async function peekBody(body: ReadableStream<Uint8Array>, size = 64): Promise<{ stream: ReadableStream<Uint8Array>; prefix: string }> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < size) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      return (async () => {
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+          controller.close();
+        } catch (error) {
+          controller.error(error);
+        }
+      })();
+    },
+    cancel(reason) { void reader.cancel(reason).catch(() => undefined); },
+  });
+  return { stream, prefix: new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))) };
+}
+
 function outputItemsToResult(output: unknown, onDelta?: DeltaHandler): { content: string; toolCalls: ToolCall[] } {
   const items = Array.isArray(output) ? output as JsonObject[] : [];
   let content = "";
@@ -180,6 +216,15 @@ export class ResponsesClient {
           if (!retryableBody(response.status, responseBody) || attempt >= retries) throw error;
         } else {
           const type = response.headers.get("content-type") || "";
+          if (!type && response.body) {
+            const { stream, prefix } = await peekBody(response.body);
+            if (/^\s*(?:data:|event:|id:|:)/.test(prefix)) {
+              clearTimeout(timeout);
+              return await this.consumeStream(stream, onDelta, controller, onNotice, signal, options?.thinkingTimeoutMs);
+            }
+            const rest = await new Response(stream).text();
+            return this.fromJson(JSON.parse(prefix + rest) as JsonObject, onDelta);
+          }
           if (!type.includes("text/event-stream")) {
             const data = await response.json() as JsonObject;
             return this.fromJson(data, onDelta);

@@ -1,9 +1,6 @@
 import { basename } from "node:path";
-import { OpenAiClient } from "./openai.js";
-import { AnthropicClient } from "./anthropic.js";
-import { ResponsesClient } from "./responses.js";
-import { CodexClient } from "./codex.js";
-import { isZenFreeModel, OpenCodeZenClient } from "./opencode-zen.js";
+import { modelClientFor } from "./model-client.js";
+import { isZenFreeModel } from "./opencode-zen.js";
 import type { ChatMessage, LubanConfig } from "./types.js";
 import type { WorkReport } from "./work-report.js";
 
@@ -34,8 +31,7 @@ export function modelDiaryWriter(config: LubanConfig, signal = new AbortControll
   // Zen's free tier only answers requests that carry coding tools, so the
   // diary request keeps a placeholder tool on the wire and never executes it.
   const zenFree = isZenFreeModel(config.model);
-  const client = zenFree ? new OpenCodeZenClient(config)
-    : config.model.api === "codex" ? new CodexClient(config) : config.model.api === "anthropic" ? new AnthropicClient(config) : config.model.api === "responses" ? new ResponsesClient(config) : new OpenAiClient(config);
+  const client = modelClientFor(config);
   return async (messages, maxTokens) => {
     const result = await client.complete(messages, zenFree ? [DIARY_PLACEHOLDER_TOOL] : [], signal, undefined, undefined, { maxTokens, enableThinking: false });
     if (result.truncated || result.streamEnded || result.toolCalls.length || !result.content.trim()) throw new Error("工作日记生成未完整结束，请重试；未写入报告文件。");

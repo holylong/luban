@@ -6,7 +6,8 @@ Node.js/TypeScript 版 luban。它使用 Ink 渲染风格的终端工作台，�
 Python luban 的局域网发现、节点通信、远程任务和工作区同步。
 
 需要 **Node.js 20 或更高版本**。模型侧支持 OpenAI 兼容的 Chat Completions、
-Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT 订阅账号；交互侧提供交互式 TUI、非交互 `--prompt`
+Anthropic Messages、Responses API，以及通过 Codex 的 ChatGPT 登录（默认直连 Codex 后端，
+可回退官方 CLI）使用订阅账号；交互侧提供交互式 TUI、非交互 `--prompt`
 和浏览器工作台三种入口，共用同一套会话与 Mesh job 存储。
 
 ### ChatGPT Plus 登录 Codex
@@ -24,7 +25,25 @@ Anthropic Messages、Responses API，以及通过官方 Codex CLI 使用 ChatGPT
 
 `active` 选择模型，`reasoning_effort` 是该模型的二级推理强度，可写 `low`、`medium`、`high`、`xhigh`、`max`，支持的模型还可选 `ultra`；省略时使用 Codex CLI 的默认设置。运行 `luban` 即按配置启动，也可用 `luban --model codex/gpt-6-sol` 临时指定模型。在 TUI 中输入 `/models`，先选择 `codex` provider，再选择 Codex 模型和推理强度；选择结果会保存到 `~/.luban/node-preferences.json`，供下次启动使用。内置模型有 `codex/default` 以及 Codex CLI 当前账号可用并标记为可见的模型（luban 读取 `~/.codex/models_cache.json` 自动同步，未获取到缓存时回退到内置清单），实际可用性以账号和 Codex CLI 为准；也可用 `codex/<模型名>` 指定 CLI 支持的其他模型。
 
-`codex/default` 使用 `~/.codex/config.toml` 中的默认模型；未在 luban 中设置 `reasoning_effort` 时，也使用其中的默认推理强度，例如 `model_reasoning_effort = "high"`。`LUBAN_CODEX_EFFORT=xhigh luban` 可覆盖本次进程的推理强度。这个后端复用 Codex CLI 的登录状态，无需 OpenAI API key；登录失效时重新运行 `luban login codex`。当前每次模型调用会启动一次 CLI，回答在调用完成后显示，暂不支持图片附件。
+`codex/default` 使用 `~/.codex/config.toml` 中的默认模型；未在 luban 中设置 `reasoning_effort` 时，也使用其中的默认推理强度，例如 `model_reasoning_effort = "high"`。`LUBAN_CODEX_EFFORT=xhigh luban` 可覆盖本次进程的推理强度。这个后端复用 Codex CLI 的登录状态（`~/.codex/auth.json` 中的 ChatGPT token），无需 OpenAI API key；登录失效时重新运行 `luban login codex`。
+
+#### 直连 Codex 后端（默认）
+
+默认不再每次调用都启动 `codex exec`，而是拿同一份 ChatGPT 登录直接请求 Codex CLI 自己的后端
+`https://chatgpt.com/backend-api/codex/responses`：把 luban 自己的系统提示和工具 schema 作为
+一次 Responses 请求发出，结果以 SSE 流式返回。这样省掉了 Codex CLI 的固定提示和内置工具定义
+（实测每次调用约 1.5 万输入 token）以及子进程开销：同一句「Reply with exactly: OK」的实测单次
+调用从约 8 秒降到约 2–3 秒，带一次工具调用的两轮任务从约 17 秒降到约 5 秒。
+
+- 默认 `auto`：优先直连；直连不可用（没有登录、接口变更、5xx、401 且刷新失败）时本轮改用
+  官方 CLI，并在界面提示一句。
+- `LUBAN_CODEX_MODE=cli`：始终走 `codex exec`（旧行为，直连出问题或想对比时使用）。
+- `LUBAN_CODEX_MODE=native`：只用直连，失败直接报错，不静默回退。
+- access token 过期时用 `auth.json` 中的 refresh token 刷新，并把新 token 原子写回
+  `~/.codex/auth.json`，Codex CLI 与 luban 的登录因此保持一致。
+- 直连时图片附件按 Responses 规范发送；回退到 CLI 时仍只支持文字。
+
+以下说明仅针对 CLI 模式。
 
 同一运行器内，Codex 会复用已完成的 CLI 线程并只发送新增消息；TUI 复制会话数组、
 更新计划或记录验证不会再触发全量重发。计划和验证状态发生变化时，增量请求会明确
@@ -401,9 +420,9 @@ luban 内置默认用 Chat Completions，需要 Responses 时给单个模型加 
 
 `models` 写成对象会与内置模型表合并（数组写法才是整体覆盖），所以上面只把
 `gpt-6-luna` 切到 Responses，其余内置模型照常可选。luban 会按 `base_url` 自动推导
-`/responses` 端点，不用手写后缀。`codex/*` 系列走的是本机 Codex CLI（`codex exec`
-加 `--output-schema`），与这个 HTTP 接口无关；要直接请求网关的 Responses 接口，用
-`opendesign/*` 模型。
+`/responses` 端点，不用手写后缀。`codex/*` 系列用的是 ChatGPT 订阅额度：默认直连
+Codex 后端，`LUBAN_CODEX_MODE=cli` 时改走本机 Codex CLI（`codex exec` 加 `--output-schema`），
+两者都与这里的 HTTP 网关无关；要直接用网关的 Responses 接口，用 `opendesign/*` 模型。
 
 #### 走 Claude Code 的 Messages 接口
 

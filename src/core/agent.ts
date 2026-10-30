@@ -5,10 +5,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { arch, release, type } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { OpenAiClient, MAX_OUTPUT_TOKENS, type ModelRequestOptions } from "./openai.js";
-import { AnthropicClient } from "./anthropic.js";
-import { ResponsesClient } from "./responses.js";
-import { CodexClient } from "./codex.js";
-import { isZenFreeModel, OpenCodeZenClient } from "./opencode-zen.js";
+import { modelClientFor, type ModelClient } from "./model-client.js";
+import { isZenFreeModel } from "./opencode-zen.js";
 import { modelRetryDelay, recoverableGoStreamError, waitForModelRetry } from "./opencode-go.js";
 import { enforceAgentIdentity, extractFinalAnswer } from "./reasoning.js";
 import { clipContextText, compactForRequest, compactMessages, estimateMessagesTokens } from "./context.js";
@@ -231,17 +229,6 @@ export function shouldThink(text: string): boolean {
   return true;
 }
 
-interface ModelClient {
-  complete(
-    messages: ChatMessage[],
-    tools: Array<Record<string, unknown>>,
-    signal: AbortSignal,
-    onDelta?: (text: string, kind: "content" | "reasoning") => void,
-    /** Retry/timeout progress for the wait between requests. */
-    onNotice?: (text: string) => void,
-    options?: ModelRequestOptions,
-  ): Promise<{ content: string; reasoning?: string; toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>; usage: { input: number; output: number; cached?: number; reasoning?: number }; truncated?: boolean; streamEnded?: boolean }>;
-}
 
 /**
  * How many times one run asks the model to continue past a provider's output cap
@@ -296,10 +283,7 @@ export class AgentRunner {
     const outputTool = this.outputs.tool();
     this.tools.set(outputTool.name, outputTool);
     this.mcp = new McpManager(config);
-    this.client = client ?? (isZenFreeModel(config.model) ? new OpenCodeZenClient(config)
-      : config.model.api === "codex" ? new CodexClient(config) : config.model.api === "anthropic"
-      ? new AnthropicClient(config)
-      : config.model.api === "responses" ? new ResponsesClient(config) : new OpenAiClient(config));
+    this.client = client ?? modelClientFor(config);
     if (depth < 2) {
       const runChild = async (instruction: string, maxSteps: number, signal: AbortSignal, readOnly: boolean, useWorktree: boolean, autoMerge: boolean, parentBudget: () => number): Promise<string> => {
         const capped = Math.min(maxSteps, parentBudget());

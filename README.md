@@ -4,7 +4,7 @@
   <img src="docs/assets/luban-logo.png" alt="luban Logo" width="480" />
 </p>
 
-luban 是一个 AI 编程助手：读代码、改文件、运行命令，把一个想法做到能运行、能验证。终端、桌面和浏览器都能用，多台电脑与手机也能一起协作。
+luban 是一个 AI 通用助手：读代码、改文件、运行命令，把一个想法做到能运行、能验证。终端、桌面和浏览器都能用，多台电脑与手机也能一起协作。
 
 ![luban 终端界面：对话、功能介绍与任务执行状态](docs/luban.png)
 
@@ -54,7 +54,7 @@ luban . --yes --prompt "运行测试并修复失败"         # 一句话跑一�
 - Open Design：设置 `OPEN_DESIGN_API_KEY`，选择 `opendesign/gpt-6-luna` 等模型
 - OpenCode Go / Zen：设置 `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`
 - 自定义 OpenAI 兼容接口：配置 `base_url`、`api_key_env` 与 `models`
-- Codex 账号：安装官方 Codex CLI 后运行 `luban login codex`，再选择 `codex/default`
+- Codex 账号：安装官方 Codex CLI 后运行 `luban login codex`，再选择 `codex/default`（默认直连 Codex 后端，比每次启动 `codex exec` 快数倍；`LUBAN_CODEX_MODE=cli` 可退回旧行为）
 
 协议切换（Responses / Messages）、内置模型清单、额度与重连等细节见 [详细参考](docs/reference.md#配置)。
 
