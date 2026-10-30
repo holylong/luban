@@ -97,6 +97,12 @@
 .desktop-console-output { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; font: 12px/1.6 var(--mono); }
 .desktop-console-output pre { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .desktop-console-output small { color: var(--dim); }
+.desktop-console-format { flex: none; display: flex; gap: 6px; padding: 4px 12px; border-bottom: 1px solid var(--line); }
+.desktop-console-format button[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); }
+.desktop-console-markdown { min-width: 0; overflow-x: auto; padding: 6px 0; }
+.desktop-console-markdown .md table { width: max-content; min-width: 100%; }
+.desktop-console-markdown .md th, .desktop-console-markdown .md td { white-space: nowrap; }
+.desktop-console-markdown .md pre { white-space: pre; overflow-wrap: normal; }
 .desktop-command-title { display: flex; gap: 8px; align-items: center; overflow-wrap: anywhere; }
 .desktop-command-title button { margin-left: auto; }
 .desktop-command-input { flex: none; min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-top: 1px solid var(--line); background: var(--panel); }
