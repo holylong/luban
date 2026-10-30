@@ -58,8 +58,15 @@
 .desktop-document-tabs > div.active { background: var(--bg); border-top-color: var(--blue); }
 .desktop-document-tabs button { border: 0; border-radius: 0; font-size: 12px; white-space: nowrap; }
 .desktop-code-editor { display: flex; flex: 1; min-height: 100px; overflow: hidden; }
+.desktop-code-surface { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
 .desktop-code-editor textarea, .desktop-line-numbers { margin: 0; padding: 12px; font: 13px/21px var(--mono); tab-size: 2; border: 0; border-radius: 0; }
 .desktop-code-editor textarea { flex: 1; min-width: 0; resize: none; color: var(--fg); background: var(--bg); outline: none; white-space: pre; overflow: auto; }
+/* The highlight layer is painted under a transparent textarea, so typing, caret,
+   selection and undo stay native while the buffer reads in colour. The two layers
+   must share font, padding and tab-size or the text drifts apart. */
+.desktop-code-highlight { position: absolute; top: 0; left: 0; margin: 0; padding: 12px; font: 13px/21px var(--mono); tab-size: 2; color: var(--fg); white-space: pre; pointer-events: none; user-select: none; will-change: transform; }
+.desktop-code-editor textarea.highlighted { color: transparent; caret-color: var(--fg); background: transparent; }
+.desktop-code-editor textarea.highlighted::selection { background: color-mix(in srgb, var(--blue) 30%, transparent); }
 .desktop-line-numbers { width: 58px; flex: none; color: var(--dim); text-align: right; overflow: hidden; user-select: none; border-right: 1px solid var(--line); }
 .desktop-editor-info { flex: none; display: flex; align-items: center; gap: 12px; padding: 4px 10px; font-size: 11px; color: var(--dim); border-top: 1px solid var(--line); }
 .desktop-editor-info button { margin-left: auto; }
