@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { createTools } from "./tools.js";
+import { defaultSandboxSettings } from "./sandbox.js";
 import type { LubanConfig } from "./types.js";
 
 async function setup(overrides: Partial<LubanConfig> = {}) {
@@ -47,6 +48,33 @@ describe("workspace tools", () => {
   it("rejects paths outside the workspace", async () => {
     const { tools, signal } = await setup();
     await expect(tools.get("read_file")!.execute({ path: "../secret" }, signal)).rejects.toThrow("escapes workspace");
+  });
+
+  // The shell already honoured sandbox.allowOutsideWorkspace; the file tools
+  // now follow the same switch instead of owning a jail no config could widen.
+  it("lets file tools reach outside paths only when sandbox.allowOutsideWorkspace is on", async () => {
+    const base = await setup();
+    const outside = await mkdtemp(join(tmpdir(), "luban-outside-"));
+    const outsideFile = join(outside, "b.ts");
+    await writeFile(outsideFile, "export const b = 1;\n");
+    const signal = base.signal;
+
+    const jailed = base.tools;
+    await expect(jailed.get("read_file")!.execute({ path: join(outside, "b.ts") }, signal)).rejects.toThrow("escapes workspace");
+    await expect(jailed.get("list_dir")!.execute({ path: ".." }, signal)).rejects.toThrow("escapes workspace");
+    await expect(jailed.get("write_file")!.execute({ path: join(outside, "c.ts"), content: "x" }, signal)).rejects.toThrow("escapes workspace");
+
+    const open = await setup({ workspace: base.workspace, home: base.workspace, sandbox: { ...defaultSandboxSettings(), allowOutsideWorkspace: true } });
+    expect(await open.tools.get("read_file")!.execute({ path: relative(base.workspace, outsideFile) }, signal)).toContain("b = 1");
+    expect(await open.tools.get("read_file")!.execute({ path: outsideFile }, signal)).toContain("b = 1");
+    expect(await open.tools.get("list_dir")!.execute({ path: outside }, signal)).toContain("b.ts");
+    await open.tools.get("write_file")!.execute({ path: join(outside, "c.ts"), content: "created\n" }, signal);
+    expect(await readFile(join(outside, "c.ts"), "utf8")).toBe("created\n");
+    await open.tools.get("edit_file")!.execute({ path: join(outside, "c.ts"), old_text: "created", new_text: "edited" }, signal);
+    expect(await readFile(join(outside, "c.ts"), "utf8")).toBe("edited\n");
+
+    // apply_patch stays git-based, so a patch header outside the repo is still refused.
+    await expect(open.tools.get("apply_patch")!.execute({ patch: "--- a/../c.ts\n+++ b/../c.ts\n@@ -1 +1 @@\n-edited\n+touched\n" }, signal)).rejects.toThrow("escapes workspace");
   });
 
   // The decision-engine switch: the advisor tool exists only in kev mode, so

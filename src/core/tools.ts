@@ -8,7 +8,7 @@ import { terminateProcessTree } from "./process-tree.js";
 import { assessShellCommand, defaultSandboxSettings, restartConfirmationReason, wrapWithBackend } from "./sandbox.js";
 import { codeIntelligenceTool } from "./code-intelligence.js";
 import { languageOfPath } from "./lsp.js";
-import { resolveInside } from "./paths.js";
+import { isInside, pathResolver, resolveInside } from "./paths.js";
 import { LubanBackend } from "./backend.js";
 import { callMcpTool, listMcpTools, searchMcpTools } from "./mcp.js";
 import { CheckpointStore } from "./checkpoint.js";
@@ -404,11 +404,17 @@ async function discoverSkills(config: LubanConfig): Promise<Map<string, string>>
 
 export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string, ToolDefinition> {
   const workspace = config.workspace;
+  // File tools share the shell's stance on outside paths: jailed by default,
+  // widened only when the user opts into `sandbox.allowOutsideWorkspace`.
+  const resolvePath = pathResolver(workspace, config.sandbox?.allowOutsideWorkspace === true);
   const background = new BackgroundTasks();
   const checkpoints = new CheckpointStore(config);
   const codeIntel = codeIntelligenceTool(workspace, config);
   const editedFileResult = async (path: string, before: string, after: string, signal: AbortSignal): Promise<string> => {
     const preview = editPreview(relative(workspace, path), before, after);
+    // Code intelligence is rooted at the workspace, so an outside file has no
+    // diagnostics to report; do not turn that into a fake "unavailable" error.
+    if (!isInside(workspace, path)) return preview;
     if (!/\.[cm]?[jt]sx?$/iu.test(path) && !Object.values(config.lspServers ?? {}).some(server => server.enabled && server.languages.includes(languageOfPath(path) ?? ""))) return preview;
     try {
       const diagnostics = JSON.parse(await codeIntel.execute({ path: relative(workspace, path), operation: "diagnostics", timeout_ms: 3000, max_results: 20 }, signal)) as { results: Array<{ category?: string; code?: string | number; line?: number; message?: string }> };
@@ -422,7 +428,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
     codeIntel,
     {
       name: "read_file",
-      description: "Read a UTF-8 text file in the workspace, optionally by line range.",
+      description: "Read a UTF-8 text file, optionally by line range. Paths are workspace-relative; absolute and parent paths work only when the sandbox allows outside-workspace access.",
       risk: "read",
       parallelSafe: true,
       parameters: schema({
@@ -431,7 +437,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
         limit: { type: "integer", minimum: 1, maximum: 4000 },
       }, ["path"]),
       async execute(args) {
-        const path = await resolveInside(workspace, stringArg(args, "path"));
+        const path = await resolvePath(stringArg(args, "path"));
         const info = await stat(path);
         if (info.size > 2_000_000) throw new Error(`file is too large (${info.size} bytes)`);
         // Do not decode binary assets as UTF-8; PNG screenshots otherwise flood
@@ -453,7 +459,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       parallelSafe: true,
       parameters: schema({ path: { type: "string", description: "Directory, defaults to workspace root" } }),
       async execute(args) {
-        const path = await resolveInside(workspace, stringArg(args, "path", false) || ".");
+        const path = await resolvePath(stringArg(args, "path", false) || ".");
         const entries = await readdir(path, { withFileTypes: true });
         return entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
           .map((entry) => `${entry.isDirectory() ? "d" : "f"}  ${entry.name}${entry.isDirectory() ? "/" : ""}`).join("\n");
@@ -516,11 +522,11 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
     },
     {
       name: "write_file",
-      description: "Create or replace a UTF-8 file in the workspace.",
+      description: "Create or replace a UTF-8 file. Parent directories are created as needed.",
       risk: "write",
       parameters: schema({ path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
       async execute(args, signal) {
-        const path = await resolveInside(workspace, stringArg(args, "path"));
+        const path = await resolvePath(stringArg(args, "path"));
         const content = stringArg(args, "content", false);
         const before = await readFile(path, "utf8").catch(error => { if (error.code === "ENOENT") return ""; throw error; });
         await mkdir(resolve(path, ".."), { recursive: true });
@@ -534,7 +540,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       risk: "write",
       parameters: schema({ path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" } }, ["path", "old_text", "new_text"]),
       async execute(args, signal) {
-        const path = await resolveInside(workspace, stringArg(args, "path"));
+        const path = await resolvePath(stringArg(args, "path"));
         const oldText = stringArg(args, "old_text");
         const newText = stringArg(args, "new_text", false);
         const source = await readFile(path, "utf8");
@@ -729,19 +735,25 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       parallelSafe: true,
       parameters: schema({ path: { type: "string", description: "Workspace-relative image path" } }, ["path"]),
       async execute(args) {
-        const path = await resolveInside(workspace, stringArg(args, "path"));
+        const path = await resolvePath(stringArg(args, "path"));
+        const inside = isInside(workspace, path);
         if (!/\.(?:png|jpe?g|gif|webp|bmp|ico|avif)$/iu.test(path)) throw new Error("read_image supports png/jpg/gif/webp/bmp/ico/avif");
         const info = await stat(path);
         if (info.size > 8_000_000) throw new Error(`image is too large (${info.size} bytes, max 8 MB)`);
         const vision = config.model.capabilities?.vision === true;
+        // attach_image keeps its workspace-only jail (it feeds native bytes to
+        // the model), so an outside image must be copied in before attaching.
+        const note = !inside
+          ? `Image is outside the workspace (${path}). attach_image only accepts workspace paths, so copy it into the workspace first; this metadata result alone does not contain image pixels.`
+          : vision
+            ? "Model declares vision support. Call attach_image with this workspace-relative path to send native image input on the next model call. This metadata result alone does not contain image pixels."
+            : `Model ${config.model.id} does not declare vision support. Describe the image content in text or switch to a vision-capable model.`;
         return JSON.stringify({
           path: relative(workspace, path),
           bytes: info.size,
           vision_capable_model: vision,
           model: config.model.id,
-          note: vision
-            ? "Model declares vision support. Call attach_image with this workspace-relative path to send native image input on the next model call. This metadata result alone does not contain image pixels."
-            : `Model ${config.model.id} does not declare vision support. Describe the image content in text or switch to a vision-capable model.`,
+          note,
         }, null, 2);
       },
     },

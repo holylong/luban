@@ -127,7 +127,7 @@ function sessionStore(config: LubanConfig): SessionStore {
 async function runHeadless(config: LubanConfig, prompt: string, mesh?: MeshRuntime): Promise<number> {
   process.stderr.write(`luban v${VERSION}\n`);
   const store = sessionStore(config);
-  const messages: ChatMessage[] = [...initialMessages(config.workspace, config.model.name, config.planning, config.kev?.mode), { role: "user", content: prompt }];
+  const messages: ChatMessage[] = [...initialMessages(config.workspace, config.model.name, config.planning, config.kev?.mode, config.sandbox?.allowOutsideWorkspace === true), { role: "user", content: prompt }];
   const session = store.create(config.project, config.workspace, "agent", config.model.id, messages);
   const runner = new AgentRunner(config, undefined, mesh);
   const controller = new AbortController();

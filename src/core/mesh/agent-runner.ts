@@ -55,7 +55,7 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
     if ((job.resume_count || 0) > 0 && !session) throw new Error("Cannot resume: saved task history is missing; inspect the workspace before starting a new task.");
     if (!session) {
       session = store.create(settings.project, settings.workspace, "agent", settings.model.id,
-        [...initialMessages(settings.workspace, settings.model.name, settings.planning, settings.kev?.mode), { role: "user", content: job.instruction }]);
+        [...initialMessages(settings.workspace, settings.model.name, settings.planning, settings.kev?.mode, settings.sandbox?.allowOutsideWorkspace === true), { role: "user", content: job.instruction }]);
       await store.save(session);
       await mesh.store.update(job.id, { session_id: session.id });
     }

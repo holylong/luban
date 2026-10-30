@@ -144,9 +144,12 @@ const DECISION_RULES: Record<DecisionEngine, string> = {
   kev: `\nDecision engine: Jev/Kev. The chat model proposes, the local Kev decision model decides. Before a consequential, hard-to-reverse or genuinely ambiguous call, call kev_decide with the relevant state and typed noul (yes/no), choice (pick one) or score (ordered level) questions, then act on the calibrated answer. Skip it for routine or obvious steps; Kev cannot use tools and reads only the state you pass it.`,
 };
 
+/** Appended to rule 8 only when the user widened the file tools. */
+const OUTSIDE_WORKSPACE_RULE = " File tools (read_file, list_dir, write_file, edit_file, read_image) also accept absolute and parent-relative paths here, because sandbox.allowOutsideWorkspace is enabled: edit the sibling project directly instead of asking for a copy. apply_patch, attach_image and code_intelligence stay inside the workspace.";
+
 /** The full system prompt for a planning mode and decision engine. */
-export function systemPrompt(planning: PlanningMode = "auto", decision: DecisionEngine = "model"): string {
-  return `${PROMPT_HEADER}\n${PLANNING_RULES[planning]}\n${PROMPT_FOOTER}${DECISION_RULES[decision]}`;
+export function systemPrompt(planning: PlanningMode = "auto", decision: DecisionEngine = "model", allowOutsideWorkspace = false): string {
+  return `${PROMPT_HEADER}\n${PLANNING_RULES[planning]}\n${PROMPT_FOOTER}${allowOutsideWorkspace ? OUTSIDE_WORKSPACE_RULE : ""}${DECISION_RULES[decision]}`;
 }
 
 /** Default prompt, kept for callers that only need the stable first line. */
@@ -183,11 +186,11 @@ function platformContext(): string {
   return `Platform: ${process.platform} (${type()} ${release()}, ${arch()})\nShell: ${shell}`;
 }
 
-export function initialMessages(workspace: string, modelName?: string, planning: PlanningMode = "auto", decision: DecisionEngine = "model"): ChatMessage[] {
+export function initialMessages(workspace: string, modelName?: string, planning: PlanningMode = "auto", decision: DecisionEngine = "model", allowOutsideWorkspace = false): ChatMessage[] {
   const instructions = workspaceInstructions(workspace);
   return [{
     role: "system",
-    content: `${systemPrompt(planning, decision)}\n\nWorkspace: ${workspace}\n${platformContext()}${modelName ? `\nModel: ${modelName}` : ""}${instructions ? `\n\n${instructions}` : ""}`,
+    content: `${systemPrompt(planning, decision, allowOutsideWorkspace)}\n\nWorkspace: ${workspace}\n${platformContext()}${modelName ? `\nModel: ${modelName}` : ""}${instructions ? `\n\n${instructions}` : ""}`,
   }];
 }
 
@@ -304,7 +307,7 @@ export class AgentRunner {
           }
           const child = new AgentRunner(childConfig, undefined, mesh, depth + 1);
           const childMessages: ChatMessage[] = [
-            ...initialMessages(childConfig.workspace, config.model.name, childConfig.planning, childConfig.kev?.mode ?? "model"),
+            ...initialMessages(childConfig.workspace, config.model.name, childConfig.planning, childConfig.kev?.mode ?? "model", childConfig.sandbox?.allowOutsideWorkspace === true),
             { role: "user", content: `Work as a focused subagent. Return a concise report to the parent agent.\n\n${instruction}` },
           ];
           try {
@@ -650,7 +653,7 @@ export class AgentRunner {
       if (signal.aborted) throw signal.reason ?? new Error("aborted");
       if (await promote()) { step = 0; lastText = ""; lastToolSignature = ""; repeatCount = 0; recentRounds.length = 0; }
       // Refresh startup rules for resumed sessions and edits to root instructions.
-      if (String(messages[0]?.content).startsWith(SYSTEM_PROMPT.split("\n")[0]!)) messages[0] = initialMessages(this.config.workspace, this.config.model.name, this.config.planning ?? "auto", this.config.kev?.mode ?? "model")[0]!;
+      if (String(messages[0]?.content).startsWith(SYSTEM_PROMPT.split("\n")[0]!)) messages[0] = initialMessages(this.config.workspace, this.config.model.name, this.config.planning ?? "auto", this.config.kev?.mode ?? "model", this.config.sandbox?.allowOutsideWorkspace === true)[0]!;
       // Codex CLI owns its output budget; luban never sends max_tokens to it.
       // Use contextReserve for Codex instead of reserving an unsent 64K budget,
       // which causes premature summaries and fresh threads with full history.

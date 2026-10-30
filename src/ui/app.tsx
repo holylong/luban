@@ -711,7 +711,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   }, [stdout]);
   const [config, setConfig] = useState(initialConfig);
   const [mode, setMode] = useState<AgentMode>("auto");
-  const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages(initialConfig.workspace, initialConfig.model.name, initialConfig.planning, initialConfig.kev?.mode));
+  const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages(initialConfig.workspace, initialConfig.model.name, initialConfig.planning, initialConfig.kev?.mode, initialConfig.sandbox?.allowOutsideWorkspace === true));
   const [input, setInput] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
   const [running, setRunning] = useState(false);
@@ -1160,7 +1160,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     setScrollOffset(0);
     runnerRef.current.close();
     runnerRef.current = new AgentRunner(config, undefined, mesh);
-    const nextMessages = initialMessages(config.workspace, config.model.name, config.planning, config.kev?.mode);
+    const nextMessages = initialMessages(config.workspace, config.model.name, config.planning, config.kev?.mode, config.sandbox?.allowOutsideWorkspace === true);
     setMessages(nextMessages);
         setExecutionLog([]);
     resetDraft();

@@ -1165,7 +1165,7 @@ luban 的沙箱与权限是**协作防护**，不是系统级隔离容器：不�
 
 - **权限模式**：`ask` / `edits`（默认）/ `allow` 决定写入、shell、网络工具是否需要确认；`--yes` 等效于全部放行，`deny` 规则始终优先于会话信任。显式 ASK 模式在运行时强制只读，即使 `--yes` 也不放行写入、shell、网络和委派。
 - **软沙箱**：`bash` 会拦截毁灭性命令、工作区外的写入/重定向和自定义 `deny` 规则，可选禁用网络，`sandbox.backend` 可选 `bwrap`。这些约束运行在当前用户权限之内，拦截的是命令模式，不是内核能力。
-- **路径检查**：文件工具的 `resolveInside` 拒绝 `..` 与软链逃逸工作区；但 shell/MCP 内部的文件操作不经过这个入口。
+- **路径检查**：文件工具默认拒绝 `..` 与软链逃逸工作区；开启 `sandbox.allowOutsideWorkspace` 后 `read_file` / `list_dir` / `write_file` / `edit_file` / `read_image` 可以读写工作区之外的绝对路径（`apply_patch` 仍受 git 仓库范围限制，`attach_image` 与 `code_intelligence` 仍只认工作区路径）；shell/MCP 内部的文件操作不经过这个入口。
 - **进程清理**：退出或切换会话会终止受管理的后台进程组（Unix 使用进程组，Windows 使用 `taskkill /T /F`；Windows 分支未在 Linux 环境实测）；主动脱离进程组的守护进程不受保证。
 - **Web 后台**：默认只监听 `127.0.0.1`，且没有任何内置认证；只有需要局域网浏览器访问时才使用 `--host 0.0.0.0`。
 - **Mesh**：使用 HMAC 鉴权与重放防护，各节点的 `LUBAN_MESH_TOKEN` 必须一致；不要在不信任的网络上开启协作。

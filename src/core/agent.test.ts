@@ -1007,4 +1007,14 @@ describe("run accounting", () => {
     expect(result.modelCalls).toBe(2);
     expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
   });
+
+  // The prompt must not invite outside paths unless the user widened the file
+  // tools, and must say so plainly when they did.
+  it("mentions outside paths only when sandbox.allowOutsideWorkspace is on", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-prompt-"));
+    const jailed = String(initialMessages(workspace, "m")[0]!.content);
+    expect(jailed).not.toContain("sandbox.allowOutsideWorkspace");
+    const open = String(initialMessages(workspace, "m", "auto", "model", true)[0]!.content);
+    expect(open).toContain("sandbox.allowOutsideWorkspace is enabled");
+  });
 });

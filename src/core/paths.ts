@@ -1,6 +1,28 @@
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
+/** Whether an already-resolved path stays inside the workspace root. */
+export function isInside(workspace: string, target: string): boolean {
+  const rel = relative(resolve(workspace), resolve(target));
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+
+/**
+ * Path resolution for the file tools. The workspace jail is the default; with
+ * `sandbox.allowOutsideWorkspace` the file tools accept absolute and `..`
+ * paths too, which is what the shell already did under that flag. Everything
+ * inside the workspace still goes through the symlink checks of resolveInside.
+ */
+export function pathResolver(workspace: string, allowOutsideWorkspace = false): (input: string) => Promise<string> {
+  const root = resolve(workspace);
+  if (!allowOutsideWorkspace) return (input: string) => resolveInside(root, input);
+  return async (input: string) => {
+    const target = resolve(root, input || ".");
+    if (!isInside(root, target)) return target;
+    return resolveInside(root, target);
+  };
+}
+
 export async function resolveInside(workspace: string, input: string): Promise<string> {
   const root = resolve(workspace);
   const target = resolve(root, input || ".");
