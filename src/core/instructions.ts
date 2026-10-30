@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { resolveInside } from "./paths.js";
+import { isInside, resolveInside } from "./paths.js";
 import type { ChatMessage } from "./types.js";
 
 const PREFIX = "luban_scope_";
@@ -13,7 +13,12 @@ export async function scopedInstructions(workspace: string, paths: string[], his
   const canonicalRoot = await realpath(root);
   const directories = new Set<string>();
   for (const path of paths) {
-    const target = await resolveInside(root, path);
+    const resolved = resolve(root, path);
+    // Outside paths (allowed by sandbox.allowOutsideWorkspace) have no scoped
+    // workspace instructions. Skipping them keeps a read of a sibling project
+    // from failing here before the file tool ever runs.
+    if (!isInside(root, resolved)) continue;
+    const target = await resolveInside(root, resolved);
     // Consider both alias and canonical paths for internal symlinks.
     const targets = new Set([target]);
     try { targets.add(resolve(root, relative(canonicalRoot, await realpath(target)))); } catch { /* new file */ }

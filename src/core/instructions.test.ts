@@ -1,8 +1,9 @@
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { scopedInstructions } from "./instructions.js";
+import { defaultSandboxSettings } from "./sandbox.js";
 import { AgentRunner, initialMessages } from "./agent.js";
 import type { LubanConfig, ChatMessage, ToolCall } from "./types.js";
 const roots: string[] = [];
@@ -75,4 +76,32 @@ it("refuses dangling symlinks instead of allowing a later write to follow them",
   const outside = await mkdtemp(join(tmpdir(), "luban-dangling-")); roots.push(outside);
   await symlink(join(outside, "missing.ts"), join(root, "src", "link.ts"));
   await expect(scopedInstructions(root, ["src/link.ts"])).rejects.toThrow("unresolved symlink");
+});
+
+it("skips outside paths instead of failing the tool that named them", async () => {
+  const root = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), "luban-sibling-")); roots.push(outside);
+  await writeFile(join(outside, "b.ts"), "export const sibling = 1;\n");
+  expect(await scopedInstructions(root, [join(outside, "b.ts")])).toEqual([]);
+  expect(await scopedInstructions(root, [relative(root, join(outside, "b.ts"))])).toEqual([]);
+});
+
+it("lets a read of a sibling project through the pre-tool instruction gate", async () => {
+  const root = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), "luban-sibling-")); roots.push(outside);
+  await writeFile(join(outside, "b.ts"), "export const sibling = 1;\n");
+  const config = { workspace: root, home: root, project: "test", model: { name: "test" }, maxSteps: 3, maxTokens: 1000, permissionMode: "allow",
+    sandbox: { ...defaultSandboxSettings(), allowOutsideWorkspace: true } } as LubanConfig;
+  let turn = 0;
+  let toolOutput = "";
+  const runner = new AgentRunner(config, { async complete(history) {
+    if (++turn === 1) return completion([call("r", "read_file", { path: relative(root, join(outside, "b.ts")) })]);
+    toolOutput = String(history.filter((message) => message.role === "tool").at(-1)?.content ?? "");
+    return completion();
+  } });
+  try {
+    await runner.run([...initialMessages(root, "m", "auto", "model", true)], "agent", new AbortController().signal, () => {}, async () => "always");
+    expect(toolOutput).toContain("sibling = 1");
+    expect(toolOutput).not.toContain("TOOL ERROR");
+  } finally { runner.close(); }
 });
