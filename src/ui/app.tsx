@@ -1195,6 +1195,30 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     syncPendingView();
   };
 
+  /**
+   * Tuck the draft away without submitting it.
+   *
+   * Down arrow at the end of the box is the "clear this long input" key: the
+   * text is appended to the input history before the composer empties, so Up
+   * brings it back for editing and nothing has to be retyped from memory.
+   */
+  const dismissDraft = (): boolean => {
+    if (!input.trim()) return false;
+    // While the /command hint menu is open the arrows move its selection, and
+    // clearing the draft underneath it would fight that.
+    if (commandMatches(input).length || argumentMatches(input).length) return false;
+    const history = pushInputHistory(historyFromSession(sessionRef.current), input);
+    sessionRef.current.inputHistory = history;
+    setInputHistory(history);
+    void store.save(sessionRef.current).catch((error) => setNotice(`输入历史保存失败：${error instanceof Error ? error.message : String(error)}`));
+    clearedDraftRef.current = input;
+    setInput("");
+    setHistoryIndex(null);
+    setCommandIndex(0);
+    setNotice("已收起输入 · ↑ 可召回修改 · Esc 可恢复");
+    return true;
+  };
+
   const expandAtMentions = async (text: string): Promise<{ text: string; images: Array<{ path: string; mime: string }> }> => {
     const mentions = [...new Set([...text.matchAll(/@([\w./-]{1,120})/gu)].map((match) => match[1]!))].slice(0, 5);
     if (!mentions.length) return { text, images: [] };
@@ -2784,6 +2808,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             maxRows={inputMaxRows}
             mouseGuard={mouseGuardRef.current}
             caret={caretRequest}
+            onDismissDraft={dismissDraft}
             measureRef={(node) => { inputNodeRef.current = node as LayoutNode | null; }}
           />
           {inputLines > 1 ? <Text color={theme.dim}>  ⏎ {inputLines}行</Text> : null}
@@ -2800,7 +2825,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           {scrolledBack ? (
             <Text color={theme.accent} bold>历史 {scrollPercent(streamView)}% · PageDown 回最新</Text>
           ) : !narrow ? (
-            <Text color={theme.dim}>{running ? "esc 中断 · /queue 排队 · /pending 撤回" : "shift+tab 模式 · ctrl+p 模型 · esc 清空输入"}</Text>
+            <Text color={theme.dim}>{running ? "esc 中断 · /queue 排队 · /pending 撤回" : "shift+tab 模式 · ctrl+p 模型 · esc/↓ 清空"}</Text>
           ) : null}
         </Box>
         {notice !== defaultNotice ? (

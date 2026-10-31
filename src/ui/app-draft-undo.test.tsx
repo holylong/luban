@@ -59,6 +59,67 @@ async function harness(options: { pendingInputs?: Array<{ id: string; content: s
   };
 }
 
+it("puts a long one-line draft away with the down arrow and recalls it with up", async () => {
+  const ui = await harness();
+  const draft = "refactor the billing module and keep the public API unchanged";
+  try {
+    await expect.poll(() => ui.frame(), { timeout: 5000 }).toContain("previous answer");
+    ui.type(draft);
+    await expect.poll(ui.composer).toContain(draft);
+    // A one-line draft has no caret move left for Down, so it clears the box
+    // instead of doing nothing.
+    ui.press("\u001b[B");
+    await expect.poll(ui.composer).toContain("Message luban");
+    await expect.poll(() => ui.frame()).toContain("已收起输入");
+    // The text is not lost: it went into the saved input history.
+    await expect.poll(async () => (await ui.store.load(ui.session.id, ui.config.project))?.inputHistory?.at(-1)).toBe(draft);
+    ui.press("\u001b[A");
+    await expect.poll(ui.composer).toContain(draft);
+  } finally {
+    ui.cleanup();
+  }
+}, 15000);
+
+it("only pushes a multi-line draft out on down at the last line", async () => {
+  const ui = await harness();
+  try {
+    await expect.poll(() => ui.frame(), { timeout: 5000 }).toContain("previous answer");
+    ui.type("first line\nsecond line");
+    await expect.poll(ui.composer).toContain("second line");
+    // Up and back down is plain caret movement: the draft must survive it.
+    ui.press("\u001b[A");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await expect.poll(ui.composer).toContain("first line");
+    ui.press("\u001b[B");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await expect.poll(ui.composer).toContain("second line");
+    // Down on the last line has nowhere left to go, so it clears the box.
+    ui.press("\u001b[B");
+    await expect.poll(ui.composer).toContain("Message luban");
+    await expect.poll(() => ui.frame()).toContain("已收起输入");
+    ui.press("\u001b[A");
+    await expect.poll(ui.composer).toContain("second line");
+  } finally {
+    ui.cleanup();
+  }
+}, 15000);
+
+it("leaves the draft alone when the down arrow belongs to the command menu", async () => {
+  const ui = await harness();
+  try {
+    await expect.poll(() => ui.frame(), { timeout: 5000 }).toContain("previous answer");
+    ui.type("/mo");
+    await expect.poll(() => ui.frame()).toContain("命令 · ↑↓ 选择");
+    ui.press("\u001b[B");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    // Down moved the menu selection; the typed command must stay in the box.
+    await expect.poll(ui.composer).toContain("/mo");
+    expect(ui.frame()).not.toContain("已收起输入");
+  } finally {
+    ui.cleanup();
+  }
+}, 15000);
+
 it("clears an idle draft with Esc and restores it on the next Esc", async () => {
   const ui = await harness();
   try {

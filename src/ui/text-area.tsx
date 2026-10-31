@@ -29,6 +29,11 @@ export interface TextAreaProps {
   caret?: { row: number; column: number; nonce: number } | null;
   /** Receives the rendered box so the caller can hit-test a click against it. */
   measureRef?: (node: unknown) => void;
+  /**
+   * Down arrow with no line left below the caret: tuck the draft away and hand
+   * the prompt back empty. Return true when the draft was actually stashed.
+   */
+  onDismissDraft?: () => boolean;
 }
 
 /**
@@ -37,11 +42,11 @@ export interface TextAreaProps {
  * Up/down move the cursor in multi-line drafts. During history recall the
  * caller owns both arrows, including for wrapped and multi-line entries.
  */
-export function TextArea({ value, onChange, onSubmit, focus, historyActive = false, placeholder, width, maxRows, mouseGuard, caret, measureRef }: TextAreaProps): React.ReactElement {
+export function TextArea({ value, onChange, onSubmit, focus, historyActive = false, placeholder, width, maxRows, mouseGuard, caret, measureRef, onDismissDraft }: TextAreaProps): React.ReactElement {
   // Ink refreshes useInput listeners in an effect, after the new frame is visible.
   // A key arriving in that gap must still submit with the current run/view state.
-  const settingsRef = useRef({ onChange, onSubmit, focus, historyActive, width, maxRows, mouseGuard });
-  settingsRef.current = { onChange, onSubmit, focus, historyActive, width, maxRows, mouseGuard };
+  const settingsRef = useRef({ onChange, onSubmit, focus, historyActive, width, maxRows, mouseGuard, onDismissDraft });
+  settingsRef.current = { onChange, onSubmit, focus, historyActive, width, maxRows, mouseGuard, onDismissDraft };
   const cursorRef = useRef(value.length);
   const lastValueRef = useRef(value);
   const caretNonceRef = useRef(0);
@@ -93,9 +98,21 @@ export function TextArea({ value, onChange, onSubmit, focus, historyActive = fal
     if (key.ctrl && input === "c") return;
     // History recall owns the arrows for a single-line value.
     if (key.upArrow || key.downArrow) {
-      if (!multiline || settingsRef.current.historyActive) return;
+      if (settingsRef.current.historyActive) return;
+      if (!multiline) {
+        // Nothing to move through on a one-line draft, so the down arrow is the
+        // "put this away and start over" key for a pasted command.
+        if (key.downArrow) settingsRef.current.onDismissDraft?.();
+        return;
+      }
       const target = layout.cursorRow + (key.upArrow ? -1 : 1);
-      if (target < 0 || target >= layout.total) return;
+      if (target >= layout.total) {
+        // Already on the last line: there is no caret move left, so the down
+        // arrow pushes the whole draft out of the box instead of doing nothing.
+        settingsRef.current.onDismissDraft?.();
+        return;
+      }
+      if (target < 0) return;
       const row = layout.rows[target]!;
       const column = displayWidth(layout.rows[layout.cursorRow]!.text.slice(0, layout.cursorColumn));
       update(value, row.start + offsetAtColumn(row.text, column));
