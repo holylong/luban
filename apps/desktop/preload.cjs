@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld("lubanDesktop", Object.freeze({
   listFiles: () => ipcRenderer.invoke("luban:listFiles"),
   runCommand: command => ipcRenderer.invoke("luban:runCommand", command),
   stopCommand: id => ipcRenderer.invoke("luban:stopCommand", id),
+  startTerminal: input => ipcRenderer.invoke("luban:startTerminal", input),
+  writeTerminal: input => ipcRenderer.invoke("luban:writeTerminal", input),
+  stopTerminal: id => ipcRenderer.invoke("luban:stopTerminal", id),
   setDirty: value => {
     if (typeof value !== "boolean") throw new TypeError("Dirty state must be boolean");
     dirty = value;

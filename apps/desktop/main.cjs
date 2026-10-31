@@ -29,7 +29,7 @@ function emitCommand(event) {
     if (new URL(window.webContents.getURL()).origin === trustedOrigin) window.webContents.send("luban:commandEvent", event);
   } catch { /* No document during navigation. */ }
 }
-for (const method of ["readFile", "saveFile", "listFiles", "runCommand", "stopCommand"]) {
+for (const method of ["readFile", "saveFile", "listFiles", "runCommand", "stopCommand", "startTerminal", "writeTerminal", "stopTerminal"]) {
   ipcMain.handle(`luban:${method}`, (event, input) => {
     if (!trustedSender(event) || !workspaceService || opening) throw new Error("Untrusted or inactive workspace");
     return workspaceService[method](input);

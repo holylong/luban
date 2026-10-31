@@ -36,7 +36,7 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
 
   const send = async (): Promise<void> => {
     const text = value.trim();
-    if (!text || store.busy || running) return;
+    if (!text || store.busy) return;
     setHistory(current => [text, ...current].slice(0, 50));
     setCursor(-1);
     setValue("");
@@ -60,7 +60,7 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
           value={value}
           placeholder={store.activeSessionId
             ? "继续这段会话：已带上此前的对话与工具结果，直接说下一步…"
-            : running ? "本轮执行中，可先草拟下一条消息…" : "说明目标，Agent 会读取项目、调用工具并验证结果…"}
+            : running ? "本轮执行中：发送后自动排队，本轮结束立即继续…" : "说明目标，Agent 会读取项目、调用工具并验证结果…"}
           onChange={event => { setValue(event.target.value); resize(); }}
           onKeyDown={event => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); return; }
@@ -90,9 +90,14 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
             ))}
           </select>
           {store.activeSessionId && <button className="session-chip" title="下一条消息将续写这段会话；点此改为新任务" onClick={store.leaveSession}>继续会话 ×</button>}
+          {store.queued.length > 0 && (
+            <button className="session-chip queue-chip" title={`排队中：${store.queued.join(" | ")}（点击清空）`} onClick={store.clearQueue}>
+              队列 {store.queued.length} 条 ×
+            </button>
+          )}
           <span className="hint">Enter 执行 · Shift+Enter 换行 · ↑ 历史</span>
           {running && <button className="stop" onClick={() => void store.cancel()}>停止任务</button>}
-          <button className="send" onClick={() => void send()} disabled={!value.trim() || store.busy || running} title="提交">↑</button>
+          <button className="send" onClick={() => void send()} disabled={!value.trim() || store.busy} title="提交">↑</button>
         </div>
       </div>
       {running && (
@@ -101,7 +106,7 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
           {live
             ? `${live.label}${live.detail ? ` · ${live.detail}` : ""} · ${live.stalled ? `已 ${live.silentSeconds}s 无输出` : `本步 ${live.seconds}s`}`
             : "当前任务执行中"}
-          ，本轮结束或停止后可继续对话
+          {store.queued.length > 0 ? `，${store.queued.length} 条已排队等待本轮结束` : "，本轮结束或停止后可继续对话"}
         </div>
       )}
     </div>

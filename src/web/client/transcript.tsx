@@ -9,6 +9,14 @@ function Avatar({ kind }: { kind: "user" | "agent" | "err" }): React.ReactElemen
   return <div className={`avatar ${kind}`}>{kind === "user" ? "Y" : kind === "err" ? "!" : "◈"}</div>;
 }
 
+/** Compact size hint for a collapsed reasoning block. */
+export function thinkingSummary(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const lines = trimmed.split("\n").length;
+  return `${lines} 行 · ${trimmed.length} 字`;
+}
+
 const ItemView = React.memo(function ItemView({ item }: { item: TimelineItem }): React.ReactElement | null {
   switch (item.kind) {
     case "user":
@@ -36,7 +44,16 @@ const ItemView = React.memo(function ItemView({ item }: { item: TimelineItem }):
         </div>
       );
     case "thinking":
-      return <div className="note thinking"><span className="bullet">✳</span><span>{item.text}</span></div>;
+      return (
+        <details className="thinking-block">
+          <summary>
+            <span className="bullet">✳</span>
+            <span>思考过程</span>
+            <span className="tag">{thinkingSummary(item.text)}</span>
+          </summary>
+          <div className="thinking-body">{item.text}</div>
+        </details>
+      );
     case "status":
       return <div className="note"><span className="bullet">·</span><span>{item.text}</span></div>;
     case "error":

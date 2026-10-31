@@ -52,12 +52,24 @@ describe("desktop continuous conversations", () => {
     expect(renderToStaticMarkup(<DesktopChanges timeline={[]} />)).toBe("");
   });
   it("shows model-specific effort choices only once in the shared composer", () => {
-    const store = { connected: true, busy: false, mode: "edits", project: "p", events: [], node: { model_id: "codex/gpt", models: [{ id: "codex/gpt", name: "GPT", provider: "codex", reasoning_efforts: ["low", "high", "xhigh", "max"], reasoning_effort: "xhigh" }], projects: {} } } as unknown as WorkbenchStore;
+    const store = { connected: true, busy: false, queued: [], mode: "edits", project: "p", events: [], node: { model_id: "codex/gpt", models: [{ id: "codex/gpt", name: "GPT", provider: "codex", reasoning_efforts: ["low", "high", "xhigh", "max"], reasoning_effort: "xhigh" }], projects: {} } } as unknown as WorkbenchStore;
     const html = renderToStaticMarkup(<Composer store={store} />);
     expect(html.match(/aria-label="模型"/g)).toHaveLength(1);
     expect(html).toContain('aria-label="推理强度"');
     expect(html).toContain('value="xhigh" selected');
     store.node!.models[0].reasoning_efforts = [];
     expect(renderToStaticMarkup(<Composer store={store} />)).not.toContain('aria-label="推理强度"');
+  });
+  it("invites a queued follow-up while the current round is still running", () => {
+    const store = {
+      connected: true, busy: false, queued: ["跑一遍完整测试"], mode: "edits", project: "p", events: [],
+      job: { ...job }, notify: () => {}, clearQueue: () => {}, leaveSession: () => {},
+      node: { model_id: "codex/gpt", models: [{ id: "codex/gpt", name: "GPT", provider: "codex" }], projects: {} },
+    } as unknown as WorkbenchStore;
+    const html = renderToStaticMarkup(<Composer store={store} />);
+    expect(html).toContain("发送后自动排队");
+    expect(html).toContain("队列 1 条");
+    expect(html).toContain("1 条已排队等待本轮结束");
+    expect(html).toContain("停止任务");
   });
 });

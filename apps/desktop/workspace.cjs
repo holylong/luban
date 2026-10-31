@@ -5,6 +5,9 @@ const { spawn } = require("node:child_process");
 const { TextDecoder } = require("node:util");
 
 const MAX_FILE_BYTES = 1024 * 1024;
+// A terminal streams far more than a one-shot command; cap it so a runaway
+// `yes` cannot fill the renderer.
+const MAX_TERMINAL_BYTES = 32 * 1024 * 1024;
 const EXCLUDED = new Set([".git", "node_modules", "dist"]);
 const revision = content => createHash("sha256").update(content).digest("hex");
 
@@ -12,6 +15,7 @@ function createWorkspace(root, emit = () => {}, options = {}) {
   root = fs.realpathSync(root);
   if (!fs.statSync(root).isDirectory()) throw new Error("Workspace must be a directory");
   const commands = new Map();
+  const terminals = new Map();
   let disposed = false;
   const assertActive = () => { if (disposed) throw new Error("Workspace closed"); };
   function checkedPath(value) {
@@ -154,12 +158,153 @@ function createWorkspace(root, emit = () => {}, options = {}) {
     });
     return { id };
   }
+  // A terminal needs a pty for prompts, colours and `cd`, which Node cannot
+  // allocate. A small Python bridge owns the pty and zero-copy-filters bytes;
+  // `script` is the fallback, and a plain pipe is the last resort.
+  const PTY_BRIDGE = String.raw`
+import os, pty, sys, select, signal
+cols, rows, shell = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+pid, fd = pty.fork()
+if pid == 0:
+    try:
+        env = dict(os.environ)
+        env["TERM"] = "xterm-256color"
+        os.execvpe(shell, [shell, "-il"], env)
+    except OSError:
+        os._exit(127)
+import fcntl, termios, struct
+try:
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+except OSError:
+    pass
+try:
+    while True:
+        ready, _, _ = select.select([0, fd], [], [])
+        if 0 in ready:
+            data = os.read(0, 65536)
+            if not data:
+                break
+            os.write(fd, data)
+        if fd in ready:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            os.write(1, data)
+except (KeyboardInterrupt, OSError):
+    pass
+finally:
+    try:
+        os.kill(pid, signal.SIGHUP)
+    except OSError:
+        pass
+`;
+  function resolvePython() {
+    return ["/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3", "/usr/bin/python"].find(candidate => fs.existsSync(candidate));
+  }
+  function terminalSize(value, fallback, min, max) {
+    const size = Number(value);
+    if (!Number.isFinite(size)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(size)));
+  }
+  function resolveShell() {
+    if (process.platform === "win32") return process.env.ComSpec || "cmd.exe";
+    const candidate = process.env.SHELL;
+    if (candidate && path.isAbsolute(candidate) && fs.existsSync(candidate)) return candidate;
+    return "/bin/sh";
+  }
+  function terminalLaunch(cols, rows) {
+    const shell = resolveShell();
+    if (process.platform !== "win32") {
+      const python = resolvePython();
+      if (python) return { command: python, args: ["-c", PTY_BRIDGE, String(cols), String(rows), shell], pty: true, shell };
+      const script = ["/usr/bin/script", "/bin/script"].find(candidate => fs.existsSync(candidate));
+      if (script) {
+        const boot = `stty rows ${rows} cols ${cols} 2>/dev/null; exec '${shell.replaceAll("'", "'\\''")}' -il`;
+        const args = process.platform === "darwin"
+          ? ["-q", "/dev/null", "/bin/sh", "-c", boot]
+          : ["-q", "-f", "-e", "-c", boot, "/dev/null"];
+        return { command: script, args, pty: true, shell };
+      }
+    }
+    return { command: shell, args: [], pty: false, shell };
+  }
+  function startTerminal(input = {}) {
+    assertActive();
+    if (terminals.size >= (options.maxTerminals || 1)) throw new Error("A terminal is already running");
+    const cols = terminalSize(input.cols, 100, 20, 400);
+    const rows = terminalSize(input.rows, 30, 5, 200);
+    const launch = terminalLaunch(cols, rows);
+    const id = randomUUID();
+    const child = spawn(launch.command, launch.args, {
+      cwd: root,
+      env: { ...process.env, TERM: "xterm-256color", COLUMNS: String(cols), LINES: String(rows) },
+      detached: process.platform !== "win32",
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const record = { child, bytes: 0, pty: launch.pty };
+    terminals.set(id, record);
+    const limit = options.maxTerminalBytes || MAX_TERMINAL_BYTES;
+    const output = chunk => {
+      if (disposed) return;
+      const remaining = limit - record.bytes;
+      if (remaining <= 0) return;
+      const data = chunk.subarray(0, remaining);
+      record.bytes += data.length;
+      emit({ id, kind: "output", text: data.toString("utf8") });
+      if (record.bytes >= limit) {
+        emit({ id, kind: "output", text: "\r\n[终端输出已达上限，已关闭]\r\n" });
+        stopTerminal(id);
+      }
+    };
+    child.stdout.on("data", output);
+    child.stderr.on("data", output);
+    // A shell may exit while a write is still in flight.
+    child.stdin.on("error", () => {});
+    child.on("error", error => {
+      terminals.delete(id);
+      if (!disposed) emit({ id, kind: "output", text: `\r\n${error.message}\r\n` });
+    });
+    child.on("close", (code, signal) => {
+      kill(child, "SIGKILL");
+      terminals.delete(id);
+      if (!disposed) emit({ id, kind: "exit", text: signal ? `Signal ${signal}` : `Exit ${code}` });
+    });
+    return { id, pty: launch.pty, cols, rows, shell: launch.shell };
+  }
+  function writeTerminal(input) {
+    assertActive();
+    if (!input || typeof input.id !== "string" || typeof input.data !== "string") throw new Error("Invalid terminal input");
+    if (input.data.length > 65536) throw new Error("Terminal input is too large");
+    const record = terminals.get(input.id);
+    if (!record) throw new Error("Terminal is not running");
+    record.child.stdin.write(input.data);
+    return { ok: true };
+  }
+  function stopTerminal(id) {
+    if (disposed || typeof id !== "string") return { ok: true };
+    const record = terminals.get(id);
+    if (!record) return { ok: true };
+    terminals.delete(id);
+    kill(record.child, "SIGHUP");
+    const timer = setTimeout(() => kill(record.child, "SIGKILL"), 400);
+    timer.unref?.();
+    return { ok: true };
+  }
   function dispose() {
     if (disposed) return;
     for (const record of commands.values()) { clearTimeout(record.timer); kill(record.child, "SIGKILL"); }
+    for (const record of terminals.values()) kill(record.child, "SIGKILL");
+    terminals.clear();
     disposed = true;
   }
-  return { readFile, saveFile, listFiles, runCommand, stopCommand, dispose };
+  return {
+    readFile, saveFile, listFiles, runCommand, stopCommand,
+    startTerminal, writeTerminal, stopTerminal, dispose,
+  };
 }
 
 module.exports = { createWorkspace, MAX_FILE_BYTES };

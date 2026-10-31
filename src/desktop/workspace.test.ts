@@ -13,8 +13,8 @@ beforeEach(() => {
   service = createWorkspace(root);
 });
 afterEach(() => { service.dispose(); rmSync(root, { recursive: true, force: true }); });
-const waitFor = async (predicate: () => boolean) => {
-  const deadline = Date.now() + 5000;
+const waitFor = async (predicate: () => boolean, timeout = 5000) => {
+  const deadline = Date.now() + timeout;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("Timed out waiting for command");
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -112,5 +112,35 @@ describe("desktop command lifecycle", () => {
     const count = events.length;
     await new Promise(resolve => setTimeout(resolve, 600));
     expect(events).toHaveLength(count);
+  });
+});
+
+describe("desktop workspace terminal", () => {
+  it("keeps one pty shell per workspace and streams its bytes", async () => {
+    const events: CommandEvent[] = [];
+    service.dispose();
+    const terminalService = createWorkspace(root, (event: CommandEvent) => events.push(event));
+    try {
+      const started = terminalService.startTerminal({ cols: 88, rows: 24 });
+      expect(started.id).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(started.cols).toBe(88);
+      expect(started.rows).toBe(24);
+      expect(() => terminalService.startTerminal({ cols: 80, rows: 20 })).toThrow(/already running/u);
+      if (!started.pty) return; // No python3 or script on this host: the shell degrades.
+      await waitFor(() => events.some(event => event.id === started.id && event.kind === "output"), 15000);
+      terminalService.writeTerminal({ id: started.id, data: "echo LUBAN_TERM_OK\n" });
+      await waitFor(() => events.map(event => event.text).join("").includes("LUBAN_TERM_OK"), 15000);
+      terminalService.stopTerminal(started.id);
+      await waitFor(() => events.some(event => event.id === started.id && event.kind === "exit"), 15000);
+      expect(() => terminalService.writeTerminal({ id: started.id, data: "x" })).toThrow(/not running/u);
+    } finally { terminalService.dispose(); }
+  });
+  it("rejects malformed terminal input", () => {
+    service.dispose();
+    service = createWorkspace(root);
+    const started = service.startTerminal({ cols: 90, rows: 20 });
+    expect(() => service.writeTerminal({ id: started.id, data: 42 as unknown as string })).toThrow(/Invalid terminal input/u);
+    expect(() => service.writeTerminal({ id: "missing", data: "x" })).toThrow(/not running/u);
+    service.stopTerminal(started.id);
   });
 });

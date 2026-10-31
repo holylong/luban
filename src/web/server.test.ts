@@ -119,6 +119,11 @@ describe("LubanWebServer", () => {
     let calls = 0;
     const configure = (mesh: MeshRuntime) => configureRemoteJobs(mesh, config, settings => {
       const runner = new AgentRunner(settings, { async complete(messages) {
+        // Sessions are also named by the model after a run; that call is not a
+        // task turn and must not shift the scripted replies below.
+        if (String(messages[0]?.content ?? "").includes("You name coding sessions")) {
+          return { content: "Perform and verify", toolCalls: [], usage: { input: 1, output: 1 } };
+        }
         calls++;
         if (calls === 1) return { content: "", toolCalls: [{ id: "effect", type: "function" as const, function: { name: "once", arguments: "{}" } }], usage: { input: 1, output: 1 } };
         if (calls === 2) return { content: "Work saved; verification remains.", toolCalls: [], usage: { input: 1, output: 1 } };

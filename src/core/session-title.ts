@@ -26,15 +26,45 @@ const MAX_TITLE_WORDS = 14;
 /** Values a model returns when it has nothing to name. */
 const BOILERPLATE = new Set(["new session", "untitled", "untitled session", "session", "title", "n/a", "none", "无标题", "新会话", "会话", "标题"]);
 
+/** Openers that say nothing about the work, so the next line names it instead. */
+const TRIVIAL_OPENERS = new Set([
+  "继续", "继续吧", "继续完成", "好", "好的", "行", "可以", "在吗", "?", "？", "…",
+  "hi", "hello", "hey", "ok", "okay", "yes", "no", "continue", "go on", "go ahead",
+]);
+
+/** Longest placeholder title; the list is narrower than a model-written name. */
+const FALLBACK_TITLE_LENGTH = 48;
+
+function substance(text: string): string {
+  return text
+    .replace(/```[\s\S]*?(?:```|$)/g, " ")   // a pasted block says nothing about the intent
+    .replace(/^[#>*\-\s]+/u, "")             // Markdown heading/quote/bullet decoration
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isTrivial(text: string): boolean {
+  const flat = text.toLowerCase().replace(/[\s。.!！?？~～,，]+$/u, "");
+  return !flat || TRIVIAL_OPENERS.has(flat) || flat.length < 2;
+}
+
 /**
- * First non-empty line of the opening user message, clipped. Kept as the
- * fallback so a session still gets a name when the title call fails, and used
- * as the initial value before the model has seen the exchange.
+ * Placeholder title for a session the model has not named yet.
+ *
+ * It used to be the first line verbatim, which labelled a session "继续" or with
+ * the first line of a pasted stack trace. The opening line is kept when it says
+ * something, otherwise the first substantive user message wins and code blocks
+ * and Markdown decoration are stripped, so the placeholder already reads like a
+ * topic until the model replaces it.
  */
 export function fallbackTitle(messages: ChatMessage[]): string {
-  const first = messages.find((message) => message.role === "user" && typeof message.content === "string" && message.content.trim());
-  const line = typeof first?.content === "string" ? first.content.trim().split("\n")[0]!.trim() : "";
-  return (line || "New session").slice(0, MAX_TITLE_LENGTH);
+  const openings = messages
+    .filter((message) => message.role === "user" && typeof message.content === "string" && !message.name && message.content.trim())
+    .map((message) => String(message.content).split("\n").map(line => line.trim()).find(Boolean) ?? "");
+  const chosen = openings.find((line) => !isTrivial(substance(line))) ?? openings[0] ?? "";
+  const line = substance(chosen);
+  if (!line) return "New session";
+  return line.length > FALLBACK_TITLE_LENGTH ? `${line.slice(0, FALLBACK_TITLE_LENGTH).trimEnd()}…` : line.slice(0, MAX_TITLE_LENGTH);
 }
 
 /**

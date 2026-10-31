@@ -9,6 +9,9 @@ export type TaskMode = "edits" | "agent" | "read";
 export type SideTab = "runs" | "sessions";
 export type PreviewTab = "files" | "diff" | "session";
 
+/** Statuses that mean the selected job still owns its session. */
+const RUNNING = ["queued", "pending", "working"];
+
 export interface Toast { id: number; text: string; error?: boolean }
 
 function mergeEvents(existing: JobStreamRecord[], incoming: JobStreamRecord[]): JobStreamRecord[] {
@@ -45,6 +48,9 @@ export interface WorkbenchStore {
   diff?: DiffPayload;
   session?: SessionDetail;
   busy: boolean;
+  /** Instructions waiting for the running job to settle, in submission order. */
+  queued: string[];
+  clearQueue: () => void;
   notify: (text: string, error?: boolean) => void;
   dismiss: (id: number) => void;
   selectJob: (id: string) => void;
@@ -97,9 +103,16 @@ export function useWorkbench(): WorkbenchStore {
   const [session, setSession] = useState<SessionDetail>();
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [queued, setQueued] = useState<string[]>([]);
   const toastId = useRef(0);
   const selectedRef = useRef<string | undefined>(undefined);
   selectedRef.current = selectedId;
+  // Mirrors `queued` so callbacks always read the freshest list.
+  const queueRef = useRef<string[]>([]);
+  const setQueue = useCallback((next: string[]) => {
+    queueRef.current = next;
+    setQueued(next);
+  }, []);
 
   const notify = useCallback((text: string, error = false) => {
     const id = ++toastId.current;
@@ -135,6 +148,8 @@ export function useWorkbench(): WorkbenchStore {
     setApprovals([]);
     setSession(undefined);
     setActiveSessionId(undefined);
+    queueRef.current = [];
+    setQueued([]);
   }, []);
 
   const refreshOverview = useCallback(async () => {
@@ -211,12 +226,7 @@ export function useWorkbench(): WorkbenchStore {
     catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
   }, [project, notify]);
 
-  const submit = useCallback(async (instruction: string) => {
-    if (!instruction.trim()) return;
-    if (job && ["queued", "pending", "working"].includes(job.status)) {
-      notify("请等当前一轮完成或停止后再继续，避免同一会话并发覆盖。", true);
-      return;
-    }
+  const dispatch = useCallback(async (instruction: string) => {
     setBusy(true);
     try {
       const reply = await api.submit({
@@ -229,7 +239,21 @@ export function useWorkbench(): WorkbenchStore {
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), true);
     } finally { setBusy(false); }
-  }, [project, mode, activeSessionId, job, notify, refreshOverview, selectJob]);
+  }, [project, mode, activeSessionId, notify, refreshOverview, selectJob]);
+
+  const submit = useCallback(async (instruction: string) => {
+    const text = instruction.trim();
+    if (!text) return;
+    // A running job owns the session; keep the instruction instead of dropping it.
+    if (job && RUNNING.includes(job.status)) {
+      setQueue([...queueRef.current, text]);
+      notify(`已排入队列（${queueRef.current.length + 1} 条），本轮结束后自动继续`);
+      return;
+    }
+    await dispatch(text);
+  }, [job, dispatch, notify, setQueue]);
+
+  const clearQueue = useCallback(() => setQueue([]), [setQueue]);
 
   const cancel = useCallback(async () => {
     if (!selectedId) return;
@@ -383,6 +407,29 @@ export function useWorkbench(): WorkbenchStore {
     return () => { active = false; };
   }, [activeSessionId, project, job?.status, job?.updated_at, job?.session_id, refreshSessions]);
 
+  // Queued instructions run once the current job settles; only a status change
+  // triggers a dispatch so a draft added mid-run is not sent concurrently.
+  const settled = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const state = job ? `${job.id}:${job.status}` : "none";
+    if (state === settled.current) return;
+    settled.current = state;
+    if (job && RUNNING.includes(job.status)) return;
+    const next = queueRef.current[0];
+    if (!next) return;
+    setQueue(queueRef.current.slice(1));
+    void dispatch(next);
+  }, [job?.id, job?.status, dispatch, setQueue]);
+
+  // A job names its session a moment after it settles (the model writes the
+  // title), so the list is refreshed once more than the immediate sync would.
+  useEffect(() => {
+    if (!job || RUNNING.includes(job.status)) return;
+    if (sideTab !== "sessions") return;
+    const timer = setTimeout(() => { void refreshSessions(); }, 4000);
+    return () => clearTimeout(timer);
+  }, [job?.id, job?.status, sideTab, refreshSessions]);
+
   // Approval prompts refresh alongside the stream, since they arrive out of band.
   useEffect(() => {
     if (!selectedId) { setApprovals([]); setQuestions([]); return; }
@@ -400,14 +447,14 @@ export function useWorkbench(): WorkbenchStore {
 
   return useMemo<WorkbenchStore>(() => ({
     node, connected, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
-    project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy,
-    notify, dismiss, selectJob, startNew, submit, cancel, resume, decide, answerQuestion,
+    project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy, queued,
+    notify, dismiss, selectJob, startNew, submit, clearQueue, cancel, resume, decide, answerQuestion,
     setProject, setModel, setMode, setSideTab, setPreviewTab, browse, openFile, openSession, leaveSession,
     refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   }), [
     node, connected, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
-    project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy,
-    notify, dismiss, selectJob, startNew, submit, cancel, resume, decide, answerQuestion,
+    project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy, queued,
+    notify, dismiss, selectJob, startNew, submit, clearQueue, cancel, resume, decide, answerQuestion,
     setProject, setModel, browse, openFile, openSession, leaveSession, refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   ]);
 }

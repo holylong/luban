@@ -16,8 +16,27 @@ describe("fallbackTitle", () => {
     expect(fallbackTitle([])).toBe("New session");
   });
 
-  it("clips to the length the list is laid out for", () => {
-    expect(fallbackTitle([{ role: "user", content: "x".repeat(200) }])).toHaveLength(MAX_TITLE_LENGTH);
+  it("clips a long opening line so the list stays readable", () => {
+    const title = fallbackTitle([{ role: "user", content: "x".repeat(200) }]);
+    expect(title.length).toBeLessThanOrEqual(MAX_TITLE_LENGTH);
+    expect(title.endsWith("…")).toBe(true);
+  });
+
+  it("skips an opener that says nothing about the work", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "继续" },
+      { role: "assistant", content: "好的，接下来做什么？" },
+      { role: "user", content: "把登录页的跳转修好" },
+    ];
+    expect(fallbackTitle(messages)).toBe("把登录页的跳转修好");
+  });
+
+  it("ignores pasted code, Markdown decoration and resume markers", () => {
+    expect(fallbackTitle([
+      { role: "user", name: "resume-1", content: "继续完成原任务。" },
+      { role: "user", content: "```\nconst a = 1;\n```" },
+      { role: "user", content: "## 分析这个函数的复杂度\n更多细节" },
+    ])).toBe("分析这个函数的复杂度");
   });
 });
 

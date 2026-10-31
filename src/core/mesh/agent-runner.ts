@@ -4,7 +4,7 @@ import type { AskUser } from "../question.js";
 import { SessionStore } from "../session-store.js";
 import { sharedHistory } from "../session-history.js";
 import { summarizeToolArgs } from "../tools.js";
-import type { AgentEvent, LubanConfig, ToolDefinition } from "../types.js";
+import type { AgentEvent, LubanConfig, SessionRecord, ToolDefinition } from "../types.js";
 import type { JobStreamEvent, MeshRuntime } from "./runtime.js";
 
 /** Translate a raw agent event into the transport shape used by every remote UI. */
@@ -41,6 +41,36 @@ export interface RemoteJobOptions {
   isInteractive?: (jobId: string) => boolean;
   /** Permission mode requested by the client that submitted the job. */
   modeFor?: (jobId: string) => "edits" | "agent" | "read";
+}
+
+/**
+ * Give a job-backed session a topic title once there is an exchange worth naming.
+ *
+ * Sessions are created with the first user line as a placeholder, which reads
+ * badly on the desktop session list ("继续", a pasted stack trace). The model
+ * writes the real name; this runs on its own runner and never delays the job or
+ * reuses the runner that is about to be closed. A provider that cannot answer
+ * leaves the improved placeholder in place — the next job tries again.
+ */
+function nameSession(session: SessionRecord, settings: LubanConfig, store: SessionStore,
+  createRunner: (settings: LubanConfig) => AgentRunner, onLog: (level: "info", message: string) => void): void {
+  if (session.titleSource === "model") return;
+  let namer: AgentRunner;
+  try { namer = createRunner(settings); } catch { return; }
+  void namer.suggestTitle(session.messages)
+    .then(async (suggestion) => {
+      if (!suggestion?.title) return;
+      // Re-read before writing: another job may have appended to the session
+      // while the naming call was in flight.
+      const fresh = await store.load(session.id, settings.project, settings.workspace);
+      if (!fresh || fresh.titleSource === "model") return;
+      fresh.title = suggestion.title;
+      fresh.titleSource = "model";
+      await store.save(fresh);
+      onLog("info", `会话主题：${suggestion.title}`);
+    })
+    .catch(() => undefined)
+    .finally(() => namer.close());
 }
 
 /** Persist remote turns independently of public job logs and result summaries. */
@@ -105,6 +135,7 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
       interactive && options.askUser ? (question, questionSignal) => options.askUser!(job.id, question, questionSignal) : undefined);
       session.performance = result.metrics;
       await store.save(session);
+      nameSession(session, settings, store, createRunner, onLog);
       return { ok: result.ok, text: result.text, stopReason: result.stopReason };
     } finally { runner.close(); }
   });
