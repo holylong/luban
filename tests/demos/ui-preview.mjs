@@ -1,8 +1,8 @@
 // Offline preview of the same components used by the TUI. No model calls.
 import React from "react";
 import { Box, Text, renderToString } from "ink";
-import { ExecutionTimeline } from "../dist/ui/execution-view.js";
-import { theme } from "../dist/ui/theme.js";
+import { ExecutionTimeline } from "../../dist/ui/execution-view.js";
+import { theme } from "../../dist/ui/theme.js";
 const entries = [
   { name: "read_file", detail: "src/profile.ts", status: "done", elapsedMs: 18, preview: "Read 48 lines" },
   { name: "edit_file", detail: "src/profile.ts", status: "done", elapsedMs: 32,

@@ -1,6 +1,6 @@
 @echo off
 setlocal
-pushd "%~dp0" || exit /b 1
+pushd "%~dp0.." || exit /b 1
 call npm install
 if errorlevel 1 goto failed
 call npm run build

@@ -1,4 +1,10 @@
-import pty, os, time, select, subprocess, fcntl, termios, struct
+import os, pty, select, struct, subprocess, sys, termios, fcntl, time
+from pathlib import Path
+
+# Manual PTY smoke test: drives the built CLI through a real pseudo-terminal.
+# Run from anywhere after `npm run build`; paths resolve against the repo root.
+ROOT = Path(__file__).resolve().parents[2]
+os.chdir(ROOT)
 
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))

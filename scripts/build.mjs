@@ -61,7 +61,7 @@ try {
 
 // The build starts from a clean dist, so the executable bit that `npm link`
 // relies on for the global `luban` shim has to be restored here. Leaving
-// it to build_lnk.sh means a later plain `npm run build` silently breaks the
+// it to scripts/build_lnk.sh means a later plain `npm run build` silently breaks the
 // linked command with "permission denied".
 if (process.platform !== "win32") {
   try {

@@ -53,7 +53,7 @@ describe("sandbox soft policy", () => {
     // so the "/" in an ordinary relative path looked absolute and `cp`, `mv`,
     // `mkdir` and `chmod` were rejected inside the workspace.
     for (const command of [
-      "chmod +x ./build_lnk.sh",
+      "chmod +x ./scripts/build_lnk.sh",
       "chmod +x dist/cli.js",
       "chmod +x scripts/tui-smoke.py",
       "mkdir -p src/new/dir",
@@ -108,7 +108,7 @@ describe("sandbox soft policy", () => {
     expect(shellPathTokens("cp a /etc/b")).toEqual(["/etc/b"]);
     expect(shellPathTokens("sh -c 'chmod +x /opt/x'")).toEqual(["/opt/x"]);
     expect(shellPathTokens("cmd --out=/tmp/x")).toEqual(["/tmp/x"]);
-    expect(shellPathTokens("./build_lnk.sh")).toEqual(["./build_lnk.sh"]);
+    expect(shellPathTokens("./scripts/build_lnk.sh")).toEqual(["./scripts/build_lnk.sh"]);
     expect(shellPathTokens("cp ../outside/x dist/y")).toEqual(["../outside/x", "dist/y"]);
   });
 
