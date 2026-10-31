@@ -26,6 +26,30 @@ export class AgentInbox {
     return operation.then(() => input.id);
   }
 
+  /**
+   * Remove a pending input that the model has not been given yet.
+   *
+   * The caller finds the id through `state.pendingInputs`, which is also what
+   * the TUI shows under `/pending`. A failed write puts the message back so a
+   * withdrawal can never lose text that was still on disk.
+   */
+  withdraw(id: string): Promise<PendingInput> {
+    let removed: PendingInput | undefined;
+    const operation = this.tail.then(async () => {
+      const pending = this.state.pendingInputs ?? [];
+      const target = pending.find((input) => input.id === id);
+      if (!target) throw new Error("pending input not found");
+      this.state.pendingInputs = pending.filter((input) => input.id !== id);
+      try { await this.persist(); } catch (error) {
+        this.state.pendingInputs = pending;
+        throw error;
+      }
+      removed = target;
+    });
+    this.tail = operation.catch(() => undefined);
+    return operation.then(() => removed!);
+  }
+
   async hasSteering(): Promise<boolean> {
     await this.tail;
     return (this.state.pendingInputs ?? []).some((input) => input.delivery === "steer");

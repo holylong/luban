@@ -124,7 +124,7 @@ const COMMANDS = [
   ["/cancel-job", "cancel-job <id>"],
   ["/add-contact", "add-contact <name> <host> <port>"],
   ["/queue", "queue a task after the current task"],
-  ["/pending", "show saved pending messages"],
+  ["/pending", "list pending messages · Enter withdraws"],
   ["/copy", "copy last answer to clipboard"],
   ["/export", "export session to markdown"],
   ["/report", "日报/周报/月报/年报：daily|weekly|monthly|yearly [日期] [路径]"],
@@ -146,6 +146,8 @@ const RUN_IMMEDIATE_COMMANDS = new Set([
   "/models", "/mode", "/settings", "/permissions",
   "/token",
   "/plan", "/theme", "/skin", "/details", "/mesh", "/help", "/diff", "/verify",
+  // /pending is the withdraw list: a wrongly queued task is noticed mid-run.
+  "/pending",
 ]);
 
 const COMMAND_USAGE: Record<string, string> = {
@@ -155,6 +157,7 @@ const COMMAND_USAGE: Record<string, string> = {
   "/skin": "/skin [名称] — 选择皮肤与加载动画，例如 /skin ollobot；/skin midnight 恢复默认",
   "/permissions": "/permissions ask|edits|allow",
   "/queue": "/queue <task> — current task finishes first",
+  "/pending": "/pending — 待处理消息列表：↑↓ 选择，Enter 撤回，Esc 关闭",
   "/export": "/export [文件名|路径] — markdown transcript (默认 luban-export-<项目>-<sessionId>.md)",
   "/ping": "/ping <peer>",
   "/jobs": "/jobs [<job-id>] — 列出最近的 mesh 任务，给出 id 时在主流程里展开它的完整执行过程",
@@ -284,7 +287,7 @@ interface QuestionRequest {
 }
 
 interface DialogState {
-  type: "model-providers" | "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme";
+  type: "model-providers" | "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme" | "pending";
   index: number;
   provider?: string;
   parentIndex?: number;
@@ -852,6 +855,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
   const draftBackupRef = useRef("");
+  // Text removed by an idle Esc, kept so the next Esc can put it back.
+  const clearedDraftRef = useRef("");
   // Live snapshot of the stream geometry. Assigning it during render keeps one
   // long-lived stdin listener: re-subscribing on every streamed line would
   // churn, and a closed-over value would freeze mid-run counts.
@@ -1177,6 +1182,19 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
 
   const syncPendingView = () => setPendingInputs([...(sessionRef.current.pendingInputs ?? [])]);
 
+  /**
+   * Withdraw a message that has not reached the model yet.
+   *
+   * A fresh inbox is bound to `save()`, which persists the *current* transcript:
+   * the running inbox captures the messages of the moment the run started, so
+   * reusing it here could write that older snapshot back to disk.
+   */
+  const withdrawPending = async (id: string) => {
+    const inbox = new AgentInbox(sessionRef.current, () => save());
+    await inbox.withdraw(id);
+    syncPendingView();
+  };
+
   const expandAtMentions = async (text: string): Promise<{ text: string; images: Array<{ path: string; mime: string }> }> => {
     const mentions = [...new Set([...text.matchAll(/@([\w./-]{1,120})/gu)].map((match) => match[1]!))].slice(0, 5);
     if (!mentions.length) return { text, images: [] };
@@ -1386,8 +1404,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     setQuestionRequest({ question, resolve: finish, reject });
   });
 
-  const runPrompt = async (text: string, images: Array<{ path: string; mime: string }> = []) => {
+  const runPrompt = async (text: string, images: Array<{ path: string; mime: string }> = [], restore = text) => {
     setShowMesh(false);
+    clearedDraftRef.current = "";
     const user: ChatMessage = { role: "user", content: text, ...(images.length ? { images } : {}) };
     const nextMessages = [...sessionRef.current.messages, user];
     setMessages(nextMessages);
@@ -1459,7 +1478,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setMessages([...nextMessages]);
       resetDraft();
       setThinkingDraft("");
-      if (controller.signal.aborted) addActivity({ id: `cancel-${Date.now()}`, text: message, tone: "muted" });
+      if (controller.signal.aborted) {
+        addActivity({ id: `cancel-${Date.now()}`, text: message, tone: "muted" });
+        // Nothing was answered, so hand the instruction back to the composer:
+        // retyping a paragraph just to fix one word is the wrong undo.
+        setInput((current) => current.trim() ? current : restore);
+        clearedDraftRef.current = restore;
+        setNotice("已中断 · 指令已放回输入框，修改后可直接重发");
+      }
     } finally {
       abortRef.current = null;
       inboxRef.current = null;
@@ -1631,10 +1657,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       draftBackupRef.current = "";
     };
     if (value === "/pending") {
-      setNotice(sessionRef.current.pendingInputs?.map((item) => `${item.delivery}: ${item.content}`).join(" · ") || "No pending messages");
+      // A list, not a notice: queued tasks are easy to mis-type, so the line
+      // they are on is also the place they can be taken back.
       syncPendingView();
       rememberInput();
-      setInput(""); return;
+      setInput("");
+      if (!(sessionRef.current.pendingInputs?.length ?? 0)) { setNotice("没有待处理消息。运行中用 /queue <任务> 或直接输入即可排队。"); return; }
+      setDialog({ type: "pending", index: 0 });
+      return;
     }
     if (value === "/copy" || value.startsWith("/copy ")) {
       rememberInput();
@@ -1720,10 +1750,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       const argument = argumentOf(value);
       if (!argument) { setNotice("用法：/queue <任务> · 例如 /queue 修复登录超时"); return; }
       const expanded = await expandAtMentions(argument);
-      return runPrompt(expanded.text, expanded.images);
+      return runPrompt(expanded.text, expanded.images, argument);
     }
     if (value.startsWith("!")) return directShell(value.slice(1).trim());
-    if (!value.startsWith("/")) { const expanded = await expandAtMentions(value); return runPrompt(expanded.text, expanded.images); }
+    if (!value.startsWith("/")) { const expanded = await expandAtMentions(value); return runPrompt(expanded.text, expanded.images, value); }
     await handleSlashCommand(commandOf(value), argumentOf(value), value, runMeshAction);
   };
 
@@ -2220,6 +2250,32 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         }
         return;
       }
+      if (dialog.type === "pending") {
+        // Enter (or x) withdraws the highlighted message and keeps the list
+        // open, so several mistyped queued tasks can be cleared in one visit.
+        const rows = sessionRef.current.pendingInputs ?? [];
+        if (key.escape || !rows.length) { setDialog(null); return; }
+        if (key.upArrow || key.downArrow) {
+          const next = (dialog.index + (key.upArrow ? -1 : 1) + rows.length) % rows.length;
+          setDialog({ ...dialog, index: next });
+          return;
+        }
+        if (key.return || key.delete || key.backspace || character === "x" || character === "d") {
+          const target = rows[Math.min(dialog.index, rows.length - 1)]!;
+          setDialog({ ...dialog, index: Math.max(0, Math.min(dialog.index, rows.length - 2)) });
+          void (async () => {
+            try {
+              await withdrawPending(target.id);
+              setNotice(`已撤回待处理消息：${oneLine(target.content, 40)}`);
+              if (!(sessionRef.current.pendingInputs?.length ?? 0)) setDialog(null);
+            } catch (error) {
+              setNotice(`撤回失败：${error instanceof Error ? error.message : String(error)}`);
+            }
+          })();
+          return;
+        }
+        return;
+      }
       if (dialog.type === "theme") {
         // The picker is navigated, not just printed: colours are chosen by
         // looking at them, so every move repaints the workbench immediately.
@@ -2403,6 +2459,25 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       abortRef.current?.abort(new Error("cancelled by user"));
       return;
     }
+    if (!running && key.escape && !dialog && !approval && !showHelp) {
+      // Idle Esc is the "undo this instruction" key: the first press clears a
+      // half-typed composer, a second one brings the text back, so a wrong
+      // start never costs a retyped paragraph.
+      if (input) {
+        clearedDraftRef.current = input;
+        setInput("");
+        setHistoryIndex(null);
+        setNotice("已清空输入 · 再按 Esc 恢复");
+        return;
+      }
+      if (clearedDraftRef.current) {
+        const restored = clearedDraftRef.current;
+        clearedDraftRef.current = "";
+        setInput(restored);
+        setNotice(`已恢复输入：${oneLine(restored, 40)}`);
+      }
+      return;
+    }
     if (!running && key.tab && key.shift) {
       const next = MODES[(MODES.indexOf(mode) + 1) % MODES.length]!;
       setMode(next);
@@ -2541,6 +2616,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const lastVerification = verifications.at(-1);
   const verificationStatus = planVerificationStatus(sessionRef.current.messages);
   const pendingCount = pendingInputs.length;
+  // Rows for the /pending dialog: the same list the status line counts.
+  const pendingRows = pendingInputs.map((item, index) => ({
+    key: item.id,
+    title: `${index + 1}. ${oneLine(item.content, 48)}`,
+    detail: item.delivery === "queue" ? "排队任务 · 当前任务完成后执行" : "补充指令 · 下一边界生效",
+  }));
   const hasActivity = historyBlocks.length + tailBlocks.length > 0 || (showMesh ? focusedActive : running);
   const meshActiveCount = meshRows.filter(({ job }) => ACTIVE_JOB_STATUS.has(job.status)).length;
   const defaultNotice = "Describe a goal, ask a question, or type / for commands.";
@@ -2581,6 +2662,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {dialog?.type === "models" ? <SelectDialog title={`Models · ${dialog.provider}`} rows={modelRows} index={Math.min(dialog.index, Math.max(0, modelRows.length - 1))} query={dialogQuery} activeKey={config.model.id} back /> : null}
         {dialog?.type === "codex-effort" ? <SelectDialog title={`Reasoning · ${config.models.find((item) => item.id === dialog.modelId)?.name ?? "Codex"}`} rows={CODEX_EFFORTS.filter((item) => item.value !== "ultra" || config.models.find((model) => model.id === dialog.modelId)?.model !== "gpt-6-luna").map((item) => ({ key: item.value ?? "default", title: item.title, detail: item.detail }))} index={dialog.index} query="" back /> : null}
         {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} /> : null}
+        {dialog?.type === "pending" ? <SelectDialog title="Pending · Enter 撤回" rows={pendingRows} index={Math.min(dialog.index, Math.max(0, pendingRows.length - 1))} query="" /> : null}
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
         {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} loading={dialog.loading} /> : null}
@@ -2718,7 +2800,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           {scrolledBack ? (
             <Text color={theme.accent} bold>历史 {scrollPercent(streamView)}% · PageDown 回最新</Text>
           ) : !narrow ? (
-            <Text color={theme.dim}>{running ? "esc 中断 · /queue 排队 · 只读命令即时执行" : "shift+tab 模式 · ctrl+p 模型 · /copy 复制"}</Text>
+            <Text color={theme.dim}>{running ? "esc 中断 · /queue 排队 · /pending 撤回" : "shift+tab 模式 · ctrl+p 模型 · esc 清空输入"}</Text>
           ) : null}
         </Box>
         {notice !== defaultNotice ? (

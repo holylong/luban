@@ -119,6 +119,24 @@ it("rolls back failed admission and failed delivery without losing queued messag
   await expect(inbox.enqueue("late")).rejects.toThrow("finishing");
 });
 
+it("withdraws a pending input and keeps the queue when the write fails", async () => {
+  const state: { pendingInputs?: PendingInput[] } = {};
+  let fail = false;
+  const inbox = new AgentInbox(state, async () => { if (fail) throw new Error("disk error"); });
+  const keep = await inbox.enqueue("keep this", "queue");
+  const drop = await inbox.enqueue("withdraw this", "steer");
+  expect(state.pendingInputs?.map((item) => item.content)).toEqual(["keep this", "withdraw this"]);
+  fail = true;
+  await expect(inbox.withdraw(drop)).rejects.toThrow("disk error");
+  expect(state.pendingInputs?.map((item) => item.content)).toEqual(["keep this", "withdraw this"]);
+  fail = false;
+  expect((await inbox.withdraw(drop)).content).toBe("withdraw this");
+  expect(state.pendingInputs?.map((item) => item.id)).toEqual([keep]);
+  await expect(inbox.withdraw(drop)).rejects.toThrow("not found");
+  const messages: ChatMessage[] = [];
+  expect((await inbox.promote(messages, true)).map((item) => item.content)).toEqual(["keep this"]);
+});
+
 it("serializes concurrent session snapshots across store instances without temp collisions", async () => {
   const f = await fixture();
   const other = new SessionStore(f.root);
