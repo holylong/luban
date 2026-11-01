@@ -400,6 +400,23 @@ node dist/cli.js ~/dev/my-project
 JSON-RPC server。标记为 `trusted` 的服务保持持久连接，其工具会以 `mcp_<server>_<tool>`
 直接注册给模型；未信任服务只能在用户批准后通过 `mcp_list_tools` / `mcp_call` 使用。
 
+#### MCP 服务管理
+
+不想手改 JSON 时用命令行子命令（写入 `~/.luban/config.json`，加 `--project` 写工作区 `.luban/config.json`）：
+
+```bash
+luban mcp add fs --trusted -- npx -y @modelcontextprotocol/server-filesystem /tmp   # stdio
+luban mcp add remote --url https://tools.example.com/mcp --header "Authorization=Bearer xxx"
+luban mcp add db --env PGHOST=localhost --trusted -- npx -y @some/mcp-postgres
+luban mcp list            # ● 启用 / ○ 停用，含 transport、作用域与 trusted 状态；--json 输出结构化结果
+luban mcp test remote     # 真实握手 + tools/list，打印工具清单与耗时
+luban mcp disable fs      # 也能 enable / trust / untrust / remove
+```
+
+`add` 的选项要写在 `--` 之前，`--` 之后整体作为 server 的 `command + args`。写入位置会沿用文件里已有的写法（`mcp.servers` 或 `mcpServers`），不会把同一个服务写成两份，也不会动 `mcp` 块里的其它设置。
+
+TUI 里输入 `/mcp` 打开同一份列表：`Enter` 现场试连（连不上会把真实错误显示在提示行），`e` 启停、`t` 信任、`x` 删除（需要按两次）。项目配置里的服务会覆盖同名全局服务，面板和命令都会写回真正存放它的那个文件。以上改动都在下次启动 luban 时生效，运行中的会话继续用启动时加载的配置。
+
 长时间运行的 shell 命令会使用 `bash` 的 `background` 参数，并由
 `get_background_task` / `stop_background_task` 管理。技能与插件的发现路径见
 [插件与编辑器接入](#插件与编辑器接入)。
@@ -597,6 +614,7 @@ luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或在 OpenCode �
 | `/models` / `/sessions` | 打开对应选择器；会话列表仅显示其他有内容的会话，隐藏当前会话与空会话（含只有命令历史的记录），保留待处理输入、图片与执行记录 |
 | `/queue <任务>` | 当前任务结束后再执行；空闲时立即开始 |
 | `/pending` | 待处理消息列表：`↑`/`↓` 选择，`Enter`（或 `x`）撤回选中项，`Esc` 关闭；撤回会同步保存，模型拿到的仍是撤回后的队列 |
+| `/mcp` | MCP 服务面板：`↑`/`↓` 选择，`Enter` 真实连接并试跑 `tools/list`（显示工具数与名字），`e` 启停，`t` 切换 trusted，`x` 两次确认后删除，`Esc` 关闭；改动直接写回所在配置文件，重启 luban 生效 |
 | `/copy` | 复制上次回答 + 最近工具结果（OSC52 直达剪贴板，另存 `~/.luban/last-copy.md`） |
 | `/export [文件名|路径]` | 导出当前会话为 Markdown，含元信息、逐文件改动摘要表、每处改动的行号与前后内容、任务计划与验证门禁、验证记录（失败输出也会保留）以及完整对话（默认当前目录 `luban-export-<项目>-<sessionId>.md`；可指定文件名或路径，省略 `.md` 会自动补全，运行中也可用） |
 | `/plan` | 显示或隐藏任务计划面板（含验证状态） |
@@ -863,6 +881,7 @@ luban web ./demo --host 127.0.0.1 --port 8642
 # 只运行 Node Mesh/worker 守护进程
 luban serve ./demo
   luban acp ./demo    # Agent Client Protocol over stdio（编辑器接入，见 editors/vscode/）
+  luban mcp list      # MCP 服务管理（add / test / enable / trust / remove，见「MCP 服务管理」）
 
 # TUI 和 Web 后台共享同一个 Node 进程
 luban ./demo --web-port 8642

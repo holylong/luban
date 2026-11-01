@@ -15,6 +15,7 @@ import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
 import { sharedHistory } from "./core/session-history.js";
 import { runHistory } from "./core/history-command.js";
+import { runMcp } from "./core/mcp-command.js";
 import { runReport } from "./core/report-command.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
 import { App } from "./ui/app.js";
@@ -800,6 +801,8 @@ const entry = command === "login" && process.argv[3] === "codex"
           ? runHistory(process.argv.slice(3))
           : command === "relay"
             ? runRelay(process.argv.slice(3))
+            : command === "mcp"
+              ? runMcp(process.argv.slice(3))
             : command === "token"
               ? runToken(process.argv.slice(3))
               : main();

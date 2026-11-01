@@ -6,6 +6,8 @@ import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { AgentInbox } from "../core/inbox.js";
+import { probeMcpServer } from "../core/mcp.js";
+import { describeMcpFlags, describeMcpTransport, mcpServerEntries, patchMcpServer, removeMcpServer, type McpServerEntry } from "../core/mcp-settings.js";
 import type { UserQuestion } from "../core/question.js";
 import { planVerificationStatus, readPlan, readVerifications } from "../core/plan.js";
 import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
@@ -125,6 +127,7 @@ const COMMANDS = [
   ["/add-contact", "add-contact <name> <host> <port>"],
   ["/queue", "queue a task after the current task"],
   ["/pending", "list pending messages · Enter withdraws"],
+  ["/mcp", "list MCP servers · test, enable, trust, remove"],
   ["/copy", "copy last answer to clipboard"],
   ["/export", "export session to markdown"],
   ["/report", "日报/周报/月报/年报：daily|weekly|monthly|yearly [日期] [路径]"],
@@ -148,6 +151,8 @@ const RUN_IMMEDIATE_COMMANDS = new Set([
   "/plan", "/theme", "/skin", "/details", "/mesh", "/help", "/diff", "/verify",
   // /pending is the withdraw list: a wrongly queued task is noticed mid-run.
   "/pending",
+  // /mcp only reads the config files; a toggle lands on the next start anyway.
+  "/mcp",
 ]);
 
 const COMMAND_USAGE: Record<string, string> = {
@@ -158,6 +163,7 @@ const COMMAND_USAGE: Record<string, string> = {
   "/permissions": "/permissions ask|edits|allow",
   "/queue": "/queue <task> — current task finishes first",
   "/pending": "/pending — 待处理消息列表：↑↓ 选择，Enter 撤回，Esc 关闭",
+  "/mcp": "/mcp — MCP 服务列表：↑↓ 选择，Enter 试连，e 启停，t 信任，x 删除（再按一次确认），Esc 关闭",
   "/export": "/export [文件名|路径] — markdown transcript (默认 luban-export-<项目>-<sessionId>.md)",
   "/ping": "/ping <peer>",
   "/jobs": "/jobs [<job-id>] — 列出最近的 mesh 任务，给出 id 时在主流程里展开它的完整执行过程",
@@ -287,7 +293,7 @@ interface QuestionRequest {
 }
 
 interface DialogState {
-  type: "model-providers" | "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme" | "pending";
+  type: "model-providers" | "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme" | "pending" | "mcp";
   index: number;
   provider?: string;
   parentIndex?: number;
@@ -313,6 +319,12 @@ export interface AppProps {
 function oneLine(value: string, limit = 80): string {
   const flat = value.trim().replaceAll(/\s+/gu, " ");
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
+}
+
+/** Home-relative path for notices, so a message names the file without a wall of text. */
+function shortPath(path: string): string {
+  const home = homedir();
+  return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
 }
 
 /** First whitespace-delimited token of a submitted line, lowercased. */
@@ -1181,6 +1193,11 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   };
 
   const syncPendingView = () => setPendingInputs([...(sessionRef.current.pendingInputs ?? [])]);
+  const [mcpEntries, setMcpEntries] = useState<McpServerEntry[]>([]);
+  // Probe results keyed by server name: "3 个工具" or the connection error.
+  const [mcpProbe, setMcpProbe] = useState<Record<string, string>>({});
+  // Deleting a server is the one destructive key, so it needs a second press.
+  const [mcpConfirm, setMcpConfirm] = useState<string | null>(null);
 
   /**
    * Withdraw a message that has not reached the model yet.
@@ -1217,6 +1234,25 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     setCommandIndex(0);
     setNotice("已收起输入 · ↑ 可召回修改 · Esc 可恢复");
     return true;
+  };
+
+  /**
+   * MCP servers are read straight from the config files, not from the loaded
+   * config: the panel has to know which file holds each entry so a toggle lands
+   * in the file the user (or the CLI) actually wrote.
+   */
+  const mcpPaths = () => ({ home: config.home, workspace: config.workspace });
+  const refreshMcp = (): void => setMcpEntries(mcpServerEntries(mcpPaths()));
+  const openMcp = (): void => {
+    const entries = mcpServerEntries(mcpPaths());
+    setMcpEntries(entries);
+    setMcpProbe({});
+    setMcpConfirm(null);
+    if (!entries.length) {
+      setNotice("没有配置 MCP 服务 · 用 luban mcp add <name> -- <命令> 添加");
+      return;
+    }
+    setDialog({ type: "mcp", index: 0 });
   };
 
   const expandAtMentions = async (text: string): Promise<{ text: string; images: Array<{ path: string; mime: string }> }> => {
@@ -1680,6 +1716,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setHistoryIndex(null);
       draftBackupRef.current = "";
     };
+    if (value === "/mcp") {
+      rememberInput();
+      setInput("");
+      openMcp();
+      return;
+    }
     if (value === "/pending") {
       // A list, not a notice: queued tasks are easy to mis-type, so the line
       // they are on is also the place they can be taken back.
@@ -2300,6 +2342,69 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         }
         return;
       }
+      if (dialog.type === "mcp") {
+        // Every key here edits the config file, never the running agent: a
+        // server added mid-session is picked up on the next `luban` start.
+        if (key.escape) { setDialog(null); setMcpConfirm(null); return; }
+        const rows = mcpEntries;
+        if (!rows.length) { setDialog(null); return; }
+        const current = rows[Math.min(dialog.index, rows.length - 1)]!;
+        if (key.upArrow || key.downArrow) {
+          setMcpConfirm(null);
+          setDialog({ ...dialog, index: (dialog.index + (key.upArrow ? -1 : 1) + rows.length) % rows.length });
+          return;
+        }
+        const fail = (error: unknown) => setNotice(`MCP 修改失败：${error instanceof Error ? error.message : String(error)}`);
+        if (character === "e" || character === "t") {
+          const patch = character === "e" ? { enabled: !current.enabled } : { trusted: !current.trusted };
+          void (async () => {
+            try {
+              const target = await patchMcpServer(mcpPaths(), current.name, patch);
+              refreshMcp();
+              setMcpConfirm(null);
+              setNotice(`${current.name} ${character === "e" ? (current.enabled ? "已停用" : "已启用") : (current.trusted ? "改为需批准调用" : "已信任（工具直接注册）")} · ${shortPath(target.path)} · 重启后生效`);
+            } catch (error) { fail(error); }
+          })();
+          return;
+        }
+        if (character === "x" || key.delete || key.backspace) {
+          if (mcpConfirm !== current.name) { setMcpConfirm(current.name); setNotice(`再按一次 x 删除 ${current.name} · 其他键取消`); return; }
+          void (async () => {
+            try {
+              await removeMcpServer(mcpPaths(), current.name);
+              setMcpConfirm(null);
+              refreshMcp();
+              setDialog((state) => state && state.type === "mcp" ? { ...state, index: Math.max(0, Math.min(state.index, rows.length - 2)) } : state);
+              setNotice(`已删除 MCP 服务 ${current.name} · 重启后生效`);
+            } catch (error) { fail(error); }
+          })();
+          return;
+        }
+        if (key.return) {
+          // Connecting is the only way to tell a typo in `command` from a
+          // server that simply has no tools, so Enter runs the real handshake.
+          setMcpProbe((map) => ({ ...map, [current.name]: "连接中…" }));
+          void (async () => {
+            try {
+              const tools = await probeMcpServer({
+                ...(current.command ? { command: current.command } : {}),
+                ...(current.url ? { url: current.url } : {}),
+                args: current.args, env: current.env, headers: current.headers,
+                ...(current.cwd ? { cwd: current.cwd } : {}),
+                enabled: current.enabled, trusted: current.trusted,
+              }, config.workspace, AbortSignal.timeout(20_000));
+              setMcpProbe((map) => ({ ...map, [current.name]: `${tools.length} 个工具` }));
+              setNotice(`${current.name} 连接成功 · ${tools.length} 个工具${tools.length ? `：${tools.slice(0, 4).map((tool) => tool.name).join("、")}` : ""}`);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              setMcpProbe((map) => ({ ...map, [current.name]: `失败：${oneLine(message, 36)}` }));
+              setNotice(`${current.name} 连接失败：${oneLine(message, 90)}`);
+            }
+          })();
+          return;
+        }
+        return;
+      }
       if (dialog.type === "theme") {
         // The picker is navigated, not just printed: colours are chosen by
         // looking at them, so every move repaints the workbench immediately.
@@ -2646,6 +2751,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     title: `${index + 1}. ${oneLine(item.content, 48)}`,
     detail: item.delivery === "queue" ? "排队任务 · 当前任务完成后执行" : "补充指令 · 下一边界生效",
   }));
+  const mcpRows = mcpEntries.map((entry) => ({
+    key: entry.name,
+    title: `${mcpConfirm === entry.name ? "确认删除？" : entry.name}${entry.enabled ? "" : "（停用）"}`,
+    detail: `${describeMcpTransport(entry)} · ${entry.scope === "project" ? "项目配置" : "全局配置"} · ${describeMcpFlags(entry)}${mcpProbe[entry.name] ? ` · ${mcpProbe[entry.name]}` : ""}`,
+    color: entry.enabled ? theme.accent : theme.dim,
+  }));
   const hasActivity = historyBlocks.length + tailBlocks.length > 0 || (showMesh ? focusedActive : running);
   const meshActiveCount = meshRows.filter(({ job }) => ACTIVE_JOB_STATUS.has(job.status)).length;
   const defaultNotice = "Describe a goal, ask a question, or type / for commands.";
@@ -2687,6 +2798,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {dialog?.type === "codex-effort" ? <SelectDialog title={`Reasoning · ${config.models.find((item) => item.id === dialog.modelId)?.name ?? "Codex"}`} rows={CODEX_EFFORTS.filter((item) => item.value !== "ultra" || config.models.find((model) => model.id === dialog.modelId)?.model !== "gpt-6-luna").map((item) => ({ key: item.value ?? "default", title: item.title, detail: item.detail }))} index={dialog.index} query="" back /> : null}
         {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} /> : null}
         {dialog?.type === "pending" ? <SelectDialog title="Pending · Enter 撤回" rows={pendingRows} index={Math.min(dialog.index, Math.max(0, pendingRows.length - 1))} query="" /> : null}
+        {dialog?.type === "mcp" ? <SelectDialog title="MCP · Enter 试连 · e 启停 · t 信任 · x 删除" rows={mcpRows} index={Math.min(dialog.index, Math.max(0, mcpRows.length - 1))} query="" /> : null}
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
         {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} loading={dialog.loading} /> : null}

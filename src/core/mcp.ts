@@ -262,6 +262,16 @@ export class McpManager {
   }
 }
 
+/**
+ * Connect once, list the tools, and hang up: the "does this server work?" check
+ * behind `luban mcp test` and the `/mcp` panel's Enter key.
+ */
+export async function probeMcpServer(settings: McpServerSettings, workspace: string, signal: AbortSignal): Promise<Array<{ name: string; description: string }>> {
+  const result = await withServer(settings, workspace, signal, (session) => session.request("tools/list", {}, signal)) as JsonObject;
+  const tools = Array.isArray(result?.tools) ? result.tools as JsonObject[] : [];
+  return tools.map((tool) => ({ name: String(tool.name ?? ""), description: String(tool.description ?? "") }));
+}
+
 export async function listMcpTools(config: LubanConfig, signal: AbortSignal): Promise<string> {
   const entries = Object.entries(config.mcpServers ?? {}).filter(([, server]) => server.enabled);
   if (!entries.length) return "(no MCP servers configured)";

@@ -110,7 +110,12 @@ function lspServers(value: unknown): Record<string, import("./types.js").LspServ
   }));
 }
 
-function mcpServers(value: unknown): Record<string, McpServerSettings> {
+/**
+ * Normalise one `mcpServers`/`mcp.servers` block. Names without a `command` or
+ * `url` are dropped rather than failing the whole config, and `disabled`/
+ * `trust` are accepted as aliases so a hand-written entry still works.
+ */
+export function normalizeMcpServers(value: unknown): Record<string, McpServerSettings> {
   return Object.fromEntries(Object.entries(record(value)).flatMap(([name, raw]) => {
     const item = record(raw);
     const command = text(item.command);
@@ -737,7 +742,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     maxRetries: Math.max(0, Math.min(10, integer(modelConfig.max_retries ?? modelConfig.maxRetries, 5))),
     modelReconnect: modelConfig.reconnect !== false,
     modelReconnectMaxDelayMs: Math.max(2, Math.min(300, integer(modelConfig.reconnect_max_delay, 60))) * 1000,
-    mcpServers: mcpServers(raw.mcpServers),
+    mcpServers: normalizeMcpServers(raw.mcpServers),
     codeIntelWorker: codeIntelRaw.worker === true || codeIntelRaw.isolated === true,
     lspServers: lspServers(raw.lspServers),
     backendUrl: text(options.backendUrl, process.env.LUBAN_BACKEND_URL, nodeFrontend.backend_url),
