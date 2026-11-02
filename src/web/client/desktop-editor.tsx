@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { acceptSaved, quickMatches, type EditorDocument } from "./desktop-bridge";
 import { HighlightedCode, editorLanguage, highlightable } from "./desktop-syntax";
+import { startFileSync } from "./desktop-file-sync";
 import type { WorkbenchStore } from "./store";
 
 export function DesktopEditor({ store, activeView = true }: { store: WorkbenchStore; activeView?: boolean }): React.ReactElement {
@@ -17,7 +18,16 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   const gutter = useRef<HTMLPreElement>(null);
   const layer = useRef<HTMLPreElement>(null);
   const opening = useRef(0);
+  const documentsRef = useRef(documents);
+  documentsRef.current = documents;
+  const savingRef = useRef(false);
   const document = documents.find(item => item.path === active);
+  const diskIssue = document?.diskError || (document?.conflict ? "文件已被后台修改，当前未保存内容已保留。请复制草稿后读取磁盘版本，再合并修改；不会覆盖后台更改。" : "");
+  useEffect(() => {
+    if (!bridge) return;
+    return startFileSync({ readFile: path => bridge.readFile(path), documents: () => documentsRef.current,
+      saving: () => savingRef.current, update: setDocuments, target: window });
+  }, [bridge]);
   const language = editorLanguage(active);
   const highlight = document ? highlightable(document.content) : false;
   const dirty = documents.some(item => item.content !== item.saved);
@@ -37,15 +47,16 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   useLayoutEffect(() => { bridge?.setDirty(dirty); }, [bridge, dirty]);
 
   const save = async (): Promise<void> => {
-    if (!document || !bridge || saving) return;
+    if (!document || !bridge || savingRef.current || document.conflict || document.diskError) return;
     const snapshot = document;
+    savingRef.current = true;
     setSaving(true);
     try {
       const result = await bridge.saveFile(snapshot);
       setDocuments(current => current.map(item => item.path === snapshot.path ? acceptSaved(item, result) : item));
       setError(""); notify(`已保存 ${snapshot.path}`);
     } catch (cause) { setError(`${String(cause)}。若磁盘已修改，请先复制当前内容，再重新读取磁盘版本。`); }
-    finally { setSaving(false); }
+    finally { savingRef.current = false; setSaving(false); }
   };
   const showQuick = (): void => {
     setQuick(true); setQuery("");
@@ -77,9 +88,9 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   const matches = quickMatches(files, query);
 
   return <>
-    <div className="desktop-editor-head"><span className="desktop-editor-title">{active || "代码工作台"}</span><button onClick={showQuick} disabled={!bridge}>快速打开 ⌘/Ctrl P</button><button onClick={() => void save()} disabled={!document || saving || document.saved === document.content}>{saving ? "保存中…" : "保存"}</button></div>
+    <div className="desktop-editor-head"><span className="desktop-editor-title">{active || "代码工作台"}</span><button onClick={showQuick} disabled={!bridge}>快速打开 ⌘/Ctrl P</button><button onClick={() => void save()} disabled={!document || saving || Boolean(diskIssue) || document.saved === document.content}>{saving ? "保存中…" : "保存"}</button></div>
     <div className="desktop-document-tabs" role="tablist" aria-label="打开的文件">{documents.map(item => <div key={item.path} className={active === item.path ? "active" : ""}><button role="tab" aria-selected={active === item.path} title={item.path} onClick={() => setActive(item.path)}>{item.content !== item.saved ? "● " : ""}{item.path.split("/").at(-1)}</button><button aria-label={`关闭 ${item.path}`} onClick={() => close(item)}>×</button></div>)}</div>
-    {error && <div className="desktop-error">{error}{document && <button onClick={async () => {
+    {(error || diskIssue) && <div className="desktop-error" role="alert">{diskIssue || error}{document && <button onClick={async () => {
       if (!window.confirm("重新读取磁盘版本会放弃当前文件未保存内容，继续？")) return;
       try { const file = await bridge!.readFile(active); setDocuments(current => current.map(item => item.path === file.path ? { ...file, saved: file.content } : item)); setError(""); } catch (cause) { setError(String(cause)); }
     }}>重新读取磁盘</button>}</div>}

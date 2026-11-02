@@ -15,7 +15,18 @@ export interface DesktopBridge {
 }
 declare global { interface Window { lubanDesktop?: DesktopBridge } }
 
-export interface EditorDocument extends DesktopFile { saved: string }
+export interface EditorDocument extends DesktopFile { saved: string; diskError?: string; conflict?: boolean }
+
+/** Never advance the save revision while a local draft differs from disk. */
+export function acceptDisk(document: EditorDocument, disk: DesktopFile): EditorDocument {
+  if (disk.revision === document.revision) {
+    return document.diskError || document.conflict ? { ...document, diskError: undefined, conflict: false } : document;
+  }
+  if (document.content === document.saved || document.content === disk.content) {
+    return { ...disk, saved: disk.content };
+  }
+  return { ...document, conflict: true, diskError: undefined };
+}
 export function acceptSaved(document: EditorDocument, saved: DesktopFile): EditorDocument {
   return { ...document, revision: saved.revision, saved: saved.content };
 }
