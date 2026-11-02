@@ -94,7 +94,7 @@ export async function codexAccountRequest<T>(method: string, params?: JsonObject
         newline = stdout.indexOf("\n");
       }
     });
-    send({ method: "initialize", id: 0, params: { clientInfo: { name: "luban", title: "Luban", version: "1" } } });
+    send({ method: "initialize", id: 0, params: { clientInfo: { name: "luban", title: "Luban", version: "1" }, capabilities: { experimentalApi: true } } });
   });
 }
 
@@ -104,10 +104,22 @@ export const readCodexRateLimits = (signal?: AbortSignal) =>
 export const readCodexUsage = (signal?: AbortSignal) =>
   codexAccountRequest<CodexUsage>("account/usage/read", undefined, signal);
 
-export function consumeCodexReset(creditId?: string, signal?: AbortSignal) {
-  return codexAccountRequest<{ outcome: "reset" | "alreadyRedeemed" | "nothingToReset" | "noCredit" }>(
+export type CodexResetOutcome = "reset" | "alreadyRedeemed" | "nothingToReset" | "noCredit";
+
+export function formatCodexResetOutcome(outcome: CodexResetOutcome): string {
+  switch (outcome) {
+    case "reset": return "已使用一张重置卡。";
+    case "alreadyRedeemed": return "这张重置卡已使用。";
+    case "nothingToReset": return "当前没有可重置的额度窗口，未消耗重置卡。";
+    case "noCredit": return "当前没有可用重置卡。";
+    default: return `Codex 返回未知重置结果：${String(outcome)}。请先用 /status 核实额度，不要重复提交。`;
+  }
+}
+
+export function consumeCodexReset(creditId?: string, signal?: AbortSignal, idempotencyKey = randomUUID()) {
+  return codexAccountRequest<{ outcome: CodexResetOutcome }>(
     "account/rateLimitResetCredit/consume",
-    { idempotencyKey: randomUUID(), ...(creditId ? { creditId } : {}) },
+    { idempotencyKey, ...(creditId ? { creditId } : {}) },
     signal,
   );
 }

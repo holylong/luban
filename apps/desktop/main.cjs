@@ -1,4 +1,62 @@
-const { app, BrowserWindow, dialog, Menu, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, Menu, ipcMain, screen } = require("electron");
+const { preparePetTask } = require("./pet-task.cjs");
+let pet;
+let backendAccess;
+let petJob;
+let petSubmitting = false;
+let quitting = false;
+function showMain() { if (window && !window.isDestroyed()) { window.show(); window.restore(); window.focus(); } }
+function trustedPet(event) {
+  return pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame === pet.webContents.mainFrame && event.senderFrame.url === require('node:url').pathToFileURL(join(__dirname, 'pet.html')).href;
+}
+async function petApi(path, body) {
+  if (!backendAccess || opening) throw new Error('工作区尚未就绪');
+  const access = backendAccess;
+  const response = await fetch(new URL(path, access.url), { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${access.token}`, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000) });
+  const result = await response.json();
+  if (!response.ok || result.ok === false) throw new Error(result.error || `HTTP ${response.status}`);
+  if (backendAccess !== access) throw new Error('工作区已切换');
+  return result;
+}
+ipcMain.handle('luban:petOpen', event => { if (!trustedPet(event)) throw new Error('Untrusted pet'); showMain(); });
+ipcMain.handle('luban:petSubmit', async (event, input) => {
+  if (!trustedPet(event) || petSubmitting) throw new Error('桌宠正在处理提交');
+  petSubmitting = true;
+  try {
+    if (petJob) { const job = await petApi(`/api/jobs/${encodeURIComponent(petJob)}`); if (['queued','pending','working','paused'].includes(job.status)) throw new Error('请先完成或取消当前任务'); }
+    const access = backendAccess;
+    const task = await preparePetTask(input);
+    if (backendAccess !== access || !access) throw new Error('工作区已切换，请重新提交');
+    const nodeInfo = await petApi('/api/node');
+    const project = Object.entries(nodeInfo.projects || {}).find(([, root]) => root === currentWorkspace)?.[0] || Object.keys(nodeInfo.projects || {})[0];
+    if (!project) throw new Error('没有可用项目');
+    if (!nodeInfo.interactive) throw new Error('未启用交互审批，拒绝自动执行');
+    if (backendAccess !== access) throw new Error('工作区已切换，请重新提交');
+    const reply = await petApi('/api/jobs', { ...task, project_id: project, interaction: 'on' });
+    petJob = reply.job_id;
+    showMain();
+    window.webContents.send('luban:petJob', petJob);
+    return { id: petJob };
+  } finally { petSubmitting = false; }
+});
+ipcMain.handle('luban:petStatus', async event => {
+  if (!trustedPet(event)) throw new Error('Untrusted pet');
+  if (!petJob) return { status: 'idle', text: '把任务或文本文件喂给我吧' };
+  const job = await petApi(`/api/jobs/${encodeURIComponent(petJob)}`);
+  const approvals = await petApi(`/api/approvals?job=${encodeURIComponent(petJob)}`);
+  const questions = await petApi(`/api/questions?job=${encodeURIComponent(petJob)}`);
+  return { status: approvals.length || questions.length ? 'approval' : job.status, text: job.result || job.error || job.title || '', id: petJob };
+});
+function createPet() {
+  if (pet && !pet.isDestroyed()) { pet.show(); return; }
+  const area = screen.getPrimaryDisplay().workArea;
+  pet = new BrowserWindow({ width: 330, height: 480, x: area.x + area.width - 350, y: area.y + area.height - 500, frame: false, transparent: true, alwaysOnTop: true, resizable: false, skipTaskbar: true, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, preload: join(__dirname, 'pet-preload.cjs') } });
+  pet.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  pet.webContents.on('will-navigate', event => event.preventDefault());
+  pet.webContents.on('will-redirect', event => event.preventDefault());
+  pet.on('closed', () => { pet = undefined; });
+  void pet.loadFile(join(__dirname, 'pet.html'));
+}
 const { createWorkspace } = require("./workspace.cjs");
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
@@ -62,6 +120,8 @@ function rememberWorkspace(path) {
   writeFileSync(join(app.getPath("userData"), "workspace.json"), JSON.stringify({ path }));
 }
 function stopBackend() {
+  backendAccess = undefined;
+  petJob = undefined;
   if (!backend) return;
   backend.kill("SIGTERM");
   backend = undefined;
@@ -96,6 +156,8 @@ function startBackend(workspace) {
       if (!settled) finish(new Error(`本地服务退出 (${code})：${errors.slice(-500)}`));
       else if (backend === child && window && !window.isDestroyed()) {
         stopWorkspace();
+        backendAccess = undefined;
+        petJob = undefined;
         dialog.showMessageBox(window, { type: "error", title: "luban", message: "桌面服务已停止", detail: errors.slice(-500) || `退出码 ${code}` });
       }
     });
@@ -108,6 +170,7 @@ async function chooseWorkspace() {
 }
 function installWindowGuards() {
   window.once("ready-to-show", () => window.show());
+  window.on('close', event => { if (!quitting && pet && !pet.isDestroyed()) { event.preventDefault(); window.hide(); } });
   window.on("closed", () => { window = undefined; dirty = false; stopWorkspace(); stopBackend(); });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-prevent-unload", event => {
@@ -136,7 +199,7 @@ function installWindowGuards() {
   window.webContents.on("render-process-gone", () => { dirty = false; stopWorkspace(); });
 }
 async function openWorkspace(workspace) {
-  if (opening || !confirmDiscard()) return;
+  if (opening || petSubmitting || !confirmDiscard()) return;
   opening = true;
   try {
     // Validate the new root before disturbing the old workspace.
@@ -146,6 +209,7 @@ async function openWorkspace(workspace) {
     workspaceService = nextWorkspace;
     currentWorkspace = workspace;
     const { url, token } = await startBackend(workspace);
+    backendAccess = { url, token };
     rememberWorkspace(workspace);
     if (!window || window.isDestroyed()) {
       window = new BrowserWindow({
@@ -176,7 +240,7 @@ app.whenReady().then(async () => {
       { type: "separator" }, { role: "quit", label: "退出" },
     ] },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
-    { label: "视图", submenu: [{ role: "reload", label: "重新加载" }, { role: "togglefullscreen", label: "全屏" }] },
+    { label: "视图", submenu: [{ label: '显示桌宠', click: createPet }, { label: '打开主界面', click: showMain }, { role: "reload", label: "重新加载" }, { role: "togglefullscreen", label: "全屏" }] },
   ]));
   const argument = process.argv.slice(1)
     .filter(value => !value.startsWith("-"))
@@ -184,7 +248,9 @@ app.whenReady().then(async () => {
     .filter(value => value !== resolve(app.getAppPath()) && existsSync(value) && statSync(value).isDirectory())
     .at(-1);
   await openWorkspace(argument || savedWorkspace() || homedir());
+  if (backendAccess) createPet();
 }).catch(error => { dialog.showErrorBox("luban Desktop", String(error)); app.quit(); });
 // before-quit may be canceled by a dirty window; keep its backend alive.
+app.on('before-quit', () => { quitting = true; });
 app.on("will-quit", () => { stopWorkspace(); stopBackend(); });
 app.on("window-all-closed", () => app.quit());

@@ -151,6 +151,7 @@ export function DesktopCodeArea({ store, timeline }: { store: WorkbenchStore; ti
 
 export function DesktopApp(): React.ReactElement {
   const store = useWorkbench();
+  useEffect(() => window.lubanDesktop?.onPetJob?.(id => store.selectJob(id)), [store.selectJob]);
   const timeline = useMemo(() => buildTimeline(store.job, store.events), [store.job, store.events]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {

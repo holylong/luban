@@ -172,14 +172,14 @@ export function TextArea({ value, onChange, onSubmit, focus, historyActive = fal
   }
 
   return (
-    <Box ref={(node) => { measureRef?.(node); }} flexDirection="column" flexGrow={1} overflow="hidden">
+    <Box ref={(node) => { measureRef?.(node); }} width={width} flexShrink={0} flexDirection="column" overflow="hidden">
       {layout.rows.slice(layout.first, layout.last).map((row, index) => {
         const absolute = layout.first + index;
         const isCursorRow = absolute === layout.cursorRow;
         const column = isCursorRow && focus ? layout.cursorColumn : -1;
         const next = column < 0 ? -1 : stepCursor(row.text, column, 1);
         return (
-          <Text key={absolute}>
+          <Text key={absolute} wrap="truncate-end">
             <Text color={theme.primary}>{column < 0 ? row.text : row.text.slice(0, column)}</Text>
             {column >= 0
               // A solid accent cell instead of `inverse`: reverse video is

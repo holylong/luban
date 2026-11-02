@@ -15,7 +15,7 @@ import { isFreeTierError, isModelTimeoutError, isUpstreamUnavailableError } from
 import { isZenFreeModel } from "../core/opencode-zen.js";
 import { estimateMessagesTokens } from "../core/context.js";
 import { savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
-import { consumeCodexReset, formatCodexRateLimits, formatCodexUsage, readCodexRateLimits, readCodexUsage } from "../core/codex-account.js";
+import { consumeCodexReset, formatCodexResetOutcome, formatCodexRateLimits, formatCodexUsage, readCodexRateLimits, readCodexUsage } from "../core/codex-account.js";
 import type { JobStreamRecord, MeshChatMessage, MeshJob, MeshRuntime } from "../core/mesh/runtime.js";
 import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
 import { chatBlocks, jobBlocks } from "./mesh-transcript.js";
@@ -825,6 +825,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const questionOptionNodesRef = useRef<Array<LayoutNode | null>>([]);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const statusAbortRef = useRef<AbortController | null>(null);
+  const codexResetBusyRef = useRef(false);
   useEffect(() => () => { statusAbortRef.current?.abort(); }, []);
   const [dialogQuery, setDialogQuery] = useState("");
   const modelProviders = useMemo(() => {
@@ -1906,6 +1907,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         return;
       }
       if (action === "reset") {
+        if (codexResetBusyRef.current) { setNotice("重置请求处理中，请勿重复提交。"); return; }
         if (running) { setNotice("请在当前任务结束后使用重置卡。"); return; }
         try {
           const limits = await readCodexRateLimits();
@@ -1923,10 +1925,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         return;
       }
       try {
-        const [limits, activity] = await Promise.all([readCodexRateLimits(), readCodexUsage()]);
+        const [limitsResult, activityResult] = await Promise.allSettled([readCodexRateLimits(), readCodexUsage()]);
         const view = (action || "daily") as "daily" | "weekly" | "cumulative";
+        const limitsText = limitsResult.status === "fulfilled" ? formatCodexRateLimits(limitsResult.value) : `额度读取失败：${String(limitsResult.reason)}`;
+        const activityText = activityResult.status === "fulfilled" ? formatCodexUsage(activityResult.value, view) : `用量统计暂不可用：${String(activityResult.reason)}`;
         setDialog({ type: "info", index: 0, title: `Codex 用量 · ${view}`,
-          content: `${formatCodexRateLimits(limits)}\n\n${formatCodexUsage(activity, view)}\n\n/usage daily|weekly|cumulative 查看不同周期 · /usage reset 使用重置卡` });
+          content: `${limitsText}\n\n${activityText}\n\nr 使用重置卡（再次确认后才兑换） · /usage reset 也可进入` });
       } catch (error) {
         setDialog({ type: "info", index: 0, title: "Codex 用量", content: `读取失败：${error instanceof Error ? error.message : String(error)}\n请运行 luban login codex 检查登录状态。` });
       }
@@ -2282,21 +2286,22 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       if (dialog.type === "codex-reset") {
         if (key.escape) { setDialog(null); setNotice("未使用重置卡。"); }
         else if (key.return) {
+          if (codexResetBusyRef.current) return;
+          codexResetBusyRef.current = true;
           const creditId = dialog.creditId;
           setDialog(null);
           setNotice("正在使用 Codex 重置卡…");
           void (async () => {
             try {
               const result = await consumeCodexReset(creditId);
-              const outcome = result.outcome === "reset" ? "已使用一张重置卡。"
-                : result.outcome === "alreadyRedeemed" ? "这张重置卡已使用。"
-                  : result.outcome === "nothingToReset" ? "当前没有可重置的额度窗口，未消耗重置卡。"
-                    : "当前没有可用重置卡。";
-              const limits = await readCodexRateLimits();
-              setDialog({ type: "info", index: 0, title: "Codex 重置结果", content: `${outcome}\n\n${formatCodexRateLimits(limits)}` });
+              const outcome = formatCodexResetOutcome(result.outcome);
+              let refreshed: string;
+              try { refreshed = formatCodexRateLimits(await readCodexRateLimits()); }
+              catch (error) { refreshed = `额度刷新失败：${String(error)}\n兑换结果已返回，请勿因此重复使用重置卡。`; }
+              setDialog({ type: "info", index: 0, title: "Codex 重置结果", content: `${outcome}\n\n${refreshed}` });
             } catch (error) {
               setDialog({ type: "info", index: 0, title: "Codex 重置结果", content: `请求结果不确定：${error instanceof Error ? error.message : String(error)}\n请先用 /status 查看额度，再决定是否重试。` });
-            }
+            } finally { codexResetBusyRef.current = false; }
           })();
         }
         return;
@@ -2437,6 +2442,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         themeDialogOriginRef.current = null;
         setDialog(null);
         setDialogQuery("");
+        return;
+      }
+      if (dialog.type === "info" && dialog.title?.startsWith("Codex 用量") && character.toLowerCase() === "r") {
+        void handleSlashCommand("/usage", "reset", "/usage reset", runMeshAction);
         return;
       }
       if (dialog.type === "diff" || dialog.type === "verify" || dialog.type === "info") {

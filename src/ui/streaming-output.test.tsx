@@ -44,20 +44,28 @@ it.each([60, 100, 160])("does not erase the frame while streaming reasoning at %
     await expect.poll(() => Boolean(emit)).toBe(true);
     emit!({ type: "thinking-delta", text: "先检查流式输出" });
     await expect.poll(() => stripVTControlCharacters(raw)).toContain("推理中");
-    await new Promise(resolve => setTimeout(resolve, 180));
-    if (columns >= 100) expect(stripVTControlCharacters(raw)).toContain("先检查流式输出");
+    // Painting is throttled, so wait for the frame rather than sleeping a fixed
+    // amount of time; a slow runner otherwise fails this before the repaint.
+    if (columns >= 100) {
+      await expect.poll(() => stripVTControlCharacters(raw), { timeout: 5000 }).toContain("先检查流式输出");
+    }
     const start = raw.length;
     for (const text of ["\n继续检查布局", "。很长的中文思考内容".repeat(40), "\n新的思考行 👩‍💻", "\n结束检查"]) {
       emit!({ type: "thinking-delta", text });
       await new Promise(resolve => setTimeout(resolve, 180));
     }
     const updates = raw.slice(start);
-    if (columns >= 100) expect(stripVTControlCharacters(updates)).toContain("结束检查");
+    if (columns >= 100) {
+      await expect.poll(() => stripVTControlCharacters(raw.slice(start)), { timeout: 5000 }).toContain("结束检查");
+    }
     expect(updates.length).toBeGreaterThan(0);
     expect(updates).not.toContain("\u001b[2K");
     expect(updates).not.toContain("\u001b[2J");
     expect(updates).not.toContain("Message luban");
-    expect(updates).not.toContain("reasoning test");
+    // Absolute repaint resends unchanged transcript rows to repair stale cells.
+    // It must not scroll or clear the screen while doing so.
+    expect(updates).toContain("\u001b[1;1H");
+    expect(updates).not.toContain("\n");
   } finally {
     try {
       finish?.();

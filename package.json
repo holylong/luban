@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "1.16.167",
+  "version": "1.16.173",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -14,7 +14,8 @@
     "scripts/lib/ink-text-cache.mjs",
     "docs",
     "plugins",
-    "README.md"
+    "README.md",
+    "bot.md"
   ],
   "engines": {
     "node": ">=20"

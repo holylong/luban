@@ -12,6 +12,11 @@ import { App } from "./app.js";
 const originalHome = process.env.LUBAN_HOME;
 const originalBin = process.env.LUBAN_CODEX_BIN;
 const originalLog = process.env.LUBAN_CODEX_ACCOUNT_TEST_LOG;
+const originalMode = process.env.LUBAN_CODEX_MODE;
+// These cases drive a fake CLI. Auto transport would first try the real ChatGPT
+// backend with the developer's ~/.codex login, which is slow and machine
+// dependent, so pin the transport to the CLI under test.
+process.env.LUBAN_CODEX_MODE = "cli";
 afterEach(() => {
   if (originalHome === undefined) delete process.env.LUBAN_HOME;
   else process.env.LUBAN_HOME = originalHome;
@@ -19,9 +24,12 @@ afterEach(() => {
   else process.env.LUBAN_CODEX_BIN = originalBin;
   if (originalLog === undefined) delete process.env.LUBAN_CODEX_ACCOUNT_TEST_LOG;
   else process.env.LUBAN_CODEX_ACCOUNT_TEST_LOG = originalLog;
+  if (originalMode === undefined) delete process.env.LUBAN_CODEX_MODE;
+  else process.env.LUBAN_CODEX_MODE = originalMode;
 });
 
 it("shows real Codex input/output and cache usage after a task", async () => {
+  process.env.LUBAN_CODEX_MODE = "cli";
   const home = await mkdtemp(join(tmpdir(), "luban-codex-tokens-ui-"));
   const fake = join(home, "codex");
   await writeFile(fake, `#!/usr/bin/env node
@@ -49,12 +57,15 @@ process.stdin.on('end', () => {
     stdin.write("hello");
     await new Promise(resolve => setTimeout(resolve, 80));
     stdin.write("\r");
-    await expect.poll(() => frame).toContain("120↑ 30↓ · cache 83%");
-    await expect.poll(() => frame).toContain("Task complete");
+    // The CLI child needs a moment to boot and finish its turn; one second is
+    // not enough on a loaded CI runner, and the test must outlive the poll.
+    await expect.poll(() => frame, { timeout: 10000 }).toContain("120↑ 30↓ · cache 83%");
+    await expect.poll(() => frame, { timeout: 10000 }).toContain("Task complete");
   } finally { app.unmount(); app.cleanup(); }
-});
+}, 30000);
 
-it("shows Codex quota and usage without redeeming, then confirms a reset", async () => {
+it.each([false, true])("shows quota and confirms exactly one reset (usage/refresh failures: %s)", async (failReads) => {
+  process.env.LUBAN_CODEX_MODE = "cli";
   const home = await mkdtemp(join(tmpdir(), "luban-codex-usage-ui-"));
   const workspace = join(home, "workspace");
   const fake = join(home, "codex");
@@ -72,6 +83,12 @@ process.stdin.on('data', part => {
     if (request.id === 0) process.stdout.write(JSON.stringify({ id: 0, result: {} }) + '\\n');
     if (request.id === 1) {
       fs.appendFileSync(process.env.LUBAN_CODEX_ACCOUNT_TEST_LOG, request.method + '\\n');
+      const consumed = fs.readFileSync(process.env.LUBAN_CODEX_ACCOUNT_TEST_LOG, 'utf8').includes('account/rateLimitResetCredit/consume');
+      if (${failReads} && (request.method === 'account/usage/read' || (consumed && request.method === 'account/rateLimits/read'))) {
+        process.stdout.write(JSON.stringify({ id: 1, error: { message: 'temporary read failure' } }) + '\\n');
+        newline = buffer.indexOf('\\n');
+        continue;
+      }
       const result = request.method === 'account/rateLimits/read' ? {
         rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300 } },
         rateLimitResetCredits: { availableCount: 1, credits: [{ id: 'card-1', status: 'available' }] },
@@ -105,25 +122,30 @@ process.stdin.on('data', part => {
   try {
     await expect.poll(() => frame, { timeout: 5000 }).toContain("Auto");
     await type("/status");
-    await expect.poll(() => frame).toContain("剩余 75.0%");
+    await expect.poll(() => frame, { timeout: 5000 }).toContain("剩余 75.0%");
     stdin.write("\r");
     await expect.poll(() => frame).not.toContain("状态与 Codex 额度");
     await type("/usage");
-    await expect.poll(() => frame).toContain("累计 token：1,234");
+    await expect.poll(() => frame, { timeout: 5000 }).toContain(failReads ? "用量统计暂不可用" : "累计 token：1,234");
+    expect(frame).toContain("可用重置卡：1 张");
     expect(await requests()).not.toContain("account/rateLimitResetCredit/consume");
-    stdin.write("\r");
-    await expect.poll(() => frame).not.toContain("Codex 用量 · daily");
-    await type("/usage reset");
+    // Reset is reachable from /usage itself, without closing the page first.
+    stdin.write("r");
     await expect.poll(() => frame).toContain("使用 Codex 重置卡？");
     stdin.write("\u001b");
     await expect.poll(() => frame).not.toContain("使用 Codex 重置卡？");
     expect(await requests()).not.toContain("account/rateLimitResetCredit/consume");
     await type("/usage reset");
     await expect.poll(() => frame).toContain("使用 Codex 重置卡？");
+    await new Promise(resolve => setTimeout(resolve, 100));
     stdin.write("\r");
-    await expect.poll(() => frame).toContain("已使用一张重置卡");
+    await new Promise(resolve => setTimeout(resolve, 50));
+    stdin.write("\r"); // Repeated confirmation must never consume two cards.
+    await expect.poll(() => frame, { timeout: 5000 }).toContain("已使用一张重置卡");
+    if (failReads) expect(frame).toContain("兑换结果已返回");
     expect((await requests()).filter((method) => method === "account/rateLimitResetCredit/consume")).toHaveLength(1);
   } finally {
     app.unmount();
+    app.cleanup();
   }
-});
+}, 20000);

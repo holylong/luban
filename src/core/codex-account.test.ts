@@ -26,7 +26,7 @@ process.stdin.on('data', part => {
   while (newline >= 0) {
     const request = JSON.parse(buffer.slice(0, newline));
     buffer = buffer.slice(newline + 1);
-    if (request.id === 0) process.stdout.write(JSON.stringify({ id: 0, result: {} }) + '\\n');
+    if (request.id === 0) process.stdout.write(JSON.stringify(request.params?.capabilities?.experimentalApi === true ? { id: 0, result: {} } : { id: 0, error: { message: 'experimentalApi required' } }) + '\\n');
     if (request.id === 1) {
       fs.appendFileSync(process.env.LUBAN_CODEX_ACCOUNT_TEST_LOG, JSON.stringify(request) + '\\n');
       const result = request.method === 'account/rateLimits/read' ? {

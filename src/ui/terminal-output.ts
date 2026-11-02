@@ -1,8 +1,8 @@
 // Ink's standard renderer erases the entire frame before repainting. Consoles
 // without DECSET 2026 show that empty frame, especially during reasoning streams.
-// Keep Ink's standard cursor model (including its trailing newline), but
-// overwrite only changed rows on every interactive terminal.
-export function createTerminalFrameWriter(): (chunk: string) => string {
+// Full workbench frames use absolute rows, repairing stale cells independently
+// of cursor drift. Smaller outputs retain Ink's standard trailing cursor model.
+export function createTerminalFrameWriter(size?: () => { rows: number; columns: number }): (chunk: string) => string {
   let previous: string[] | undefined;
   const erasePrefix = /^(?:\u001b\[2K\u001b\[1A)*\u001b\[2K\u001b\[G/;
   return (chunk) => {
@@ -19,6 +19,19 @@ export function createTerminalFrameWriter(): (chunk: string) => string {
     const lines = frame.slice(0, -1).split("\n");
     const old = previous;
     previous = lines;
+    const dimensions = size?.();
+    if (dimensions && lines.length === dimensions.rows - 1) {
+      // The workbench owns the viewport. Never trust a relative cursor origin:
+      // autowrap, bottom scrolling and resize can leave it a row away from Ink's
+      // model. Absolute row addresses also repair remnants of earlier frames.
+      // Paint every row, including blanks; a cached "unchanged" row may be stale
+      // on the terminal even when React's strings are identical.
+      let output = "";
+      for (let row = 0; row < lines.length; row++) {
+        output += `\u001b[${row + 1};1H${lines[row]}\u001b[K`;
+      }
+      return `${output}\u001b[${dimensions.rows};1H\u001b[K`;
+    }
     const erasedRows = prefix.match(/\u001b\[2K/g)?.length ?? 0;
     if (!old || lines.length !== old.length || erasedRows !== old.length + 1) return chunk;
 
@@ -36,7 +49,7 @@ export function createTerminalFrameWriter(): (chunk: string) => string {
 
 export function terminalOutput(stdout: NodeJS.WriteStream): NodeJS.WriteStream {
   if (!stdout.isTTY || process.env.INK_SCREEN_READER === "true") return stdout;
-  const transform = createTerminalFrameWriter();
+  const transform = createTerminalFrameWriter(() => ({ rows: stdout.rows, columns: stdout.columns }));
   const write: NodeJS.WriteStream["write"] = (chunk: string | Uint8Array, ...args: unknown[]) => {
     // A binary/external write may move the cursor. Re-establish the frame on
     // the next render rather than applying a diff against stale terminal state.

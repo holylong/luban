@@ -57,7 +57,7 @@ CLI 返回的线程累计 token 用量会先与上次成功调用的累计值作
 JSON 工具转接和 luban 指令仍有额外上下文开销，因此不能保证订阅消耗与直接使用
 Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例。
 
-在 TUI 中，`/status` 显示当前模型、会话上下文估计和 ChatGPT Codex 额度剩余比例、重置时间、可用重置卡数量；`/status <peer>` 查询 mesh 节点。`/usage` 显示额度和每日 token 活动，`/usage weekly` 和 `/usage cumulative` 可切换统计周期。`/usage reset` 会先显示确认界面；按 Enter 才尝试使用一张可用重置卡，Esc 取消。请求完成后会重新读取额度。额度、用量和重置卡通过官方 Codex App Server 获取，不读取或复制本地登录令牌。
+在 TUI 中，`/status` 显示当前模型、会话上下文估计和 ChatGPT Codex 额度剩余比例、重置时间、可用重置卡数量；`/status <peer>` 查询 mesh 节点。`/usage` 显示额度和每日 token 活动，`/usage weekly` 和 `/usage cumulative` 可切换统计周期。在 `/usage` 页面按 `r`，或输入 `/usage reset`，会先显示确认界面；按 Enter 才尝试使用一张可用重置卡，Esc 取消。用量统计读取失败不影响额度与重置入口；兑换成功后即使额度刷新失败也保留兑换结果，避免误用第二张卡。请求完成后会重新读取额度。额度、用量和重置卡通过官方 Codex App Server 获取，不读取或复制本地登录令牌。
 
 ## 目录
 

@@ -8,6 +8,11 @@ window.addEventListener("beforeunload", event => {
   event.returnValue = "Unsaved workspace changes";
 });
 contextBridge.exposeInMainWorld("lubanDesktop", Object.freeze({
+  onPetJob: listener => {
+    const handler = (_event, id) => listener(id);
+    ipcRenderer.on('luban:petJob', handler);
+    return () => ipcRenderer.removeListener('luban:petJob', handler);
+  },
   readFile: path => ipcRenderer.invoke("luban:readFile", path),
   saveFile: input => ipcRenderer.invoke("luban:saveFile", input),
   listFiles: () => ipcRenderer.invoke("luban:listFiles"),

@@ -36,6 +36,32 @@ it("falls back on resize and external logs, then resumes row updates", () => {
   expect(write(erase(2) + "e\n")).not.toContain("\u001b[2K");
 });
 
+it("repairs stale composer rows even after cursor drift and shrinking a pasted draft", () => {
+  const write = createTerminalFrameWriter(() => ({ rows: 8, columns: 80 }));
+  const screen = Array<string>(8).fill("stale previous instruction");
+  let row = 7;
+  const replay = (output: string) => {
+    for (const token of output.split(/(\u001b\[[\d;]*[A-Za-z])/).filter(Boolean)) {
+      const position = /^\u001b\[(\d+);1H$/.exec(token);
+      if (position) { row = Number(position[1]) - 1; screen[row] = ""; }
+      else if (token === "\u001b[K") { /* all test writes start at column 1 */ }
+      else if (!token.startsWith("\u001b")) screen[row] = token;
+    }
+  };
+  replay(write("header\nmesh\nbody\nold command\nold command\nfooter\nnotice\n"));
+  row = 3; // terminal cursor no longer agrees with Ink's trailing-row model
+  const update = write(erase(8) + "header\nmesh\nbody\n\nnew prompt\nfooter\nnotice\n");
+  // Verify blank lines are explicitly painted/cleared, not skipped as unchanged.
+  expect(update).toContain("\u001b[4;1H\u001b[K");
+  replay(update);
+  expect(screen[4]).toBe("new prompt");
+  expect(update).not.toContain("old command");
+  expect(screen[3]).toBe("");
+  expect(screen.join("\n")).not.toContain("old command");
+  expect(update.endsWith("\u001b[8;1H\u001b[K")).toBe(true);
+  expect(update).not.toContain("\n"); // cannot scroll at the terminal's bottom
+});
+
 it("wraps TTY output on every platform and leaves redirected output untouched", () => {
   const stream = Object.assign(new PassThrough(), { isTTY: true }) as unknown as NodeJS.WriteStream;
   expect(terminalOutput(stream)).not.toBe(stream);
@@ -77,7 +103,8 @@ it("keeps the composer in place without frame erases while typing and after resi
     const chunk = String(data);
     raw += chunk;
     if (stripVTControlCharacters(chunk).includes("Auto · workspace")) {
-      fullFrameRows = stripVTControlCharacters(chunk).split("\n").length - 1;
+      const addresses = [...chunk.matchAll(/\u001b\[(\d+);1H/g)].map(match => Number(match[1]));
+      fullFrameRows = addresses.length ? Math.max(...addresses) - 1 : stripVTControlCharacters(chunk).split("\n").length - 1;
     }
   });
   const app = render(<App config={loadConfig({ workspace })} />, {
@@ -94,6 +121,7 @@ it("keeps the composer in place without frame erases while typing and after resi
         const control = /^\u001b\[([\d;?]*)([A-Za-z])/.exec(output.slice(i));
         if (control) {
           const count = Number(control[1]) || 1;
+          if (control[2] === "H") row = Number(control[1]!.split(";")[0]) - 1;
           if (control[2] === "A" || control[2] === "F") row -= count;
           if (control[2] === "B" || control[2] === "E") row += count;
           i += control[0].length - 1;

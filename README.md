@@ -50,10 +50,17 @@ luban web . --port 8642                     # 浏览器工作台
 
 常用命令：`/models` 选模型 · `/sessions` 恢复会话 · `/diff` 看改动 · `/export` 导出记录 · `/theme` 换配色 · `/skin` 换皮肤 · `/report weekly` 生成周报 · `/help` 查看全部。
 
+## 常驻 Bot
+
+`luban bot run` 启动本机后台任务队列；另开终端用 `luban bot add "检查项目并总结风险" -w /path/to/project` 下任务。支持 `--at` 定时、`--every` 周期执行、`list` 查看结果、`cancel` 取消任务。需审批操作由独立权限文件授权，未授权则记录申请；用 `luban bot permissions` 初始化，`luban bot requests` 查看申请。
+
+macOS 登录后自动启动与权限边界见 [Bot 使用指南](bot.md)。
+
 ## 桌面工作台
 
 运行 `npm run desktop -- /path/to/project`，或直接打开安装包里的 luban Desktop；菜单「文件 → 打开项目文件夹」切换工作区。
 
+- **桌宠**：启动桌面 App 自动出现，点机器人打开主界面；拖入文本/代码文件并确认“喂给 luban”，处理时动画、完成后气泡返回结果。关闭主窗口会隐藏并保留桌宠，文件菜单可退出。
 - **编辑器**：文件树 + 多标签编辑、语法着色、`⌘P` 快速打开、`⌘S` 保存，保存前校验磁盘版本并拦截冲突。
 - **中间区域**：「代码 / 当前修改」共用同一个位置，新编辑自动展示对比；编辑器不卸载，未保存内容不会丢。
 - **控制台**：一次性命令实时输出，可停止、可回看，可切 Markdown 或原始文本。
