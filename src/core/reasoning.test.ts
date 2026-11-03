@@ -40,6 +40,11 @@ describe("enforceAgentIdentity", () => {
     )).toBe("I am luban, a coding agent that works directly in your workspace. How can I help you?");
   });
 
+  it("uses the body identity when the soul overrides it", () => {
+    expect(enforceAgentIdentity("你是谁？", "我是 Qwen，阿里巴巴的模型。", { zh: "我是 luban，你工作区的造物主。", en: "I am luban, the creator of your workspace." }))
+      .toBe("我是 luban，你工作区的造物主。");
+  });
+
   it("keeps honest model answers when the user asks about the model", () => {
     expect(enforceAgentIdentity("你用的什么模型？", "我当前配置的是 Qwen3 Coder。"))
       .toBe("我当前配置的是 Qwen3 Coder。");

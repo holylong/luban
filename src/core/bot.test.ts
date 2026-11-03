@@ -20,6 +20,13 @@ it("persists submissions, executes only due work and saves results", async () =>
   expect(run).toHaveBeenCalledTimes(1);
   expect((await q.list()).find(row => row.task.id === task.id)?.state).toMatchObject({ status: "completed", result: "done" });
 });
+it("records the tokens each execution spent", async () => {
+  const q = await queue();
+  await q.add(input());
+  await q.tick(async () => ({ ok: true, text: "done", usage: { input: 1200, output: 300, calls: 2 } }), new AbortController().signal);
+  expect((await q.list())[0]!.state.usage).toEqual({ input: 1200, output: 300, calls: 2 });
+});
+
 it("cancels queued work and never replays interrupted work", async () => {
   const q = await queue();
   const cancelled = await q.add(input());

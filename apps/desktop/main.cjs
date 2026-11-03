@@ -1,10 +1,16 @@
 const { app, BrowserWindow, dialog, Menu, ipcMain, screen } = require("electron");
 const { preparePetTask } = require("./pet-task.cjs");
+const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
 let backendAccess;
 let petJob;
 let petSubmitting = false;
 let quitting = false;
+// The desktop app is the bot's body: it owns the worker it started, and reports
+// a worker owned by a LaunchAgent or a terminal instead of duplicating it.
+let botChild;
+let botError;
+let botQuitting = false;
 function showMain() { if (window && !window.isDestroyed()) { window.show(); window.restore(); window.focus(); } }
 function trustedPet(event) {
   return pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame === pet.webContents.mainFrame && event.senderFrame.url === require('node:url').pathToFileURL(join(__dirname, 'pet.html')).href;
@@ -46,6 +52,10 @@ ipcMain.handle('luban:petStatus', async event => {
   const approvals = await petApi(`/api/approvals?job=${encodeURIComponent(petJob)}`);
   const questions = await petApi(`/api/questions?job=${encodeURIComponent(petJob)}`);
   return { status: approvals.length || questions.length ? 'approval' : job.status, text: job.result || job.error || job.title || '', id: petJob };
+});
+ipcMain.handle('luban:botStatus', event => {
+  if (!trustedPet(event)) throw new Error('Untrusted pet');
+  return botSnapshot(botHome(), { owned: Boolean(botChild), error: botError });
 });
 function createPet() {
   if (pet && !pet.isDestroyed()) { pet.show(); return; }
@@ -125,6 +135,34 @@ function stopBackend() {
   if (!backend) return;
   backend.kill("SIGTERM");
   backend = undefined;
+}
+function botHome() {
+  return process.env.LUBAN_HOME ? resolve(process.env.LUBAN_HOME) : join(homedir(), ".luban");
+}
+function startBot() {
+  if (botChild) return;
+  // A worker started by a LaunchAgent or another terminal holds the lock; the
+  // pet reports it instead of racing a second worker for the same queue.
+  if (existsSync(join(botHome(), "bot", "worker.lock", "pid"))) return;
+  botError = undefined;
+  let errors = "";
+  const child = spawn(node, [cli, "bot", "run"], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+  botChild = child;
+  child.stdout.on("data", chunk => { if (/Bot ready/.test(String(chunk))) botError = undefined; });
+  child.stderr.on("data", chunk => { errors = (errors + String(chunk)).slice(-1000); });
+  child.on("error", error => { errors = `${errors}${error.message}`.slice(-1000); });
+  child.on("exit", code => {
+    if (botChild === child) botChild = undefined;
+    if (quitting || botQuitting || code === 0) return;
+    botError = errors.trim() || `bot 退出 (${code})`;
+    if (pet && !pet.isDestroyed()) pet.webContents.send("luban:botChanged");
+  });
+}
+function stopBot() {
+  if (!botChild) return;
+  const child = botChild;
+  botChild = undefined;
+  child.kill("SIGTERM");
 }
 function startBackend(workspace) {
   return new Promise((resolveStart, rejectStart) => {
@@ -248,9 +286,21 @@ app.whenReady().then(async () => {
     .filter(value => value !== resolve(app.getAppPath()) && existsSync(value) && statSync(value).isDirectory())
     .at(-1);
   await openWorkspace(argument || savedWorkspace() || homedir());
-  if (backendAccess) createPet();
+  if (backendAccess) { startBot(); createPet(); }
 }).catch(error => { dialog.showErrorBox("luban Desktop", String(error)); app.quit(); });
 // before-quit may be canceled by a dirty window; keep its backend alive.
-app.on('before-quit', () => { quitting = true; });
-app.on("will-quit", () => { stopWorkspace(); stopBackend(); });
+app.on('before-quit', event => {
+  quitting = true;
+  if (!botChild || botQuitting) return;
+  // Let the worker abort its turn and release worker.lock before the app exits,
+  // otherwise the next start sees a stale lock left by us.
+  event.preventDefault();
+  botQuitting = true;
+  const child = botChild;
+  const finish = () => { botChild = undefined; app.quit(); };
+  const timer = setTimeout(finish, 4000);
+  child.once('exit', () => { clearTimeout(timer); finish(); });
+  child.kill('SIGTERM');
+});
+app.on("will-quit", () => { stopBot(); stopWorkspace(); stopBackend(); });
 app.on("window-all-closed", () => app.quit());

@@ -17,8 +17,10 @@ export interface BotState {
   startedAt?: number;
   finishedAt?: number;
   result?: string;
+  /** Tokens this execution spent, summed over every model round-trip. */
+  usage?: { input: number; output: number; calls: number };
 }
-export type BotExecute = (task: BotTask, signal: AbortSignal) => Promise<{ ok: boolean; text: string }>;
+export type BotExecute = (task: BotTask, signal: AbortSignal) => Promise<{ ok: boolean; text: string; usage?: BotState["usage"] }>;
 
 async function atomicJson(path: string, value: unknown) {
   const temporary = `${path}.${randomUUID()}.tmp`;
@@ -97,6 +99,7 @@ export class BotQueue {
           status: cancelled ? "cancelled" : interrupted ? "interrupted" : controller.signal.aborted ? "failed" : result.ok && task.every ? "queued" : result.ok ? "completed" : "failed",
           nextAt: Date.now() + (task.every ?? 0), startedAt: now, finishedAt: Date.now(),
           result: controller.signal.aborted ? String(controller.signal.reason) : result.text,
+          ...(result.usage ? { usage: result.usage } : {}),
         });
       } catch (error) {
         await this.save(task.id, { ...state, status: await this.cancelled(task.id) ? "cancelled" : shutdown.aborted ? "interrupted" : "failed", finishedAt: Date.now(), result: String(error) });

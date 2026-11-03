@@ -1018,3 +1018,15 @@ describe("run accounting", () => {
     expect(open).toContain("sandbox.allowOutsideWorkspace is enabled");
   });
 });
+
+describe("soul identity", () => {
+  it("names the background body 造物主 without changing the foreground prompt", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-soul-"));
+    const plain = String(initialMessages(workspace, "m")[0].content);
+    expect(plain).toContain("the coding agent working in their workspace");
+    expect(plain).not.toContain("造物主");
+    const soul = String(initialMessages(workspace, "m", "auto", "model", false, "造物主 (the creator of this workspace)")[0].content);
+    expect(soul).toContain("In this background body you are 造物主 (the creator of this workspace)");
+    expect(soul).not.toContain("the coding agent working in their workspace");
+  });
+});

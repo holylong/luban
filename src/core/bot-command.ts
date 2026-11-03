@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -24,6 +24,22 @@ export function botLaunchAgent(executable: string, cli: string, home: string, pa
 </dict></plist>\n`;
 }
 
+/** The soul names itself 造物主 in its own body; the foreground stays a coding agent. */
+const SOUL_IDENTITY = "造物主 (the creator of this workspace)";
+const SOUL_IDENTITY_TEXT = { zh: "我是 luban，你工作区的造物主。", en: "I am luban, the creator of your workspace." };
+
+/** What the worker is running right now, published for the desktop pet. */
+let currentTask: { prompt: string; startedAt: number } | undefined;
+
+async function publishStatus(home: string, startedAt: number): Promise<void> {
+  const directory = join(home, "bot");
+  // Live agents live in agents/<pid>.json (agent-registry); this file is the task heartbeat.
+  const status = { pid: process.pid, startedAt, updatedAt: Date.now(), task: currentTask };
+  const temporary = join(directory, "status.tmp");
+  await writeFile(temporary, JSON.stringify(status), { mode: 0o600 });
+  await rename(temporary, join(directory, "status.json"));
+}
+
 const execute: BotExecute = async (task, signal) => {
   const config = loadConfig({ workspace: task.workspace, model: task.model, mesh: false });
   // Never inherit LUBAN_ALLOW_TOOLS or project-config approval overrides in an unattended process.
@@ -31,9 +47,11 @@ const execute: BotExecute = async (task, signal) => {
   config.permissions = { allow: [], deny: config.permissions?.deny ?? [] };
   config.sandbox = { ...config.sandbox, allowOutsideWorkspace: false };
   const store = new SessionStore(config.home);
-  const messages = [...initialMessages(config.workspace, config.model.name, config.planning), { role: "user" as const, content: task.prompt }];
+  const messages = [...initialMessages(config.workspace, config.model.name, config.planning, "model", false, SOUL_IDENTITY), { role: "user" as const, content: task.prompt }];
+  currentTask = { prompt: task.prompt, startedAt: Date.now() };
   const session = store.create(config.project, config.workspace, "agent", config.model.id, messages);
   const runner = new AgentRunner(config);
+  runner.identity = SOUL_IDENTITY_TEXT;
   const permissions = new BotPermissions(config.home);
   let denied = false;
   try {
@@ -53,8 +71,14 @@ const execute: BotExecute = async (task, signal) => {
     });
     session.messages = result.messages;
     await store.save(session);
-    return { ok: result.ok && !denied, text: `${result.text}${denied ? "\nOperation requires interactive approval; run this task in luban." : ""}\nSession: ${session.id}` };
-  } finally { runner.close(); }
+    const requests = result.metrics?.requests ?? [];
+    const usage = {
+      input: requests.reduce((sum, request) => sum + (request.usage?.input ?? 0), 0),
+      output: requests.reduce((sum, request) => sum + (request.usage?.output ?? 0), 0),
+      calls: requests.length,
+    };
+    return { ok: result.ok && !denied, text: `${result.text}${denied ? "\nOperation requires interactive approval; run this task in luban." : ""}\nSession: ${session.id}`, usage };
+  } finally { currentTask = undefined; runner.close(); }
 };
 
 export async function runBot(argv: string[]): Promise<number> {
@@ -109,17 +133,25 @@ export async function runBot(argv: string[]): Promise<number> {
     }
     const stop = new AbortController();
     const shutdown = () => stop.abort();
+    let stopHeartbeat: (() => void) | undefined;
     process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);
     try {
       await writeFile(join(lock, "pid"), String(process.pid));
       await queue.recover();
       process.stdout.write(`Bot ready · ${queue.directory}\n`);
+      // Publish every second so the pet can list task, subagents and PIDs.
+      const workerStart = Date.now();
+      const heartbeat = setInterval(() => { void publishStatus(home, workerStart).catch(() => undefined); }, 1000);
+      void publishStatus(home, workerStart).catch(() => undefined);
+      stopHeartbeat = () => clearInterval(heartbeat);
       while (!stop.signal.aborted) {
         await queue.tick(execute, stop.signal);
         await delay(1000, undefined, { signal: stop.signal }).catch(error => { if (!stop.signal.aborted) throw error; });
       }
     } finally {
       process.removeListener("SIGINT", shutdown); process.removeListener("SIGTERM", shutdown);
+      stopHeartbeat?.();
+      await rm(join(home, "bot", "status.json"), { force: true });
       await rm(lock, { recursive: true });
     }
   });

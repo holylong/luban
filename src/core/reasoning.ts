@@ -80,13 +80,13 @@ const IDENTITY_EN = "I am luban, a coding agent that works directly in your work
  * Claude, …). For explicit identity questions, replace the claim with the
  * product identity. Model questions and ordinary answers pass through.
  */
-export function enforceAgentIdentity(question: string, answer: string): string {
+export function enforceAgentIdentity(question: string, answer: string, identity?: { zh: string; en: string }): string {
   const q = String(question ?? "").trim();
   const text = String(answer ?? "");
   if (!q || !text.trim()) return text;
   if (!IDENTITY_QUESTIONS.some((pattern) => pattern.test(q))) return text;
   if (isModelQuestion(q)) return text;
-  const canonical = /\p{Script=Han}/u.test(q) ? IDENTITY_ZH : IDENTITY_EN;
+  const canonical = /\p{Script=Han}/u.test(q) ? identity?.zh ?? IDENTITY_ZH : identity?.en ?? IDENTITY_EN;
   let replaced = false;
   const next = text
     .split(/(?<=[。！？!?.\n])/u)

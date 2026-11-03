@@ -1,4 +1,5 @@
 import { AgentInbox } from "./inbox.js";
+import { finishAgent, registerAgent, updateAgentUsage } from "./agent-registry.js";
 import { parseUserQuestion, type AskUser } from "./question.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -106,6 +107,9 @@ export type PlanningMode = "off" | "auto" | "always";
  */
 export type DecisionEngine = "model" | "kev";
 
+/** Rule 11 identity text; the background soul body swaps it for 造物主. */
+const IDENTITY_SENTENCE = "your product name is luban. If the user asks your name or who you are, say you are luban, the coding agent working in their workspace.";
+
 const PROMPT_HEADER = `You are luban, a production coding agent working directly in the user's workspace.
 
 Work rules:
@@ -133,7 +137,7 @@ const PROMPT_FOOTER = `6. If a tool fails, diagnose it and change strategy. Do n
 8. Paths are workspace-relative. Bash already starts in the workspace. If the workspace is a subdirectory of a Git repository, run Git commands from that directory (for example, git status --short or git add -- .); do not cd to the repository parent or prefix file paths with the parent directory. Use write_file, edit_file, or apply_patch with workspace-relative paths for file changes. The bash tool is soft-sandboxed: destructive host commands, writes outside the workspace, and denied patterns are rejected before execution. In soft mode, restart/shutdown warnings require explicit approval of the exact command, even with session trust; strict mode still blocks them. Submit the intended command for approval, never disguise it to evade checks. This is not an OS container; do not run untrusted payloads to probe it. Screenshots arrive as native vision parts when the user @-attaches them; describe what you see and cite the file name.
 9. Never expose chain-of-thought, policy analysis, system reminders, or other internal reasoning in assistant content. Return only the user-facing result. Use a separate reasoning channel when the runtime supports one.
 10. Create a checkpoint before broad or risky multi-file edits when the workspace is a Git repository.
-11. Identity: your product name is luban. If the user asks your name or who you are, say you are luban, the coding agent working in their workspace. Never claim to be the underlying model (for example Qwen or Claude). If the user asks which model or LLM powers you, answer honestly with the configured model name.
+11. Identity: ${IDENTITY_SENTENCE} Never claim to be the underlying model (for example Qwen or Claude). If the user asks which model or LLM powers you, answer honestly with the configured model name.
 
  The user can choose ASK for conversational help, AGENT for autonomous execution, or AUTO to let the app decide.`;
 
@@ -148,8 +152,12 @@ const DECISION_RULES: Record<DecisionEngine, string> = {
 const OUTSIDE_WORKSPACE_RULE = " File tools (read_file, list_dir, write_file, edit_file, read_image) also accept absolute and parent-relative paths here, because sandbox.allowOutsideWorkspace is enabled: edit the sibling project directly instead of asking for a copy. apply_patch, attach_image and code_intelligence stay inside the workspace.";
 
 /** The full system prompt for a planning mode and decision engine. */
-export function systemPrompt(planning: PlanningMode = "auto", decision: DecisionEngine = "model", allowOutsideWorkspace = false): string {
-  return `${PROMPT_HEADER}\n${PLANNING_RULES[planning]}\n${PROMPT_FOOTER}${allowOutsideWorkspace ? OUTSIDE_WORKSPACE_RULE : ""}${DECISION_RULES[decision]}`;
+export function systemPrompt(planning: PlanningMode = "auto", decision: DecisionEngine = "model", allowOutsideWorkspace = false, identity?: string): string {
+  // The soul body (background bot) names itself 造物主; the foreground stays a coding agent.
+  const footer = identity
+    ? PROMPT_FOOTER.replace(IDENTITY_SENTENCE, `your product name is luban. In this background body you are ${identity}. If the user asks your name or who you are, say you are luban, ${identity} working in their workspace.`)
+    : PROMPT_FOOTER;
+  return `${PROMPT_HEADER}\n${PLANNING_RULES[planning]}\n${footer}${allowOutsideWorkspace ? OUTSIDE_WORKSPACE_RULE : ""}${DECISION_RULES[decision]}`;
 }
 
 /** Default prompt, kept for callers that only need the stable first line. */
@@ -186,11 +194,11 @@ function platformContext(): string {
   return `Platform: ${process.platform} (${type()} ${release()}, ${arch()})\nShell: ${shell}`;
 }
 
-export function initialMessages(workspace: string, modelName?: string, planning: PlanningMode = "auto", decision: DecisionEngine = "model", allowOutsideWorkspace = false): ChatMessage[] {
+export function initialMessages(workspace: string, modelName?: string, planning: PlanningMode = "auto", decision: DecisionEngine = "model", allowOutsideWorkspace = false, identity?: string): ChatMessage[] {
   const instructions = workspaceInstructions(workspace);
   return [{
     role: "system",
-    content: `${systemPrompt(planning, decision, allowOutsideWorkspace)}\n\nWorkspace: ${workspace}\n${platformContext()}${modelName ? `\nModel: ${modelName}` : ""}${instructions ? `\n\n${instructions}` : ""}`,
+    content: `${systemPrompt(planning, decision, allowOutsideWorkspace, identity)}\n\nWorkspace: ${workspace}\n${platformContext()}${modelName ? `\nModel: ${modelName}` : ""}${instructions ? `\n\n${instructions}` : ""}`,
   }];
 }
 
@@ -270,6 +278,11 @@ export class AgentRunner {
   private readonly trustedTools = new Set<string>();
   private budgetUsed = 0;
   private readonly modelConversationId = randomUUID();
+
+  /** Self-description used when a model answers an identity question; the soul body sets 造物主. */
+  identity?: { zh: string; en: string };
+  /** Registry id of the run in progress; usage events add to its token counters. */
+  private agentId?: string;
 
   constructor(readonly config: LubanConfig, client?: ModelClient, mesh?: MeshRuntime, private readonly depth = 0) {
     this.tools = createTools(config, mesh);
@@ -458,6 +471,11 @@ export class AgentRunner {
     }
     this.running = true;
     this.inbox = inbox;
+    // Subagents are in-process runners, so this registry is the only live list.
+    const agentId = registerAgent({
+      depth: this.depth, task: taskLabel(messages), workspace: this.config.workspace, mode, home: this.config.home,
+    });
+    this.agentId = agentId;
     if (askUser) this.tools.set("ask_user", {
       name: "ask_user",
       description: "Ask the user to choose among concrete options when a consequential decision is unresolved. The run pauses until they answer. Free text is also accepted.",
@@ -494,6 +512,8 @@ export class AgentRunner {
         repairToolHistory(messages);
         await persist();
       } finally {
+        finishAgent(agentId);
+        this.agentId = undefined;
         signal.removeEventListener("abort", abort);
         this.activeController = undefined;
         this.running = false;
@@ -674,6 +694,7 @@ export class AgentRunner {
                 { role: "user", content: String(summary.content) },
               ], [], signal);
               onEvent({ type: "usage", ...semantic.usage });
+              updateAgentUsage(this.agentId, semantic.usage);
               if (semantic.content.trim()) summary.content = `[luban context summary]\n${clipContextText(semantic.content.trim(), Math.max(0, String(summary.content).length - 25))}`;
             } catch (error) {
               if (signal.aborted) throw signal.reason ?? error;
@@ -735,6 +756,7 @@ export class AgentRunner {
       if (!reconnectingStream) totalSteps += 1;
       this.budgetUsed = totalSteps;
       onEvent({ type: "usage", ...completion.usage });
+      updateAgentUsage(this.agentId, completion.usage);
       // Running out of output budget is a property of the provider's cap, not a
       // broken request, so the run keeps going instead of dying with the partial
       // text thrown away: keep what arrived and ask the model to continue.
@@ -814,7 +836,7 @@ export class AgentRunner {
       });
       const rawAnswer = toolCalls.length
         ? completion.content
-        : enforceAgentIdentity(lastUserQuestion(messages), extractFinalAnswer(completion.content));
+        : enforceAgentIdentity(lastUserQuestion(messages), extractFinalAnswer(completion.content), this.identity);
       // A continuation completes the answer that was cut off, so the kept pieces
       // and the new text become one message — provided nothing else was appended
       // in between (a tool run means the pieces are no longer one answer).
@@ -1098,7 +1120,8 @@ export class AgentRunner {
       ], [], signal);
       signal.throwIfAborted();
       onEvent({ type: "usage", ...final.usage });
-      const summary = enforceAgentIdentity(lastUserQuestion(messages), extractFinalAnswer(final.content));
+      updateAgentUsage(this.agentId, final.usage);
+      const summary = enforceAgentIdentity(lastUserQuestion(messages), extractFinalAnswer(final.content), this.identity);
       if (summary.trim()) {
         text = summary;
       }
@@ -1111,4 +1134,12 @@ export class AgentRunner {
     onEvent({ type: "status", text: `Paused after ${maxSteps} steps; send “继续” to resume` });
     return { ok: false, text, steps: totalSteps, messages, stopReason: "max_steps", modelCalls, elapsedMs: Date.now() - runStartedAt };
   }
+}
+
+/** The label shown for a running agent: the user turn that started it. */
+function taskLabel(messages: ChatMessage[]): string {
+  for (const message of messages) {
+    if (message.role === "user" && typeof message.content === "string" && message.content.trim()) return message.content;
+  }
+  return "(no prompt)";
 }
