@@ -59,9 +59,11 @@ function packageVariant(kind) {
       cpSync(electronSource, electron, { recursive: true });
       chmodSync(join(electron, "chrome-sandbox"), 0o4755);
       cpSync(join(root, "apps", "desktop"), join(payload, "desktop"), { recursive: true });
-      const launcher = join(bin, "luban-desktop");
-      copyFileSync(join(root, "packaging", "linux", "luban-desktop"), launcher);
-      chmodSync(launcher, 0o755);
+      for (const name of ["luband", "luban-desktop"]) {
+        const launcher = join(bin, name);
+        copyFileSync(join(root, "packaging", "linux", "luban-desktop"), launcher);
+        chmodSync(launcher, 0o755);
+      }
       const applications = join(stage, "usr", "share", "applications");
       const icons = join(stage, "usr", "share", "icons", "hicolor");
       mkdirSync(applications, { recursive: true });

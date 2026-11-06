@@ -80,14 +80,16 @@ async function packageVariant(kind) {
       "product-version": version,
     });
     cpSync(join(root, "apps", "desktop"), join(payload, "desktop"), { recursive: true });
-    copyFileSync(join(root, "packaging", "windows", "luban-desktop.cmd"), join(payload, "luban-desktop.cmd"));
+    for (const name of ["luband.cmd", "luban-desktop.cmd"]) {
+      copyFileSync(join(root, "packaging", "windows", "luban-desktop.cmd"), join(payload, name));
+    }
   }
   writeFileSync(join(payload, "README.txt"), [
     `luban ${version} Windows x64 ${kind}`,
     "",
     kind === "cli"
       ? "Run luban.cmd from this folder, or add this folder to PATH."
-      : "Run luban-desktop.cmd to open the graphical workspace. luban.cmd is also included.",
+      : "Run luband.cmd to open the graphical workspace (luban-desktop.cmd is also supported). luban.cmd is the CLI. Add this folder to PATH to use luban and luband anywhere.",
     "Run create-shortcuts.cmd to create desktop shortcuts with the luban icon.",
     "Node.js is bundled. Configuration is read from %USERPROFILE%\\.luban\\config.json.",
     "",

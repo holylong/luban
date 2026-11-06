@@ -62,7 +62,7 @@ macOS 登录后自动启动与权限边界见 [Bot 使用指南](bot.md)。
 
 ## 桌面工作台
 
-运行 `npm run desktop -- /path/to/project`，或直接打开安装包里的 luban Desktop；菜单「文件 → 打开项目文件夹」切换工作区。
+安装版用 `luban` 启动 CLI、`luband` 启动 Desktop（Windows/macOS 便携包需将解压目录加入 PATH）。源码版运行 `npm run desktop -- /path/to/project`，或直接打开安装包里的 luban Desktop；菜单「文件 → 打开项目文件夹」切换工作区。
 
 - **桌宠**：启动桌面 App 自动出现，同时拉起 bot worker；头顶「造物主」状态灯可展开任务与运行状态面板，bot 任务完成后气泡播报结果。点机器人打开主界面；拖入文本/代码文件并确认“喂给 luban”，处理时动画、完成后气泡返回结果。关闭主窗口会隐藏并保留桌宠，文件菜单可退出。
 - **编辑器**：文件树 + 多标签编辑、语法着色、`⌘P` 快速打开、`⌘S` 保存，保存前校验磁盘版本并拦截冲突。
@@ -82,6 +82,12 @@ macOS 登录后自动启动与权限边界见 [Bot 使用指南](bot.md)。
 - Codex 账号：装好官方 Codex CLI 后运行 `luban login codex`，再选 `codex/default`。
 
 协议切换、额度与重连等细节见 [详细参考](docs/reference.md#配置)。
+
+## 打包发布版本
+
+安装开发依赖后运行 `npm run release`，自动为当前系统打包 CLI 和 Desktop，产物及 SHA-256 校验清单保存在 `release/`。
+只打包桌面版：`npm run release -- --kind desktop`；预览而不构建：`npm run release -- --dry-run`。
+支持 Linux、Windows、macOS，需在对应系统上运行；完整选项及发布流程见 [发布指南](docs/release.md)。脚本不会自动提交、打标签或上传。
 
 ## 更多
 

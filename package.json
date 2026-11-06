@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -28,6 +28,8 @@
     "start": "node dist/cli.js",
     "desktop": "electron apps/desktop",
     "test": "vitest run",
+    "release": "node scripts/release.mjs",
+    "test:release": "node --test scripts/release.test.mjs",
     "eval": "tsx src/evals/run.ts",
     "package:vscode": "node scripts/package-vscode.mjs",
     "package:linux": "node scripts/package-linux.mjs",

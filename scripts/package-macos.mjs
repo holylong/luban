@@ -132,7 +132,7 @@ function writeReadme(payload, kind) {
     "",
     kind === "cli"
       ? "Run ./luban from this folder, or add this folder to PATH."
-      : "Open \"luban Desktop.app\" for the graphical workspace, or run ./luban-desktop. ./luban is the CLI.",
+      : "Open \"luban Desktop.app\" for the graphical workspace, or run ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
     "Node.js is bundled; no local Node.js installation is required.",
     "Configuration is read from ~/.luban/config.json.",
     "These builds are signed ad hoc, so Gatekeeper may refuse the first launch:",
@@ -153,8 +153,10 @@ function packageVariant(kind) {
   chmodSync(join(payload, "luban"), 0o755);
   if (kind === "desktop") {
     buildApp(payload);
-    copyFileSync(join(root, "packaging", "macos", "luban-desktop"), join(payload, "luban-desktop"));
-    chmodSync(join(payload, "luban-desktop"), 0o755);
+    for (const name of ["luband", "luban-desktop"]) {
+      copyFileSync(join(root, "packaging", "macos", "luban-desktop"), join(payload, name));
+      chmodSync(join(payload, name), 0o755);
+    }
   }
   writeReadme(payload, kind);
   mkdirSync(output, { recursive: true });
