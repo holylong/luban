@@ -1,4 +1,9 @@
 #!/bin/sh
-# Run the luban CLI with the Node.js runtime bundled next to this script.
+# Run the luban CLI with the bundled Node.js runtime: next to this script in the
+# CLI package, or inside "luban Desktop.app" in the desktop package.
 root=$(cd "$(dirname "$0")" && pwd)
-exec "$root/node" "$root/app/dist/cli.js" "$@"
+if [ -x "$root/node" ] && [ -f "$root/app/dist/cli.js" ]; then
+  exec "$root/node" "$root/app/dist/cli.js" "$@"
+fi
+resources="$root/luban Desktop.app/Contents/Resources"
+exec "$resources/node" "$resources/luban/dist/cli.js" "$@"

@@ -256,7 +256,7 @@ jobs:
           macOS ${{ matrix.arch }} 包（无需安装，已内置 Node.js）：
 
           - **luban-cli-${version}-mac-${{ matrix.arch }}.zip**：终端版，解压后运行 \`./luban\`。
-          - **luban-desktop-${version}-mac-${{ matrix.arch }}.dmg**：图形桌面版，打开卷内 \`luban Desktop.app\`（同时提供 \`./luban\`）；构建机无法生成镜像时会改为发布同名 \`.zip\`，解压后使用。
+          - **luban-desktop-${version}-mac-${{ matrix.arch }}.dmg**：图形桌面版，把卷内 \`luban Desktop.app\` 拖入「应用程序」即可；构建机无法生成镜像时会改为发布同名 \`.zip\`（解压后同样拖入）。
 
           安装包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
           配置目录：\`~/.luban/config.json\`。
@@ -332,7 +332,7 @@ jobs:
           **macOS**（无需安装，已内置 Node.js；x64 与 arm64 各一份）
 
           - \`luban-cli-${version}-mac-x64.zip\` / \`luban-cli-${version}-mac-arm64.zip\`：解压后运行 \`./luban\`。
-          - \`luban-desktop-${version}-mac-x64.dmg\` / \`luban-desktop-${version}-mac-arm64.dmg\`：打开卷内 \`luban Desktop.app\`（同时提供 \`./luban\`）。若构建机无法生成镜像，对应架构改为发布同名 \`.zip\`。
+          - \`luban-desktop-${version}-mac-x64.dmg\` / \`luban-desktop-${version}-mac-arm64.dmg\`：把卷内 \`luban Desktop.app\` 拖入「应用程序」，App 自带 Node.js 与 CLI。若构建机无法生成镜像，对应架构改为发布同名 \`.zip\`。
 
           macOS 包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
 

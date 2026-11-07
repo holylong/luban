@@ -2,7 +2,8 @@
  * image and falls back to a zip when the image cannot be created. */
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
+  chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync,
+  symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -91,8 +92,18 @@ function plistSet(plist, key, value) {
   run(`Set ${key}`, "/usr/libexec/PlistBuddy", ["-c", `Add :${key} string ${value}`, plist]);
 }
 
-/** Desktop payload: Electron runtime + a Resources/app that finds the bundled
- * Node runtime and CLI relative to the .app, so Finder launches work too. */
+/** Move without copying when both paths share a volume. @param {string} from @param {string} to */
+function movePath(from, to) {
+  try { renameSync(from, to); }
+  catch {
+    cpSync(from, to, { recursive: true, verbatimSymlinks: true });
+    rmSync(from, { recursive: true, force: true });
+  }
+}
+
+/** Desktop bundle: Electron runtime, the Electron entry in Resources/app, and the
+ * bundled Node runtime plus CLI in Resources/node and Resources/luban. Nothing
+ * lives outside the .app, so dragging it to /Applications keeps working. */
 function buildApp(payload) {
   const source = join(root, "node_modules", "electron", "dist", "Electron.app");
   if (!existsSync(source)) throw new Error("Electron runtime missing; run `node node_modules/electron/install.js` before package:macos:desktop");
@@ -107,6 +118,9 @@ function buildApp(payload) {
   plistSet(plist, "CFBundleShortVersionString", version);
   plistSet(plist, "CFBundleVersion", version);
   if (makeIcon(resources)) plistSet(plist, "CFBundleIconFile", "AppIcon");
+  // Electron loads Contents/Resources/app, so the CLI runtime moves beside it.
+  movePath(join(payload, "node"), join(resources, "node"));
+  movePath(join(payload, "app"), join(resources, "luban"));
   const appDir = join(resources, "app");
   mkdirSync(appDir, { recursive: true });
   cpSync(join(root, "apps", "desktop"), join(appDir, "desktop"), { recursive: true });
@@ -115,10 +129,10 @@ function buildApp(payload) {
     "// Electron entry point: hand the bundled Node runtime and CLI to luban Desktop.",
     'const { app } = require("electron");',
     'const { join, resolve } = require("node:path");',
-    "// <payload>/luban Desktop.app/Contents/Resources/app -> <payload>",
-    'const root = resolve(app.getAppPath(), "..", "..", "..", "..");',
+    "// <bundle>/Contents/Resources/app -> <bundle>/Contents/Resources",
+    'const root = resolve(app.getAppPath(), "..");',
     "process.env.LUBAN_NODE_BIN ||= join(root, \"node\");",
-    "process.env.LUBAN_CLI ||= join(root, \"app\", \"dist\", \"cli.js\");",
+    "process.env.LUBAN_CLI ||= join(root, \"luban\", \"dist\", \"cli.js\");",
     'require(join(app.getAppPath(), "desktop", "main.cjs"));',
     "",
   ].join("\n"));
@@ -133,8 +147,8 @@ function writeReadme(payload, kind) {
     "",
     kind === "cli"
       ? "Run ./luban from this folder, or add this folder to PATH."
-      : "Open \"luban Desktop.app\" for the graphical workspace, or run ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
-    ...(kind === "desktop" ? ["Keep this folder together: the app reads the sibling node runtime and app/ folder."] : []),
+      : "Drag \"luban Desktop.app\" to /Applications (it also runs in place), or start it with ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
+    ...(kind === "desktop" ? [`The app carries its own Node.js runtime and CLI, so moving "${APP_NAME}.app" elsewhere keeps working.`] : []),
     "Node.js is bundled; no local Node.js installation is required.",
     "Configuration is read from ~/.luban/config.json.",
     "These builds are signed ad hoc, so Gatekeeper may refuse the first launch:",
@@ -152,15 +166,14 @@ function zipPackage(payload, output, folder, kind) {
   return zip;
 }
 
-/** The DMG holds the whole payload folder: "luban Desktop.app" resolves the
- * bundled node runtime and app/ CLI from its siblings, so the folder itself is
- * the install unit. Returns null when hdiutil cannot produce a usable image. */
-function dmgPackage(payload, output, folder, volumeName) {
+/** @param {string} source @param {string} output @param {string} folder @param {string} volumeName
+ * @returns {string|null} The image path, or null so the caller can fall back. */
+function dmgPackage(source, output, folder, volumeName) {
   const dmg = join(output, `${folder}.dmg`);
   rmSync(dmg, { force: true });
   try {
     run("Create DMG (hdiutil)", "hdiutil", [
-      "create", "-volname", volumeName, "-srcfolder", payload, "-ov", "-format", "UDZO", "-quiet", dmg,
+      "create", "-volname", volumeName, "-srcfolder", source, "-ov", "-format", "UDZO", "-quiet", dmg,
     ]);
     const info = statSync(dmg);
     if (!info.isFile() || info.size === 0) throw new Error("hdiutil produced no image");
@@ -171,6 +184,17 @@ function dmgPackage(payload, output, folder, volumeName) {
     process.stderr.write(`\nDMG creation failed (${error.message}); writing a zip instead.\n`);
     return null;
   }
+}
+
+/** Drag-to-Applications volume: the self-contained app plus the usual alias.
+ * The bundle is moved, not copied, so the image does not double disk use. */
+function stageDmg(payload, stageRoot) {
+  const dir = join(stageRoot, "dmg");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  movePath(join(payload, `${APP_NAME}.app`), join(dir, `${APP_NAME}.app`));
+  symlinkSync("/Applications", join(dir, "Applications"));
+  return dir;
 }
 
 function packageVariant(kind) {
@@ -192,9 +216,14 @@ function packageVariant(kind) {
   }
   writeReadme(payload, kind);
   mkdirSync(output, { recursive: true });
-  // A CLI folder ships as a zip; the desktop app is what users expect as a DMG,
-  // with the zip kept as the fallback that always works.
-  if (kind === "desktop" && dmgPackage(payload, output, folder, `luban Desktop ${version}`)) return;
+  // The desktop app ships as a drag-to-Applications DMG; if the image cannot be
+  // created the same folder is zipped instead. A CLI folder is always a zip.
+  if (kind === "desktop") {
+    const volume = stageDmg(payload, stageRoot);
+    if (dmgPackage(volume, output, folder, `luban Desktop ${version}`)) return;
+    movePath(join(volume, `${APP_NAME}.app`), join(payload, `${APP_NAME}.app`));
+    rmSync(volume, { recursive: true, force: true });
+  }
   zipPackage(payload, output, folder, kind);
 }
 

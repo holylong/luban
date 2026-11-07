@@ -241,12 +241,12 @@ macOS 包同样是自带 Node.js 的 zip，按 CPU 架构下载后解压即可�
 | 文件名 | 入口 | 内容 |
 | --- | --- | --- |
 | `luban-cli-<版本>-mac-<arch>.zip` | `./luban` | 终端 Agent，内置 Node.js |
-| `luban-desktop-<版本>-mac-<arch>.dmg` | 打开卷内的 `luban Desktop.app`，或 `./luban-desktop` | 图形工作台，内置 Node.js 和 Electron，同时包含 `./luban` |
-| `luban-desktop-<版本>-mac-<arch>.zip` | 解压后打开 `luban Desktop.app` | 同上；仅在 dmg 创建失败时作为回退产物 |
+| `luban-desktop-<版本>-mac-<arch>.dmg` | 拖入「应用程序」后打开 `luban Desktop.app` | 自包含图形工作台：Electron、Node.js 与 CLI 都在 App 内 |
+| `luban-desktop-<版本>-mac-<arch>.zip` | 解压后打开 `luban Desktop.app`，或 `./luband` | 同上，另含 `./luban`、`./luband` 便捷脚本；仅在 dmg 创建失败时作为回退产物 |
 
 `<arch>` 为 `x64` 或 `arm64`（Apple Silicon 用 `arm64`）。安装包为 ad-hoc 签名，从浏览器下载后首次打开若被 Gatekeeper 拦截，执行 `xattr -dr com.apple.quarantine .` 即可。
 
-维护者在 macOS 上运行 `npm ci && node node_modules/electron/install.js && npm run package:macos`，会在 `release/` 生成 CLI zip 和桌面 dmg（`hdiutil` 失败时改为桌面 zip）；也可单独运行 `npm run package:macos:cli` 或 `npm run package:macos:desktop`。桌面包内是重新签名的 `luban Desktop.app`，其 `Contents/Resources/app` 会把内置的 `node` 与 `dist/cli.js` 传给桌面主进程，因此从 Finder 双击也能启动。dmg 卷内是完整目录，`luban Desktop.app` 依赖同级的 `node` 与 `app/`，请整卷拷出后再打开。
+维护者在 macOS 上运行 `npm ci && node node_modules/electron/install.js && npm run package:macos`，会在 `release/` 生成 CLI zip 和桌面 dmg 安装镜像（`hdiutil` 失败时改为桌面 zip）；也可单独运行 `npm run package:macos:cli` 或 `npm run package:macos:desktop`。桌面 App 是自包含的：`Contents/Resources/app` 放 Electron 入口，`Contents/Resources/luban` 是内置 CLI 运行时，`Contents/Resources/node` 是 Node.js 可执行文件，入口脚本把这两条路径通过 `LUBAN_NODE_BIN`、`LUBAN_CLI` 传给桌面主进程，因此从 Finder 双击、拖入「应用程序」或移动位置都能启动。dmg 卷内只有 `luban Desktop.app` 和指向 `/Applications` 的别名，直接拖拽即可安装。
 
 ### 从源码安装
 
