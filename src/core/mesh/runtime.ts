@@ -4,7 +4,7 @@ import { createSocket, type Socket as DgramSocket } from "node:dgram";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import { basename, join, resolve } from "node:path";
-import fg from "fast-glob";
+import { globFiles } from "../glob.js";
 import { saveMeshContact } from "../config.js";
 import type { LubanConfig, MeshContact, SyncMode, RunResult } from "../types.js";
 import { VERSION } from "../../version.js";
@@ -587,7 +587,7 @@ export class MeshRuntime {
   }
 
   private async workspaceHasFiles(workspace: string): Promise<boolean> {
-    const files = await fg("**/*", {
+    const files = await globFiles("**/*", {
       cwd: workspace,
       onlyFiles: true,
       dot: true,

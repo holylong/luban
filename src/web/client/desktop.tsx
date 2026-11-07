@@ -16,6 +16,45 @@ import { DesktopThemePicker } from "./desktop-theme-picker";
 
 type ExplorerTab = "files" | "sessions";
 
+/**
+ * Desktop mode pins the backend to the folder it was launched with, so the
+ * project list cannot switch anything there: the folder picker (same path as
+ * 文件 → 打开项目文件夹) is the only honest control. The browser workbench keeps
+ * the dropdown because its server really does multiplex projects.
+ */
+export function ProjectSwitcher({ store }: { store: WorkbenchStore }): React.ReactElement {
+  const bridge = typeof window === "undefined" ? undefined : window.lubanDesktop;
+  const [error, setError] = useState("");
+  const path = store.node?.projects?.[store.project];
+  if (bridge?.openWorkspace) {
+    return (
+      <div className="desktop-project">
+        <label htmlFor="desktop-open-workspace">项目</label>
+        <button
+          id="desktop-open-workspace"
+          className="desktop-open-workspace"
+          title="选择另一个文件夹作为工作区，桌面端会重启本地服务后打开"
+          onClick={() => {
+            void bridge.openWorkspace!().then(reply => { if (!reply.canceled) setError(""); })
+              .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
+          }}
+        >打开文件夹…<small>Ctrl+O</small></button>
+        <span className="desktop-workspace-path" title={path ?? store.project}>{path ?? store.project}</span>
+        {error && <span className="desktop-error" role="alert">{error}</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="desktop-project">
+      <label htmlFor="desktop-project">项目</label>
+      <select id="desktop-project" value={store.project} onChange={event => store.setProject(event.target.value)}>
+        {Object.keys(store.node?.projects ?? {}).length === 0 && <option value="">当前工作区</option>}
+        {Object.entries(store.node?.projects ?? {}).map(([name, folder]) => <option key={name} value={name}>{name} · {folder}</option>)}
+      </select>
+    </div>
+  );
+}
+
 function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
   const [tab, setTab] = useState<ExplorerTab>("files");
   const [folders, setFolders] = useState<Record<string, FileEntry[]>>({});
@@ -66,13 +105,7 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
   return (
     <aside className="desktop-explorer">
       <div className="desktop-brand"><span className="desktop-mark">L</span><b>luban</b><span className="desktop-version">v{store.node?.version ?? "…"}</span></div>
-      <div className="desktop-project">
-        <label htmlFor="desktop-project">项目</label>
-        <select id="desktop-project" value={store.project} disabled={Boolean(window.lubanDesktop)} title="桌面端请使用 文件 → 打开项目文件夹 切换项目" onChange={event => store.setProject(event.target.value)}>
-          {Object.keys(store.node?.projects ?? {}).length === 0 && <option value="">当前工作区</option>}
-          {Object.entries(store.node?.projects ?? {}).map(([name, path]) => <option key={name} value={name}>{name} · {path}</option>)}
-        </select>
-      </div>
+      <ProjectSwitcher store={store} />
       <DesktopThemePicker notify={store.notify} />
       <div className="desktop-explorer-tabs">
         <button className={tab === "files" ? "active" : ""} onClick={() => setTab("files")}>文件</button>

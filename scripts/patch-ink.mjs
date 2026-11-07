@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const marker = "// luban: bounded text caches v1\n";
@@ -16,6 +16,39 @@ function installFile(path, content) {
     writeFileSync(temporary, content, { flag: "wx" });
     renameSync(temporary, path);
   } finally { rmSync(temporary, { force: true }); }
+}
+
+/**
+ * Import Ink's throttle from the module that defines it instead of the
+ * `es-toolkit/compat` barrel. The barrel is lodash-compatible and pulls in ~430
+ * modules, which is more than half of everything a cold `luban` start reads
+ * from disk; on Windows every one of those opens goes through the antivirus
+ * filter, so that barrel alone costs a visible part of the startup time.
+ * The compat entry point is a literal `export { throttle }` re-export of this
+ * file, so the imported function is identical, not a reimplementation.
+ * @param {string} build Ink's build directory (`node_modules/ink/build`).
+ */
+function patchThrottleImport(build) {
+  const entry = join(build, "ink.js");
+  if (!existsSync(entry)) return false;
+  const text = readFileSync(entry, "utf8");
+  const barrel = "import { throttle } from 'es-toolkit/compat';";
+  // Already rewritten, or Ink no longer uses the barrel: leave it be.
+  if (!text.includes(barrel)) return false;
+  if (text.split(barrel).length !== 2) throw new Error("Ink throttle patch: unexpected ink.js contents");
+  const inkRoot = resolve(build, "..");
+  const require = createRequire(join(inkRoot, "package.json"));
+  // Resolve through Ink's own dependency tree: npm may nest es-toolkit instead
+  // of hoisting it, and a hard-coded ../../ path would then point nowhere.
+  const pkg = require.resolve("es-toolkit/package.json", { paths: [inkRoot, join(inkRoot, "node_modules")] });
+  // The package's "exports" map blocks deep subpaths, so the throttle module is
+  // located from the resolved package directory rather than by its specifier.
+  const target = join(dirname(pkg), "dist", "compat", "function", "throttle.mjs");
+  if (!existsSync(target)) throw new Error(`Ink throttle patch: ${target} is missing`);
+  const relativePath = relative(build, target).split(sep).join("/");
+  const specifier = relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+  installFile(entry, text.replace(barrel, `import { throttle } from '${specifier}';`));
+  return true;
 }
 
 /** Keep the existing terminal/input behavior and backport only the cache fix.
@@ -49,8 +82,10 @@ export function patchInk(root = resolve(dirname(fileURLToPath(import.meta.url)),
   });
   const helper = readFileSync(new URL("./lib/ink-text-cache.mjs", import.meta.url), "utf8");
   installFile(join(build, "luban-text-cache.js"), helper);
-  for (const item of pending) if (item.changed) installFile(item.path, item.text);
-  return { version, patched: pending.filter(item => item.changed).length };
+  let changed = 0;
+  for (const item of pending) if (item.changed) { installFile(item.path, item.text); changed += 1; }
+  if (patchThrottleImport(build)) changed += 1;
+  return { version, patched: changed };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

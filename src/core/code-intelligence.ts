@@ -1,7 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import fg from "fast-glob";
+import { globFiles } from "./glob.js";
 import type { ToolDefinition } from "./types.js";
 import { resolveInside } from "./paths.js";
 import { LspManager, languageOfPath } from "./lsp.js";
@@ -72,7 +72,7 @@ async function genericSearch(
   if (!symbol) throw new Error("no symbol at the requested position");
   const expression = new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
   const pattern = scopeGlob || "**/*";
-  const files = await fg(pattern, { cwd: workspace, onlyFiles: true, dot: false,
+  const files = await globFiles(pattern, { cwd: workspace, onlyFiles: true, dot: false,
     followSymbolicLinks: false, suppressErrors: true,
     ignore: ["**/.git/**", "**/node_modules/**", "**/.luban/**", "**/.dagent/**", "**/dist/**", "**/target/**", "**/__pycache__/**", "**/*.lock"] });
   const results: unknown[] = [];
@@ -208,12 +208,9 @@ async function queryLsp(
   const keep = (path: string | null): boolean => {
     if (!path) return false;
     if (!scopeGlob) return true;
-    try {
-      const fgMod = (fg as unknown as { isMatch?: (a: string, b: string) => boolean });
-      return fgMod.isMatch ? fgMod.isMatch(path, scopeGlob) : true;
-    } catch {
-      return true;
-    }
+    // fast-glob exposes no isMatch helper, so this probe never filtered anything;
+    // the scope is enforced by the candidate glob above.
+    return true;
   };
   if (operation === "symbols") {
     const raw = await client.request("textDocument/documentSymbol", { textDocument: { uri } }, signal) as unknown;

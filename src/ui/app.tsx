@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin, useStdout, measureElement, type DOMElement } from "ink";
-import fg from "fast-glob";
+import { globFiles } from "../core/glob.js";
 import { VERSION } from "../version.js";
 import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -1037,7 +1037,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   }, [stdin, stdout, applyScroll, config.home]);
   useEffect(() => {
     let cancelled = false;
-    void fg(["**/*"], { cwd: config.workspace, onlyFiles: true, dot: false,
+    void globFiles(["**/*"], { cwd: config.workspace, onlyFiles: true, dot: false,
       ignore: ["**/.git/**", "**/node_modules/**", "**/.luban/**", "**/dist/**", "**/target/**"] })
       .then((files) => { if (!cancelled) setWorkspaceFiles(files.slice(0, 4000)); })
       .catch(() => undefined);

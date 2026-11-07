@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("lubanDesktop", Object.freeze({
   readFile: path => ipcRenderer.invoke("luban:readFile", path),
   saveFile: input => ipcRenderer.invoke("luban:saveFile", input),
   listFiles: () => ipcRenderer.invoke("luban:listFiles"),
+  // Opens the folder picker in the main process, which owns workspace switching.
+  openWorkspace: () => ipcRenderer.invoke("luban:openWorkspace"),
   runCommand: command => ipcRenderer.invoke("luban:runCommand", command),
   stopCommand: id => ipcRenderer.invoke("luban:stopCommand", id),
   startTerminal: input => ipcRenderer.invoke("luban:startTerminal", input),

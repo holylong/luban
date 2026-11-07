@@ -72,6 +72,38 @@ it("does not rewrite the helper during repeated installation while other process
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+it("points Ink's throttle at the module itself instead of the whole es-toolkit barrel", () => {
+  const root = mkdtempSync(join(tmpdir(), "luban-ink-throttle-"));
+  try {
+    const build = join(root, "node_modules", "ink", "build");
+    mkdirSync(build, { recursive: true });
+    writeFileSync(join(root, "package.json"), "{}");
+    writeFileSync(join(root, "node_modules", "ink", "package.json"), JSON.stringify({ version: "6.8.0", main: "build/index.js" }));
+    writeFileSync(join(build, "index.js"), "");
+    writeFileSync(join(build, "measure-text.js"), "const cache = new Map();");
+    writeFileSync(join(build, "wrap-text.js"), ["const cache = {};", "const cacheKey = text + String(maxWidth) + String(wrapType);", "const cachedText = cache[cacheKey];", "cache[cacheKey] = wrappedText;"].join("\n"));
+    const barrel = "import { throttle } from 'es-toolkit/compat';";
+    writeFileSync(join(build, "ink.js"), `import React from 'react';\n${barrel}\n`);
+    // Without es-toolkit the rewrite must fail loudly rather than leave a
+    // half-installed import behind.
+    expect(() => patchInk(root)).toThrow("es-toolkit");
+
+    const throttle = join(root, "node_modules", "es-toolkit", "dist", "compat", "function", "throttle.mjs");
+    mkdirSync(join(throttle, ".."), { recursive: true });
+    writeFileSync(throttle, "export { throttle };\n");
+    writeFileSync(join(root, "node_modules", "es-toolkit", "package.json"), JSON.stringify({ name: "es-toolkit", version: "1.0.0" }));
+
+    // The cache backports were already written by the failed attempt, so only
+    // ink.js is left to rewrite on this pass.
+    expect(patchInk(root).patched).toBe(1);
+    const patched = readFileSync(join(build, "ink.js"), "utf8");
+    // One module file instead of the ~430 the lodash-compatible barrel loads.
+    expect(patched).toContain("from '../../es-toolkit/dist/compat/function/throttle.mjs'");
+    expect(patched).not.toContain("es-toolkit/compat'");
+    expect(patchInk(root).patched).toBe(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 it("keeps the installed Ink caches stable for 40k distinct frames with a 128 MiB heap", () => {
   const output = execFileSync(process.execPath, ["--expose-gc", "--max-old-space-size=128", resolve("scripts/ink-memory-smoke.mjs")], {
     encoding: "utf8", timeout: 30_000,

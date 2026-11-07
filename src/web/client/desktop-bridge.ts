@@ -6,6 +6,8 @@ export interface DesktopBridge {
   readFile(path: string): Promise<DesktopFile>;
   saveFile(input: DesktopFile): Promise<DesktopFile>;
   listFiles(): Promise<string[]>;
+  /** Desktop mode only: pick a new project folder and restart the local backend there. */
+  openWorkspace?(): Promise<{ canceled?: boolean; path?: string }>;
   runCommand(command: string): Promise<{ id: string }>;
   stopCommand(id: string): Promise<void>;
   startTerminal(input: { cols: number; rows: number }): Promise<TerminalStart>;

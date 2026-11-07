@@ -9,6 +9,10 @@
 .desktop-project { padding: 12px 12px 8px; display: grid; gap: 5px; }
 .desktop-project label { color: var(--dim); font-size: 11px; letter-spacing: .08em; }
 .desktop-project select { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; }
+.desktop-open-workspace { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 9px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 6px; font-size: 12px; cursor: pointer; }
+.desktop-open-workspace:hover { border-color: var(--blue); }
+.desktop-open-workspace small { color: var(--dim); font-size: 10px; }
+.desktop-workspace-path { overflow: hidden; color: var(--dim); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .desktop-explorer-tabs { display: flex; padding: 0 8px; border-bottom: 1px solid var(--line); }
 .desktop-explorer-tabs button { flex: 1; padding: 9px 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; }
 .desktop-explorer-tabs button.active { color: var(--fg); border-bottom-color: var(--blue); }

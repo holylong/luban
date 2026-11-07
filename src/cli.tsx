@@ -568,6 +568,7 @@ async function main(): Promise<number> {
     meshPort: options.meshPort,
     theme: options.theme,
   });
+  traceBoot("config");
   // Painted before the first frame: the whole UI reads one mutable palette, so
   // setting it here means the TUI never flashes the default scheme.
   const appliedTheme = applyTheme(config.theme, config.themeColors);
@@ -681,6 +682,7 @@ async function main(): Promise<number> {
       }
     }
     if (prompt) return await runHeadless(config, prompt, mesh);
+    traceBoot("mesh");
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       process.stderr.write("interactive mode requires a TTY; use --prompt for one-shot mode\n");
       return 2;
@@ -701,6 +703,7 @@ async function main(): Promise<number> {
     // ansiEscapes.eraseLines(previousLineCount), whose count includes that
     // trailing newline, so it redraws in place. terminalOutput turns fixed-height
     // frame erases into row updates on all TTYs, without requiring DECSET 2026.
+    traceBoot("render");
     const instance = render(React.createElement(App, { config, mesh, resume, mobileLink }), { stdout: mascotOutput(terminalOutput(process.stdout)), exitOnCtrlC: false, incrementalRendering: false });
     await instance.waitUntilExit();
     return 0;
@@ -768,6 +771,19 @@ async function runAcp(argv: string[]): Promise<number> {
   for (const state of runners.values()) state.runner.close();
   return 0;
 }
+
+/**
+ * Cold start is dominated by how much the process must read from disk, which is
+ * far slower on Windows where every module open passes the antivirus filter.
+ * `LUBAN_STARTUP_TRACE=1 luban` prints the phases so a slow machine can be
+ * measured instead of guessed at.
+ */
+function traceBoot(label: string): void {
+  if (!process.env.LUBAN_STARTUP_TRACE) return;
+  process.stderr.write(`[startup] ${label.padEnd(7)} ${(process.uptime() * 1000).toFixed(0).padStart(5)}ms\n`);
+}
+// Reaching this line means the whole static import graph is already loaded.
+traceBoot("modules");
 
 // Installed before any subsystem starts: without it, one rejected background
 // promise ends the process, and a long-lived mesh/web node then appears to peers

@@ -206,6 +206,18 @@ async function chooseWorkspace() {
   const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
   return result.canceled ? undefined : result.filePaths[0];
 }
+// The window's own project dropdown is disabled in desktop mode (the backend is
+// pinned to one root), so the renderer needs a way to reach the same folder
+// picker as the File menu instead of making the native menu the only path.
+ipcMain.handle("luban:openWorkspace", async event => {
+  if (!trustedSender(event) || opening || petSubmitting) throw new Error("当前无法切换工作区");
+  const target = await chooseWorkspace();
+  if (!target) return { canceled: true };
+  // Reply first: switching replaces this document, so a later reply would be
+  // dropped with the renderer that is waiting for it.
+  setImmediate(() => { openWorkspace(target).catch(error => dialog.showErrorBox("无法打开项目", error instanceof Error ? error.message : String(error))); });
+  return { path: target };
+});
 function installWindowGuards() {
   window.once("ready-to-show", () => window.show());
   window.on('close', event => { if (!quitting && pet && !pet.isDestroyed()) { event.preventDefault(); window.hide(); } });

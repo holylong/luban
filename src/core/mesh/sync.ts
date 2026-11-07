@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import fg from "fast-glob";
+import { globFiles } from "../glob.js";
 import type { ConflictPolicy, SyncMode } from "../types.js";
 import type { JsonObject } from "./protocol.js";
 
@@ -97,7 +97,7 @@ export async function scanWorkspace(root: string, ignore = DEFAULT_SYNC_IGNORE):
   // The reserved entries are appended unconditionally: a caller-supplied list
   // that drops them would resurface the throw below on our own metadata dirs.
   const patterns = ignoreGlobs([...new Set([...ignore, ...RESERVED_SYNC_IGNORE])]);
-  const files = await fg("**/*", {
+  const files = await globFiles("**/*", {
     cwd: root,
     onlyFiles: true,
     dot: true,

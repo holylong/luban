@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import fg from "fast-glob";
+import { globFiles } from "./glob.js";
 import { terminateProcessTree } from "./process-tree.js";
 import { assessShellCommand, defaultSandboxSettings, restartConfirmationReason, wrapWithBackend } from "./sandbox.js";
 import { codeIntelligenceTool } from "./code-intelligence.js";
@@ -396,7 +396,7 @@ async function discoverSkills(config: LubanConfig): Promise<Map<string, string>>
   ];
   const found = new Map<string, string>();
   for (const root of roots) {
-    const files = await fg("*/SKILL.md", { cwd: root, absolute: true, onlyFiles: true, suppressErrors: true });
+    const files = await globFiles("*/SKILL.md", { cwd: root, absolute: true, onlyFiles: true, suppressErrors: true });
     for (const file of files.sort()) found.set(basename(dirname(file)), file);
   }
   return found;
@@ -472,7 +472,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       parallelSafe: true,
       parameters: schema({ pattern: { type: "string", description: "Glob such as src/**/*.ts" } }, ["pattern"]),
       async execute(args) {
-        const matches = await fg(stringArg(args, "pattern"), {
+        const matches = await globFiles(stringArg(args, "pattern"), {
           cwd: workspace,
           onlyFiles: true,
           dot: false,
@@ -498,7 +498,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       }, ["pattern"]),
       async execute(args) {
         const expression = new RegExp(stringArg(args, "pattern"), "i");
-        const files = await fg(stringArg(args, "glob", false) || "**/*", {
+        const files = await globFiles(stringArg(args, "glob", false) || "**/*", {
           cwd: workspace,
           onlyFiles: true,
           dot: false,
