@@ -45,6 +45,10 @@
 .desktop-task-plan li { display: flex; gap: 8px; padding: 4px 0; color: var(--dim); }
 .desktop-task-plan li.in_progress { color: var(--blue); }
 .desktop-task-plan li.completed { color: var(--muted); }
+.desktop-question-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 48px); box-sizing: border-box; overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--fg); }
+.desktop-question-dialog::backdrop { background: #0009; }
+.question-title { white-space: normal; overflow-wrap: anywhere; font-weight: 600; margin-bottom: 12px; }
+.desktop-question-dialog .action { white-space: normal; overflow-wrap: anywhere; text-align: left; min-height: 44px; }
 .desktop-approvals { max-height: 40%; overflow: auto; border-bottom: 1px solid var(--line); }
 .desktop-status { grid-column: 1 / -1; background: var(--panel-2); display: flex; align-items: center; gap: 8px; padding: 0 10px; font-size: 11px; }
 .desktop-status span:not(.dot) { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

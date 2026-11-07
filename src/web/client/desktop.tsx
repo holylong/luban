@@ -112,6 +112,20 @@ export function DesktopSessionHistory({ session }: { session: SessionDetail }): 
  * shared composer at it, so the click continues the conversation instead of
  * opening a read-only page in the code area.
  */
+export function DesktopQuestions({ store }: { store: WorkbenchStore }): React.ReactElement | null {
+  const dialog = React.useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (store.questions.length && dialog.current && !dialog.current.open) dialog.current.showModal();
+  }, [store.questions.length]);
+  if (!store.questions.length) return null;
+  return <dialog ref={dialog} className="desktop-question-dialog" aria-label="Agent 等待你的选择"
+    onCancel={event => event.preventDefault()}>
+    <Questions store={store} />
+    <p className="desktop-muted">选择一个选项或输入自己的答案，Agent 将收到回答并继续。</p>
+    <button className="action" onClick={() => void store.cancel()}>取消当前任务</button>
+  </dialog>;
+}
+
 export function AgentPanel({ store, timeline }: { store: WorkbenchStore; timeline: TimelineItem[] }): React.ReactElement {
   const history = store.session ? historyBeforeRun(store.session, store.job) : undefined;
   const plan = latestDesktopPlan(timeline);
@@ -119,7 +133,7 @@ export function AgentPanel({ store, timeline }: { store: WorkbenchStore; timelin
     <TopBar store={store} />
     {store.session && <div className="desktop-agent-tabs"><span>{store.session.title}</span><button onClick={store.startNew}>＋ 新会话</button></div>}
     {store.approvals.length > 0 && <div className="desktop-approvals"><Approvals store={store} /></div>}
-    {store.questions.length > 0 && <div className="desktop-approvals"><Questions store={store} /></div>}
+    <DesktopQuestions store={store} />
     {plan.length > 0 && <details className="desktop-task-plan" open><summary>本轮计划</summary><ol>{plan.map((item, index) => <li key={index} className={item.status}><span>{item.status === "completed" ? "✓" : item.status === "in_progress" ? "◉" : "○"}</span>{item.step}</li>)}</ol></details>}
     <Transcript job={store.job} events={timeline}
       history={history && <DesktopSessionHistory session={history} />}

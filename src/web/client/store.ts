@@ -90,6 +90,7 @@ export function useWorkbench(): WorkbenchStore {
   const [events, setEvents] = useState<JobStreamRecord[]>([]);
   const [approvals, setApprovals] = useState<ApprovalView[]>([]);
   const [questions, setQuestions] = useState<QuestionView[]>([]);
+  const answeredQuestions = useRef(new Set<string>());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [project, setProjectState] = useState("");
   const [mode, setMode] = useState<TaskMode>("edits");
@@ -127,13 +128,14 @@ export function useWorkbench(): WorkbenchStore {
     setJob(detail);
     setEvents(current => (selectedRef.current === id ? mergeEvents(current, detail.events ?? []) : (detail.events ?? [])));
     setApprovals(detail.approvals ?? []);
-    setQuestions(detail.questions ?? []);
+    setQuestions((detail.questions ?? []).filter(item => !answeredQuestions.current.has(item.id)));
     return detail;
   }, []);
 
   const selectJob = useCallback((id: string) => {
     selectedRef.current = id;
     setSelectedId(id);
+    setQuestions([]);
     setEvents([]);
     setApprovals([]);
     setJob(undefined);
@@ -277,6 +279,7 @@ export function useWorkbench(): WorkbenchStore {
   const answerQuestion = useCallback(async (id: string, answer: string) => {
     try {
       await api.answerQuestion(id, answer);
+      answeredQuestions.current.add(id);
       setQuestions(current => current.filter(item => item.id !== id));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
   }, [notify]);
@@ -437,7 +440,10 @@ export function useWorkbench(): WorkbenchStore {
     const tick = async (): Promise<void> => {
       try {
         const [list, pendingQuestions] = await Promise.all([api.approvals(selectedId), api.questions(selectedId)]);
-        if (active) { setApprovals(list); setQuestions(pendingQuestions); }
+        if (active && selectedRef.current === selectedId) {
+          setApprovals(list);
+          setQuestions(pendingQuestions.filter(item => !answeredQuestions.current.has(item.id)));
+        }
       } catch { /* transient */ }
     };
     void tick();

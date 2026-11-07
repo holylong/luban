@@ -66,7 +66,7 @@ export function Questions({ store }: { store: WorkbenchStore }): React.ReactElem
   return <div className="block">
     <h2>等待你的选择 <span className="spacer" /><span className="chip">{store.questions.length}</span></h2>
     {store.questions.map(item => <div className="approval" key={item.id}>
-      <div className="title">{item.question}</div>
+      <div className="question-title">{item.question}</div>
       <div className="grid">
         {item.options.map(option => <button className="action wide" key={option.label}
           title={option.description} onClick={() => void store.answerQuestion(item.id, option.label)}>
