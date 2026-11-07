@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { WorkbenchStore } from "./store";
-import "./desktop-bridge";
+import { desktopErrorText } from "./desktop-bridge";
 import { Markdown } from "./markdown";
 import { DesktopTerminal } from "./desktop-terminal";
 
@@ -51,7 +51,7 @@ export function DesktopConsole({ store }: { store: WorkbenchStore }): React.Reac
       const pending = pendingEvents.current.get(id);
       setCommands(current => [...current.slice(-29), { id, command: text, output: pending?.text ?? "", exit: pending?.exit }]);
       setHistory(current => [text, ...current].slice(0, 100)); setHistoryIndex(-1); setCommand("");
-    } catch (cause) { store.notify(String(cause), true); }
+    } catch (cause) { store.notify(desktopErrorText(cause), true); }
     finally { setStarting(false); input.current?.focus(); }
   };
   return <section className={`desktop-console${tab === "terminal" ? " terminal" : ""}${visible ? "" : " collapsed"}`}>
@@ -61,7 +61,7 @@ export function DesktopConsole({ store }: { store: WorkbenchStore }): React.Reac
       {tab === "console" ? <>
       <div className="desktop-console-format" role="group" aria-label="输出格式"><button aria-pressed={!raw} onClick={() => setRaw(false)}>Markdown</button><button aria-pressed={raw} onClick={() => setRaw(true)}>原始输出</button></div>
       {!bridge && <div className="desktop-console-notice" role="status">命令执行不可用：未检测到桌面连接。浏览器预览不能执行本机命令；请使用 luban Desktop，若已在桌面版中请重启应用。</div>}
-      <div className="desktop-console-output" ref={output}>{!commands.length && <p className="muted">一次性执行命令（不是沙箱）；需要交互、颜色或 cd 请切到「终端」。输出上限 1 MB，超过后自动停止。</p>}{commands.map(item => <div key={item.id}><div className="desktop-command-title"><b>$ {item.command}</b>{!item.exit && <button onClick={() => void bridge?.stopCommand(item.id).catch(cause => store.notify(String(cause), true))}>停止</button>}</div><ConsoleOutput text={item.output} raw={raw} />{item.exit && <small>{item.exit}</small>}</div>)}</div>
+      <div className="desktop-console-output" ref={output}>{!commands.length && <p className="muted">一次性执行命令（不是沙箱）；需要交互、颜色或 cd 请切到「终端」。输出上限 1 MB，超过后自动停止。</p>}{commands.map(item => <div key={item.id}><div className="desktop-command-title"><b>$ {item.command}</b>{!item.exit && <button onClick={() => void bridge?.stopCommand(item.id).catch(cause => store.notify(desktopErrorText(cause), true))}>停止</button>}</div><ConsoleOutput text={item.output} raw={raw} />{item.exit && <small>{item.exit}</small>}</div>)}</div>
       <form className="desktop-command-input" onSubmit={event => { event.preventDefault(); void run(); }}><label htmlFor="desktop-command">命令 $</label><input id="desktop-command" ref={input} aria-label="控制台命令" autoComplete="off" spellCheck={false} placeholder={bridge ? "输入命令，按 Enter 运行（例如 git status）" : "需要 luban Desktop 桌面连接"} value={command} disabled={!bridge} onChange={event => setCommand(event.target.value)} onKeyDown={event => {
         if (event.key === "ArrowUp" && history.length) { event.preventDefault(); const index = Math.min(historyIndex + 1, history.length - 1); setHistoryIndex(index); setCommand(history[index]!); }
         if (event.key === "ArrowDown") { event.preventDefault(); const index = Math.max(historyIndex - 1, -1); setHistoryIndex(index); setCommand(index < 0 ? "" : history[index]!); }

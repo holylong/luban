@@ -60,6 +60,22 @@ describe("desktop workspace security", () => {
     }
     expect(service.readFile("text").content).toBe("safe");
   });
+  it("reports the size limit in MB and names UTF-16 instead of binary", () => {
+    writeFileSync(join(root, "huge.txt"), Buffer.alloc(MAX_FILE_BYTES + 1, 65));
+    expect(() => service.readFile("huge.txt")).toThrow("File exceeds 4 MB limit");
+    writeFileSync(join(root, "utf16.txt"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("hi", "utf16le")]));
+    expect(() => service.readFile("utf16.txt")).toThrow(/UTF-16/);
+  });
+  it("exposes only media files, streamed without the text limit", () => {
+    writeFileSync(join(root, "clip.mp4"), Buffer.from([0, 0, 0, 24]));
+    writeFileSync(join(root, "notes.txt"), "text");
+    writeFileSync(join(root, "larger.mp3"), Buffer.alloc(MAX_FILE_BYTES + 1, 1));
+    expect(service.mediaFile("clip.mp4")).toMatchObject({ path: "clip.mp4", size: 4, type: "video/mp4" });
+    expect(service.mediaFile("larger.mp3").type).toBe("audio/mpeg");
+    expect(() => service.mediaFile("notes.txt")).toThrow(/media/i);
+    expect(() => service.mediaFile("../clip.mp4")).toThrow();
+    expect(() => service.mediaFile(".git/clip.mp4")).toThrow();
+  });
   it("lists bounded relative files without excluded directories or symlinks", () => {
     for (const directory of ["src", ".git", "node_modules", "dist"]) {
       mkdirSync(join(root, directory));

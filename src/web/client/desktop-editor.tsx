@@ -1,7 +1,9 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { acceptSaved, quickMatches, type EditorDocument } from "./desktop-bridge";
+import { acceptSaved, desktopErrorText, quickMatches, type EditorDocument } from "./desktop-bridge";
 import { HighlightedCode, editorLanguage, highlightable } from "./desktop-syntax";
 import { startFileSync } from "./desktop-file-sync";
+import { DesktopMediaView } from "./desktop-media-view";
+import { mediaKind, type MediaKind } from "./desktop-media";
 import type { WorkbenchStore } from "./store";
 
 export function DesktopEditor({ store, activeView = true }: { store: WorkbenchStore; activeView?: boolean }): React.ReactElement {
@@ -13,6 +15,9 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   const [query, setQuery] = useState("");
   const [files, setFiles] = useState<string[]>([]);
   const [error, setError] = useState("");
+  // Audio, video and images are binary: they play in a read-only preview instead
+  // of failing the text reader.
+  const [preview, setPreview] = useState<{ path: string; kind: MediaKind } | null>(null);
   const [position, setPosition] = useState({ line: 1, column: 1 });
   const area = useRef<HTMLTextAreaElement>(null);
   const gutter = useRef<HTMLPreElement>(null);
@@ -35,13 +40,16 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
 
   const open = async (path: string): Promise<void> => {
     if (!bridge) return;
+    const kind = mediaKind(path);
+    if (kind) { setPreview({ path, kind }); setError(""); return; }
+    setPreview(null);
     const request = ++opening.current;
     if (documents.some(item => item.path === path)) { setActive(path); return; }
     try {
       const file = await bridge.readFile(path);
       setDocuments(current => current.some(item => item.path === path) ? current : [...current, { ...file, saved: file.content }]);
       if (request === opening.current) { setActive(path); setError(""); }
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(desktopErrorText(cause, path)); }
   };
   useEffect(() => { if (store.file?.path) void open(store.file.path); }, [store.file?.path]); // Each selected file is loaded once, never over a dirty buffer.
   useLayoutEffect(() => { bridge?.setDirty(dirty); }, [bridge, dirty]);
@@ -55,12 +63,12 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
       const result = await bridge.saveFile(snapshot);
       setDocuments(current => current.map(item => item.path === snapshot.path ? acceptSaved(item, result) : item));
       setError(""); notify(`已保存 ${snapshot.path}`);
-    } catch (cause) { setError(`${String(cause)}。若磁盘已修改，请先复制当前内容，再重新读取磁盘版本。`); }
+    } catch (cause) { setError(desktopErrorText(cause, snapshot.path)); }
     finally { savingRef.current = false; setSaving(false); }
   };
   const showQuick = (): void => {
     setQuick(true); setQuery("");
-    void bridge?.listFiles().then(setFiles).catch(cause => setError(String(cause)));
+    void bridge?.listFiles().then(setFiles).catch(cause => setError(desktopErrorText(cause)));
   };
   useEffect(() => {
     const key = (event: KeyboardEvent): void => {
@@ -88,13 +96,13 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   const matches = quickMatches(files, query);
 
   return <>
-    <div className="desktop-editor-head"><span className="desktop-editor-title">{active || "代码工作台"}</span><button onClick={showQuick} disabled={!bridge}>快速打开 ⌘/Ctrl P</button><button onClick={() => void save()} disabled={!document || saving || Boolean(diskIssue) || document.saved === document.content}>{saving ? "保存中…" : "保存"}</button></div>
-    <div className="desktop-document-tabs" role="tablist" aria-label="打开的文件">{documents.map(item => <div key={item.path} className={active === item.path ? "active" : ""}><button role="tab" aria-selected={active === item.path} title={item.path} onClick={() => setActive(item.path)}>{item.content !== item.saved ? "● " : ""}{item.path.split("/").at(-1)}</button><button aria-label={`关闭 ${item.path}`} onClick={() => close(item)}>×</button></div>)}</div>
+    <div className="desktop-editor-head"><span className="desktop-editor-title">{preview ? preview.path : active || "代码工作台"}</span><button onClick={showQuick} disabled={!bridge}>快速打开 ⌘/Ctrl P</button><button onClick={() => void save()} disabled={!document || saving || Boolean(diskIssue) || document.saved === document.content}>{saving ? "保存中…" : "保存"}</button></div>
+    <div className="desktop-document-tabs" role="tablist" aria-label="打开的文件">{documents.map(item => <div key={item.path} className={active === item.path ? "active" : ""}><button role="tab" aria-selected={active === item.path} title={item.path} onClick={() => { setActive(item.path); setPreview(null); }}>{item.content !== item.saved ? "● " : ""}{item.path.split("/").at(-1)}</button><button aria-label={`关闭 ${item.path}`} onClick={() => close(item)}>×</button></div>)}</div>
     {(error || diskIssue) && <div className="desktop-error" role="alert">{diskIssue || error}{document && <button onClick={async () => {
       if (!window.confirm("重新读取磁盘版本会放弃当前文件未保存内容，继续？")) return;
-      try { const file = await bridge!.readFile(active); setDocuments(current => current.map(item => item.path === file.path ? { ...file, saved: file.content } : item)); setError(""); } catch (cause) { setError(String(cause)); }
+      try { const file = await bridge!.readFile(active); setDocuments(current => current.map(item => item.path === file.path ? { ...file, saved: file.content } : item)); setError(""); } catch (cause) { setError(desktopErrorText(cause, active)); }
     }}>重新读取磁盘</button>}</div>}
-    {document ? <>
+    {preview ? <DesktopMediaView key={preview.path} path={preview.path} kind={preview.kind} onClose={() => setPreview(null)} /> : document ? <>
       <div className="desktop-code-editor" key={active}><pre className="desktop-line-numbers" ref={gutter} aria-hidden="true">{document.content.split("\n").map((_, index) => index + 1).join("\n")}</pre><div className="desktop-code-surface">
         {highlight && <pre className="desktop-code-highlight" ref={layer} aria-hidden="true"><HighlightedCode content={document.content} language={language} /></pre>}
         <textarea ref={area} className={highlight ? "highlighted" : undefined} aria-label={`编辑 ${active}`} value={document.content} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onChange={event => change(event.target.value)} onSelect={locate} onScroll={event => {

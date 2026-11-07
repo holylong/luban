@@ -33,6 +33,24 @@ export function acceptDisk(document: EditorDocument, disk: DesktopFile): EditorD
 export function acceptSaved(document: EditorDocument, saved: DesktopFile): EditorDocument {
   return { ...document, revision: saved.revision, saved: saved.content };
 }
+/** Electron wraps renderer-facing IPC failures as
+ * "Error invoking remote method 'luban:readFile': Error: reason". Keep the
+ * reason, and turn the expected refusals — size, encoding, binary content, a
+ * deleted file — into a sentence the user can act on. */
+export function desktopErrorText(cause: unknown, path?: string): string {
+  const raw = cause instanceof Error ? cause.message : String(cause ?? "");
+  const reason = raw.replace(/^Error invoking remote method '[^']*':\s*/, "").replace(/^Error:\s*/, "").trim();
+  const label = path ?? "这个文件";
+  const size = /exceeds ([\d.]+)\s*MB/i.exec(reason);
+  if (size) return `${label} 超过 ${size[1]} MB，桌面编辑器不加载这么大的文件；请在终端或用其他编辑器查看。`;
+  if (/binary files are not supported/i.test(reason)) return `${label} 是二进制内容（图片、压缩包或可执行文件），代码编辑器无法打开。`;
+  if (/utf-?16/i.test(reason)) return `${label} 是 UTF-16 编码，请先另存为 UTF-8 再打开，避免保存时改动编码。`;
+  if (/not valid utf-8/i.test(reason)) return `${label} 不是 UTF-8 文本，代码编辑器无法打开。`;
+  if (/\bENOENT\b|no such file/i.test(reason)) return `${label} 已不存在，可能被删除或重命名。`;
+  if (/\bEACCES\b|\bEPERM\b|permission denied/i.test(reason)) return `${label} 没有读取权限。`;
+  if (/revision conflict|changed while opening|file changed/i.test(reason)) return `${label} 在磁盘上已被修改，本次保存没有写入；请先复制当前内容，再重新读取磁盘版本。`;
+  return reason || "未知错误";
+}
 export function quickMatches(files: string[], query: string): string[] {
   const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   return files.filter(path => terms.every(term => path.toLowerCase().includes(term))).slice(0, 100);

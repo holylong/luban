@@ -1,4 +1,4 @@
-import { acceptDisk, type DesktopFile, type EditorDocument } from "./desktop-bridge";
+import { acceptDisk, desktopErrorText, type DesktopFile, type EditorDocument } from "./desktop-bridge";
 
 /** Poll only open tabs; serialize reads, discard stale responses, and clean up on unmount. */
 export function startFileSync(options: {
@@ -20,7 +20,7 @@ export function startFileSync(options: {
         let disk: DesktopFile | undefined;
         let error: string | undefined;
         try { disk = await options.readFile(snapshot.path); }
-        catch (cause) { error = String(cause); }
+        catch (cause) { error = desktopErrorText(cause, snapshot.path); }
         if (stopped || options.saving()) continue;
         options.update(current => current.map(item => {
           // Closing/reopening or saving a tab invalidates this read. Typing does

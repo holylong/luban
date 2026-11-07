@@ -4,10 +4,26 @@ const { createHash, randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { TextDecoder } = require("node:util");
 
-const MAX_FILE_BYTES = 1024 * 1024;
+// The editor holds the whole file in the renderer, so it stays bounded — but
+// at 4 MB, past the lockfiles, logs and bundles people actually click in the
+// tree. Media and terminal output have their own limits.
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_FILE_MB = MAX_FILE_BYTES / (1024 * 1024);
+// A one-shot command keeps the 1 MB console cap.
+const MAX_COMMAND_BYTES = 1024 * 1024;
 // A terminal streams far more than a one-shot command; cap it so a runaway
 // `yes` cannot fill the renderer.
 const MAX_TERMINAL_BYTES = 32 * 1024 * 1024;
+const tooLarge = () => new Error(`File exceeds ${MAX_FILE_MB} MB limit`);
+// Extensions the desktop preview can stream to <video>, <audio> and <img>.
+const MEDIA_TYPES = new Map([
+  [".mp4", "video/mp4"], [".m4v", "video/mp4"], [".webm", "video/webm"], [".ogv", "video/ogg"],
+  [".mov", "video/quicktime"], [".mkv", "video/x-matroska"], [".avi", "video/x-msvideo"],
+  [".mp3", "audio/mpeg"], [".m4a", "audio/mp4"], [".aac", "audio/aac"], [".wav", "audio/wav"],
+  [".flac", "audio/flac"], [".ogg", "audio/ogg"], [".oga", "audio/ogg"], [".opus", "audio/opus"],
+  [".png", "image/png"], [".jpg", "image/jpeg"], [".jpeg", "image/jpeg"], [".gif", "image/gif"],
+  [".webp", "image/webp"], [".avif", "image/avif"], [".bmp", "image/bmp"], [".ico", "image/x-icon"],
+]);
 const EXCLUDED = new Set([".git", "node_modules", "dist"]);
 const revision = content => createHash("sha256").update(content).digest("hex");
 
@@ -34,7 +50,10 @@ function createWorkspace(root, emit = () => {}, options = {}) {
     return target;
   }
   function decode(buffer) {
-    if (buffer.length > MAX_FILE_BYTES) throw new Error("File exceeds 1 MB limit");
+    if (buffer.length > MAX_FILE_BYTES) throw tooLarge();
+    // Saving rewrites bytes as UTF-8, so a UTF-16 file is refused with the reason
+    // instead of being reported as binary.
+    if (buffer.length >= 2 && ((buffer[0] === 0xff && buffer[1] === 0xfe) || (buffer[0] === 0xfe && buffer[1] === 0xff))) throw new Error("File is UTF-16 encoded, save it as UTF-8 first");
     if (buffer.includes(0)) throw new Error("Binary files are not supported");
     let text;
     try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer); }
@@ -49,7 +68,7 @@ function createWorkspace(root, emit = () => {}, options = {}) {
       const stat = fs.fstatSync(fd);
       const current = fs.statSync(checkedPath(value));
       if (!stat.isFile() || stat.ino !== current.ino || stat.dev !== current.dev) throw new Error("File changed while opening");
-      if (stat.size > MAX_FILE_BYTES) throw new Error("File exceeds 1 MB limit");
+      if (stat.size > MAX_FILE_BYTES) throw tooLarge();
       return fd;
     } catch (error) { fs.closeSync(fd); throw error; }
   }
@@ -111,6 +130,16 @@ function createWorkspace(root, emit = () => {}, options = {}) {
     walk(root, 0);
     return files.sort();
   }
+  // A media preview streams the file through luban-media://, so the text size
+  // limit does not apply; only known media extensions are exposed.
+  function mediaFile(value) {
+    const target = checkedPath(value);
+    const stat = fs.statSync(target);
+    if (!stat.isFile()) throw new Error("Not a file");
+    const type = MEDIA_TYPES.get(path.extname(value).toLowerCase());
+    if (!type) throw new Error("Not a media file");
+    return { path: value, file: target, size: stat.size, type };
+  }
   function kill(child, signal) {
     if (!child.pid) return;
     try {
@@ -139,12 +168,12 @@ function createWorkspace(root, emit = () => {}, options = {}) {
     commands.set(id, record);
     const output = chunk => {
       if (disposed) return;
-      const remaining = (options.maxOutputBytes || MAX_FILE_BYTES) - record.bytes;
+      const remaining = (options.maxOutputBytes || MAX_COMMAND_BYTES) - record.bytes;
       if (remaining <= 0) return;
       const data = chunk.subarray(0, remaining);
       record.bytes += data.length;
       emit({ id, kind: "output", text: data.toString("utf8") });
-      if (record.bytes >= (options.maxOutputBytes || MAX_FILE_BYTES)) stopCommand(id);
+      if (record.bytes >= (options.maxOutputBytes || MAX_COMMAND_BYTES)) stopCommand(id);
     };
     child.stdout.on("data", output);
     child.stderr.on("data", output);
@@ -302,7 +331,7 @@ finally:
     disposed = true;
   }
   return {
-    readFile, saveFile, listFiles, runCommand, stopCommand,
+    readFile, saveFile, mediaFile, listFiles, runCommand, stopCommand,
     startTerminal, writeTerminal, stopTerminal, dispose,
   };
 }

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, Menu, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, dialog, Menu, ipcMain, protocol, screen } = require("electron");
 const { preparePetTask } = require("./pet-task.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
@@ -68,6 +68,12 @@ function createPet() {
   void pet.loadFile(join(__dirname, 'pet.html'));
 }
 const { createWorkspace } = require("./workspace.cjs");
+const { MEDIA_SCHEME, mediaResponse } = require("./media.cjs");
+
+// Media previews stream a workspace file to <video>, <audio> and <img>. A
+// privileged scheme keeps the renderer sandboxed: it can only name files the
+// workspace service resolves inside the project root.
+protocol.registerSchemesAsPrivileged([{ scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
 const { existsSync, readFileSync, statSync, writeFileSync } = require("node:fs");
@@ -284,6 +290,10 @@ async function openWorkspace(workspace) {
 }
 app.whenReady().then(async () => {
   app.setName("luban Desktop");
+  protocol.handle(MEDIA_SCHEME, request => {
+    try { return mediaResponse(workspaceService, request); }
+    catch (error) { return new Response(error instanceof Error ? error.message : String(error), { status: 500 }); }
+  });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: "文件", submenu: [
       { label: "打开项目文件夹…", accelerator: "CmdOrCtrl+O", click: async () => { const path = await chooseWorkspace(); if (path) await openWorkspace(path); } },

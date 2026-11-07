@@ -64,7 +64,7 @@ it("preserves missing-file buffers, recovers when restored, and pauses during sa
   read.mockRejectedValueOnce(new Error("ENOENT"));
   const ui = harness(read);
   await vi.advanceTimersByTimeAsync(0);
-  expect(ui.get()[0]).toMatchObject({ content: "old", diskError: "Error: ENOENT" });
+  expect(ui.get()[0]).toMatchObject({ content: "old", diskError: "a.ts 已不存在，可能被删除或重命名。" });
   ui.saving(true);
   await vi.advanceTimersByTimeAsync(1000);
   expect(read).toHaveBeenCalledTimes(1);

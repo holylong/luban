@@ -143,6 +143,12 @@
 .desktop-theme-picker { padding: 0 12px 10px; display: grid; gap: 5px; }
 .desktop-theme-picker label { color: var(--dim); font-size: 11px; }
 .desktop-theme-picker select { width: 100%; min-width: 0; padding: 7px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
+.desktop-media { flex: 1; min-height: 100px; display: flex; flex-direction: column; gap: 10px; padding: 14px; background: var(--bg); }
+.desktop-media-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: auto; }
+.desktop-media-stage video, .desktop-media-stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.desktop-media-stage audio { width: min(560px, 92%); }
+.desktop-media-hint { flex: none; display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--dim); }
+.desktop-media-hint button { margin-left: auto; }
 /* Theme all shared components, including formerly dark-only surfaces. */
 .desktop-app ::selection { background: var(--selected); }
 .desktop-app .composer, .desktop-app .toast-item { border-color: var(--line); }
