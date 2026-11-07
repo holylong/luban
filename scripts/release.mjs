@@ -12,11 +12,25 @@ const aliases = { linux: "linux", windows: "windows", win32: "windows", macos: "
 const help = `Usage: npm run release -- [--platform auto|linux|windows|macos] [--kind all|cli|desktop] [--dry-run]
 
 Defaults: current OS, CLI and Desktop. Outputs go to release/ with SHA-256 checksums.
+macOS Desktop prefers a .dmg image and falls back to a .zip when hdiutil fails.
 Build on the target OS using its native Node architecture; cross-compilation is not supported.
 Install dependencies with npm ci first. No git changes, tags, or uploads are performed.
 `;
 
-/** @param {string[]} args @param {string} host @param {string} arch @param {string} version */
+/**
+ * @typedef {object} ReleasePlan
+ * @property {string} platform
+ * @property {string} arch
+ * @property {string} kind
+ * @property {boolean} dryRun
+ * @property {string[]} artifacts Primary artifact name per selected kind
+ * @property {(string|null)[]} fallbacks Alternative name when the primary fails
+ * @property {string} script
+ * @property {string} checksums
+ */
+
+/** @param {string[]} args @param {string} host @param {string} arch @param {string} version
+ * @returns {{help: true} | ReleasePlan} */
 export function releasePlan(args, host = process.platform, arch = process.arch, version = "0.0.0") {
   let platform = "auto";
   let kind = "all";
@@ -41,9 +55,43 @@ export function releasePlan(args, host = process.platform, arch = process.arch, 
   const kinds = kind === "all" ? ["cli", "desktop"] : [kind];
   const artifacts = kinds.map(item => platform === "linux"
     ? `luban-${item}_${version}_${arch === "x64" ? "amd64" : arch}.deb`
-    : `luban-${item}-${version}-${platform === "windows" ? "win" : "mac"}-${arch}.zip`);
-  return { platform, arch, kind, dryRun, artifacts, script: `package-${platform}.mjs`,
+    : `luban-${item}-${version}-${platform === "windows" ? "win" : "mac"}-${arch}.${platform === "macos" && item === "desktop" ? "dmg" : "zip"}`);
+  // macOS Desktop is built as a DMG first; package-macos.mjs writes the zip when
+  // the image cannot be created, so checksumming has to follow what exists.
+  const fallbacks = kinds.map((item, index) => platform === "macos" && item === "desktop"
+    ? artifacts[index].replace(/\.dmg$/, ".zip")
+    : null);
+  return { platform, arch, kind, dryRun, artifacts, fallbacks, script: `package-${platform}.mjs`,
     checksums: `SHA256SUMS-${version}-${platform}-${arch}-${kind}.txt` };
+}
+
+/** Identity of an existing nonempty artifact, used to reject files left behind
+ * by an earlier run in release/. @param {string} directory @param {string} name */
+export async function artifactSignature(directory, name) {
+  const info = await stat(join(directory, name)).catch(() => null);
+  return info?.isFile() && info.size > 0 ? `${info.size}:${info.mtimeMs}` : null;
+}
+
+/** Pick the artifact each kind actually produced, preferring the primary name
+ * and accepting its declared fallback. @param {string} directory
+ * @param {string[]} artifacts @param {(string|null)[]} fallbacks
+ * @param {Map<string, string|null>} before */
+export async function resolveArtifacts(directory, artifacts, fallbacks = [], before = new Map()) {
+  const produced = [];
+  for (let index = 0; index < artifacts.length; index++) {
+    /** @type {string[]} */
+    const candidates = [artifacts[index]];
+    const fallback = fallbacks[index];
+    if (fallback) candidates.push(fallback);
+    let found;
+    for (const name of candidates) {
+      const signature = await artifactSignature(directory, name);
+      if (signature && signature !== (before.get(name) ?? null)) { found = name; break; }
+    }
+    if (!found) throw new Error(`No fresh package in release/: expected one of ${candidates.join(", ")}`);
+    produced.push(found);
+  }
+  return produced;
 }
 
 /** @param {string} directory @param {string[]} artifacts @param {string} filename */
@@ -79,8 +127,17 @@ async function main() {
   // Electron 44 does not download its runtime during npm ci. CLI-only builds
   // stay independent of Electron; desktop builds ensure its native runtime.
   if (plan.kind !== "cli") run(join(root, "node_modules", "electron", "install.js"));
+  const directory = join(root, "release");
+  /** @type {Map<string, string|null>} */
+  const before = new Map();
+  for (const name of plan.artifacts) before.set(name, await artifactSignature(directory, name));
+  for (const name of plan.fallbacks) if (name) before.set(name, await artifactSignature(directory, name));
   run(join(root, "scripts", plan.script), [plan.kind]);
-  await writeChecksums(join(root, "release"), plan.artifacts, plan.checksums);
+  // A DMG failure inside package-macos.mjs leaves only the zip, which the
+  // checksums must describe instead of the planned image.
+  const produced = await resolveArtifacts(directory, plan.artifacts, plan.fallbacks, before);
+  await writeChecksums(directory, produced, plan.checksums);
+  console.log(`Checksummed: ${produced.map(name => `release/${name}`).join(", ")}`);
   console.log("Release packages and SHA-256 checksums ready in release/. No upload performed.");
 }
 

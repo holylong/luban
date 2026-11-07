@@ -253,12 +253,12 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           cat > macos-release-notes.md <<EOF
-          macOS ${{ matrix.arch }} ZIP 包（解压即用，无需安装）：
+          macOS ${{ matrix.arch }} 包（无需安装，已内置 Node.js）：
 
           - **luban-cli-${version}-mac-${{ matrix.arch }}.zip**：终端版，解压后运行 \`./luban\`。
-          - **luban-desktop-${version}-mac-${{ matrix.arch }}.zip**：图形桌面版，解压后打开 \`luban Desktop.app\`（同时提供 \`./luban\`）。
+          - **luban-desktop-${version}-mac-${{ matrix.arch }}.dmg**：图形桌面版，打开卷内 \`luban Desktop.app\`（同时提供 \`./luban\`）；构建机无法生成镜像时会改为发布同名 \`.zip\`，解压后使用。
 
-          两份 ZIP 均已内置 Node.js 运行时，无需预装 Node.js。安装包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
+          安装包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
           配置目录：\`~/.luban/config.json\`。
           EOF
       - name: Publish GitHub Release
@@ -267,13 +267,20 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           cli="release/luban-cli-${version}-mac-${{ matrix.arch }}.zip"
-          desktop="release/luban-desktop-${version}-mac-${{ matrix.arch }}.zip"
-          for asset in "$cli" "$desktop"; do
-            if [ ! -s "$asset" ]; then
-              echo "missing or empty asset: $asset"
-              exit 1
-            fi
+          if [ ! -s "$cli" ]; then
+            echo "missing or empty asset: $cli"
+            exit 1
+          fi
+          # Desktop is a dmg unless hdiutil failed and the zip fallback was written.
+          desktop=""
+          for candidate in "release/luban-desktop-${version}-mac-${{ matrix.arch }}.dmg" "release/luban-desktop-${version}-mac-${{ matrix.arch }}.zip"; do
+            if [ -s "$candidate" ]; then desktop="$candidate"; break; fi
           done
+          if [ -z "$desktop" ]; then
+            echo "missing or empty desktop package (dmg or zip) for ${{ matrix.arch }}"
+            exit 1
+          fi
+          echo "publishing $cli and $desktop"
           # Every matrix leg and platform job publishes to the same release
           # concurrently, so a lost create race is retryable instead of fatal.
           set +e
@@ -322,10 +329,10 @@ jobs:
           - \`luban-cli-${version}-win-x64.zip\`：解压后运行 \`luban.cmd\`。
           - \`luban-desktop-${version}-win-x64.zip\`：解压后运行 \`luban-desktop.cmd\`（含 \`luban.cmd\`）。
 
-          **macOS**（ZIP，解压即用，已内置 Node.js；x64 与 arm64 各一份）
+          **macOS**（无需安装，已内置 Node.js；x64 与 arm64 各一份）
 
           - \`luban-cli-${version}-mac-x64.zip\` / \`luban-cli-${version}-mac-arm64.zip\`：解压后运行 \`./luban\`。
-          - \`luban-desktop-${version}-mac-x64.zip\` / \`luban-desktop-${version}-mac-arm64.zip\`：解压后打开 \`luban Desktop.app\`（同时提供 \`./luban\`）。
+          - \`luban-desktop-${version}-mac-x64.dmg\` / \`luban-desktop-${version}-mac-arm64.dmg\`：打开卷内 \`luban Desktop.app\`（同时提供 \`./luban\`）。若构建机无法生成镜像，对应架构改为发布同名 \`.zip\`。
 
           macOS 包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
 

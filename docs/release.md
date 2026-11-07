@@ -24,10 +24,11 @@ npm run release -- --help
 | --- | --- | --- | --- |
 | Linux | x64 / arm64 | CLI 和 Desktop `.deb` | npm、dpkg-deb、可用的 Node.js LICENSE（或系统 copyright 文件） |
 | Windows | x64 | CLI 和 Desktop `.zip` | npm、tar.exe |
-| macOS | x64 / arm64 | CLI 和 Desktop `.zip` | npm、ditto、sips、iconutil、codesign、PlistBuddy |
+| macOS | x64 / arm64 | CLI `.zip`；Desktop `.dmg`（失败时回退 `.zip`） | npm、ditto、hdiutil、sips、iconutil、codesign、PlistBuddy |
 
 脚本复用 `scripts/package-*.mjs`，自动构建服务端和 Web 界面；桌面版会先调用 Electron 安装器确保原生运行时存在，可能需要网络。
 只打包 CLI 时不下载 Electron。打包器会安装生产依赖并执行内置 CLI 的版本冒烟检查。
+macOS 桌面版先用 `hdiutil` 生成 `.dmg`；镜像创建失败（例如无图形会话的构建机）时自动改为同名的 `.zip`，校验清单按实际产物生成，不会记录缺失的文件。
 
 ## 产物与安装
 
@@ -37,7 +38,7 @@ Linux 可在 `release/` 中用 `sha256sum -c <校验清单>` 校验；macOS 可�
 
 - Linux：`sudo apt install ./release/luban-desktop_<版本>_amd64.deb`，然后从应用菜单或 `luban-desktop` 启动。安装包配置 root 属主的 setuid Chromium 沙箱，不默认关闭沙箱。
 - Windows：解压 Desktop ZIP，运行 `luban-desktop.cmd`。
-- macOS：解压 Desktop ZIP，打开 `luban Desktop.app`；当前为 ad-hoc 签名，不是 Apple 公证发行版，Gatekeeper 处理说明见包内 README.txt。
+- macOS：打开 Desktop 的 `.dmg`，把卷内的整个文件夹（`luban Desktop.app`、`node`、`app/`）拷到磁盘后打开 App，App 需要同级的 `node` 与 `app/` 才能启动；若只拿到回退的 zip，解压后同样打开 `luban Desktop.app`。当前为 ad-hoc 签名，不是 Apple 公证发行版，Gatekeeper 处理说明见包内 README.txt。
 
 快捷入口：`luban [项目目录]` 启动 CLI，`luband [项目目录]` 启动 Desktop；保留原有桌面长命令兼容。Linux 安装 deb 后可直接运行（两个短命令分别由 CLI 和 Desktop 包提供）；Windows/macOS 便携包需将解压目录加入 PATH，或在解压目录运行 `luband.cmd` / `./luband`，CLI 对应 `luban.cmd` / `./luban`。
 

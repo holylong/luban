@@ -3,21 +3,34 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { releasePlan, writeChecksums } from "./release.mjs";
+import { artifactSignature, releasePlan, resolveArtifacts, writeChecksums } from "./release.mjs";
+
+/** @param {string[]} args @param {string} host @param {string} arch @param {string} version
+ * @returns {import("./release.mjs").ReleasePlan} */
+function planned(args, host, arch, version) {
+  const result = releasePlan(args, host, arch, version);
+  if ("help" in result) throw new Error(`expected a release plan for ${args.join(" ")}`);
+  return result;
+}
 
 test("native platform and architecture artifact matrix", () => {
-  for (const [host, platform, arches] of [["linux", "linux", ["x64", "arm64"]], ["win32", "windows", ["x64"]], ["darwin", "macos", ["x64", "arm64"]]]) {
+  /** @type {[string, string, string[]][]} */
+  const matrix = [["linux", "linux", ["x64", "arm64"]], ["win32", "windows", ["x64"]], ["darwin", "macos", ["x64", "arm64"]]];
+  for (const [host, platform, arches] of matrix) {
     for (const arch of arches) {
-      const plan = releasePlan([], host, arch, "2.0.1");
+      const plan = planned([], host, arch, "2.0.1");
       assert.equal(plan.platform, platform);
       assert.equal(plan.artifacts.length, 2);
       assert.equal(plan.script, `package-${platform}.mjs`);
       assert.ok(plan.artifacts.every(name => name.includes("2.0.1")));
     }
   }
-  assert.deepEqual(releasePlan(["--kind", "desktop"], "linux", "x64", "2.0.1").artifacts, ["luban-desktop_2.0.1_amd64.deb"]);
-  assert.deepEqual(releasePlan(["--kind", "cli"], "win32", "x64", "2.0.1").artifacts, ["luban-cli-2.0.1-win-x64.zip"]);
-  assert.deepEqual(releasePlan(["--platform", "mac", "--dry-run"], "darwin", "arm64", "2.0.1").artifacts, ["luban-cli-2.0.1-mac-arm64.zip", "luban-desktop-2.0.1-mac-arm64.zip"]);
+  assert.deepEqual(planned(["--kind", "desktop"], "linux", "x64", "2.0.1").artifacts, ["luban-desktop_2.0.1_amd64.deb"]);
+  assert.deepEqual(planned(["--kind", "cli"], "win32", "x64", "2.0.1").artifacts, ["luban-cli-2.0.1-win-x64.zip"]);
+  // macOS desktop ships a disk image; every other target keeps a single archive.
+  assert.deepEqual(planned(["--platform", "mac", "--dry-run"], "darwin", "arm64", "2.0.1").artifacts, ["luban-cli-2.0.1-mac-arm64.zip", "luban-desktop-2.0.1-mac-arm64.dmg"]);
+  assert.deepEqual(planned(["--platform", "mac"], "darwin", "x64", "2.0.1").fallbacks, [null, "luban-desktop-2.0.1-mac-x64.zip"]);
+  assert.deepEqual(planned(["--kind", "desktop"], "linux", "x64", "2.0.1").fallbacks, [null]);
 });
 
 test("rejects invalid options and cross compilation before starting builds", () => {
@@ -26,8 +39,31 @@ test("rejects invalid options and cross compilation before starting builds", () 
   }
   assert.throws(() => releasePlan([], "win32", "arm64"));
   assert.throws(() => releasePlan([], "freebsd", "x64"));
-  assert.equal(releasePlan(["--dry-run"], "linux", "arm64").dryRun, true);
+  assert.equal(planned(["--dry-run"], "linux", "arm64", "2.0.1").dryRun, true);
   assert.deepEqual(releasePlan(["--help"]), { help: true });
+});
+
+test("macOS desktop prefers the dmg and falls back to the zip", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "luban-release-dmg-"));
+  try {
+    const plan = planned(["--kind", "desktop"], "darwin", "arm64", "2.0.1");
+    const dmgName = plan.artifacts[0];
+    const fallback = plan.fallbacks[0];
+    assert.ok(fallback);
+    const dmg = join(dir, dmgName);
+    const zip = join(dir, fallback);
+    await writeFile(dmg, "image");
+    await writeFile(zip, "archive");
+    // The image wins while both survive in release/.
+    assert.deepEqual(await resolveArtifacts(dir, plan.artifacts, plan.fallbacks), [dmgName]);
+    await rm(dmg);
+    assert.deepEqual(await resolveArtifacts(dir, plan.artifacts, plan.fallbacks), [fallback]);
+    // A zip left from an earlier run does not count as this run's output.
+    const stale = new Map([[fallback, await artifactSignature(dir, fallback)]]);
+    await assert.rejects(resolveArtifacts(dir, plan.artifacts, plan.fallbacks, stale), /No fresh package/);
+    await rm(zip);
+    await assert.rejects(resolveArtifacts(dir, plan.artifacts, plan.fallbacks), /No fresh package/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test("checksums cover exactly selected nonempty artifacts", async () => {

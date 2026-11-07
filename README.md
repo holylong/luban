@@ -27,7 +27,7 @@ luban 在你的项目里读代码、改文件、跑命令、验证结果，把�
 
 | 平台 | 安装包 | 启动 |
 | --- | --- | --- |
-| macOS x64 / arm64 | `luban-cli-<版本>-mac-<arch>.zip`<br>`luban-desktop-<版本>-mac-<arch>.zip` | `./luban`<br>打开 `luban Desktop.app` |
+| macOS x64 / arm64 | `luban-cli-<版本>-mac-<arch>.zip`<br>`luban-desktop-<版本>-mac-<arch>.dmg`（构建机无法生成镜像时为同名 `.zip`） | `./luban`<br>打开 `luban Desktop.app` |
 | Windows x64 | `luban-cli-<版本>-win-x64.zip`<br>`luban-desktop-<版本>-win-x64.zip` | `luban.cmd`<br>`luban-desktop.cmd` |
 | Linux x64 / arm64 | `luban-cli_<版本>_<arch>.deb`<br>`luban-desktop_<版本>_<arch>.deb` | `luban`<br>`luban-desktop` |
 

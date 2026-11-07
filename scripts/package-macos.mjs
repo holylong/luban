@@ -1,7 +1,8 @@
-/** Build self-contained macOS CLI and Desktop zip packages. */
+/** Build self-contained macOS CLI and Desktop packages: Desktop prefers a DMG
+ * image and falls back to a zip when the image cannot be created. */
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -133,12 +134,43 @@ function writeReadme(payload, kind) {
     kind === "cli"
       ? "Run ./luban from this folder, or add this folder to PATH."
       : "Open \"luban Desktop.app\" for the graphical workspace, or run ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
+    ...(kind === "desktop" ? ["Keep this folder together: the app reads the sibling node runtime and app/ folder."] : []),
     "Node.js is bundled; no local Node.js installation is required.",
     "Configuration is read from ~/.luban/config.json.",
     "These builds are signed ad hoc, so Gatekeeper may refuse the first launch:",
     `  xattr -dr com.apple.quarantine "${kind === "cli" ? "." : `${APP_NAME}.app`}"`,
     "",
   ].join("\n"));
+}
+
+/** @param {string} payload @param {string} output @param {string} folder @param {string} kind */
+function zipPackage(payload, output, folder, kind) {
+  const zip = join(output, `${folder}.zip`);
+  rmSync(zip, { force: true });
+  run(`Zip ${kind} package`, "ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", payload, zip]);
+  process.stdout.write(`\nPackage: ${zip}\n`);
+  return zip;
+}
+
+/** The DMG holds the whole payload folder: "luban Desktop.app" resolves the
+ * bundled node runtime and app/ CLI from its siblings, so the folder itself is
+ * the install unit. Returns null when hdiutil cannot produce a usable image. */
+function dmgPackage(payload, output, folder, volumeName) {
+  const dmg = join(output, `${folder}.dmg`);
+  rmSync(dmg, { force: true });
+  try {
+    run("Create DMG (hdiutil)", "hdiutil", [
+      "create", "-volname", volumeName, "-srcfolder", payload, "-ov", "-format", "UDZO", "-quiet", dmg,
+    ]);
+    const info = statSync(dmg);
+    if (!info.isFile() || info.size === 0) throw new Error("hdiutil produced no image");
+    process.stdout.write(`\nPackage: ${dmg}\n`);
+    return dmg;
+  } catch (error) {
+    rmSync(dmg, { force: true });
+    process.stderr.write(`\nDMG creation failed (${error.message}); writing a zip instead.\n`);
+    return null;
+  }
 }
 
 function packageVariant(kind) {
@@ -160,10 +192,10 @@ function packageVariant(kind) {
   }
   writeReadme(payload, kind);
   mkdirSync(output, { recursive: true });
-  const zip = join(output, `${folder}.zip`);
-  rmSync(zip, { force: true });
-  run(`Zip ${kind} package`, "ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", payload, zip]);
-  process.stdout.write(`\nPackage: ${zip}\n`);
+  // A CLI folder ships as a zip; the desktop app is what users expect as a DMG,
+  // with the zip kept as the fallback that always works.
+  if (kind === "desktop" && dmgPackage(payload, output, folder, `luban Desktop ${version}`)) return;
+  zipPackage(payload, output, folder, kind);
 }
 
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")]);
