@@ -70,6 +70,7 @@ import { workspaceDiff } from "../core/workspace-diff.js";
 import { historyFromSession, pushInputHistory, recallDown, recallUp } from "./input-history.js";
 import { toAttachedImage } from "../core/vision.js";
 import { buildCopyText, osc52CopySequence, writeSystemClipboard } from "./clipboard.js";
+import { clickTarget, findUrlAt, openExternal } from "./links.js";
 import { buildSessionMarkdown, collectExportedEdits, defaultExportFilename, expandExportPath, summarizeEdits } from "./session-export.js";
 
 const MODES: AgentMode[] = ["auto", "agent", "ask"];
@@ -423,11 +424,19 @@ function ExportDialog({ value, defaultName, dest }: { value: string; defaultName
 
 /** Read-only command output shown in a dismissible dialog so an active run is
  * never interrupted by a status query answering mid-flight. */
-function InfoDialog({ title, content, loading }: { title: string; content: string; loading?: string }) {
+function InfoDialog({ title, content, loading, measureLine }: {
+  title: string; content: string; loading?: string;
+  /** Hands back one rendered row so a click on a link can be resolved to it. */
+  measureLine?: (index: number, node: unknown) => void;
+}) {
   const lines = content.split("\n").slice(0, 200);
   return <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} flexShrink={0}>
     <Text color={theme.accent} bold>{title} · Esc/Enter 返回</Text>
-    {lines.map((line, index) => <Text key={`${index}-${line.slice(0, 24)}`} color={theme.muted} wrap="truncate-end">{line || " "}</Text>)}
+    {lines.map((line, index) => (
+      <Box key={`${index}-${line.slice(0, 24)}`} height={1} flexShrink={0} ref={(node) => { measureLine?.(index, node); }}>
+        <Text color={theme.muted} wrap="truncate-end">{line || " "}</Text>
+      </Box>
+    ))}
     {loading ? <Box height={1} flexShrink={0}><Spinner color={theme.accent} /><Text color={theme.muted}> {loading}</Text></Box> : null}
   </Box>;
 }
@@ -552,7 +561,7 @@ function HelpPanel() {
       <Text color={theme.accent} bold>快捷键与命令</Text>
       <Text color={theme.muted}>Shift+Tab 模式 · Ctrl+P 模型 · Ctrl+O 会话 · Esc 取消</Text>
       <Text color={theme.muted}>↑↓ 历史 · PgUp/PgDn 翻页 · Ctrl+J 换行 · @ 文件补全</Text>
-      <Text color={theme.muted}>Ctrl+Y 复制上次回答 · 输出区拖选即复制（Shift+拖选走终端原生）· /copy 复制回答与工具记录</Text>
+      <Text color={theme.muted}>Ctrl+Y 复制上次回答 · 输出区拖选即复制（Shift+拖选走终端原生）· 点击链接用浏览器打开 · /copy 复制回答与工具记录</Text>
       <Text color={theme.muted}>Ctrl+C 运行中中断任务 / 空闲复制回答 · Ctrl+D 保存并退出 · /exit 退出</Text>
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /usage /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
@@ -864,6 +873,16 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const selectionRef = useRef<TranscriptSelection | null>(null);
   const selectionAnchorRef = useRef<SelectionPoint | null>(null);
   const selectionRowsRef = useRef<{ rect: ScreenRect | null; first: number; visible: number; lines: string[] }>({ rect: null, first: 0, visible: 0, lines: [] });
+  // URL under the press: a drag copies, a click on a link opens it.
+  const linkPressRef = useRef<string | null>(null);
+  // Read-only dialog rows, measured one by one. A press is matched to the row
+  // it landed on instead of a shared box that also holds a border and padding.
+  const infoLineNodesRef = useRef(new Map<number, LayoutNode>());
+  const infoDialogLinesRef = useRef<string[]>([]);
+  const measureInfoLine = (index: number, node: unknown): void => {
+    if (node) infoLineNodesRef.current.set(index, node as LayoutNode);
+    else infoLineNodesRef.current.delete(index);
+  };
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
@@ -919,20 +938,51 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       const row = first + Math.min(visible - 1, Math.max(0, rowInPane));
       return { row, column: Math.min(Math.max(0, cell.column), displayWidth(lines[row] ?? "")) };
     };
-    const copySelection = (selected: TranscriptSelection | null): void => {
+    /** Copy a finished drag; false when the gesture selected no text. */
+    const copySelection = (selected: TranscriptSelection | null): boolean => {
       const text = selected ? selectedTranscriptText(selectionRowsRef.current.lines, selected) : "";
-      if (!text) return;
+      if (!text) return false;
       void (async () => {
         try { outputStream.write(osc52CopySequence(text)); } catch { /* native helper below */ }
+        // The helper process (PowerShell on Windows) takes a moment, so the
+        // notice goes out as soon as OSC52 is on the wire.
+        setNotice("已发送 OSC52 复制 · 正在写入系统剪贴板…");
         if (await writeSystemClipboard(text)) {
           setNotice("已复制选中内容 · Ctrl+V 粘贴");
         } else {
           const path = join(config.home, "last-selection.txt");
           await mkdir(config.home, { recursive: true });
           await writeFile(path, text, "utf8");
-          setNotice(`已发送 OSC52；终端若未复制，可从 ${path} 读取选中内容`);
+          setNotice(`已发送 OSC52（Windows Terminal 不支持）；未找到系统剪贴板工具，选中内容已存至 ${path}`);
         }
       })().catch((error) => setNotice(`选区复制失败：${error instanceof Error ? error.message : String(error)}`));
+      return true;
+    };
+    // The URL drawn at one cell of the transcript, resolved through the same
+    // physical rows the selection copies from.
+    const urlAt = (point: SelectionPoint | null): string | null =>
+      point ? findUrlAt(selectionRowsRef.current.lines[point.row] ?? "", point.column) : null;
+    const openLink = (url: string): void => {
+      void openExternal(url).then((opened) => setNotice(opened
+        ? `已在浏览器打开 ${oneLine(url, 70)}`
+        : `无法打开链接 ${oneLine(url, 70)} · 请复制到浏览器`));
+    };
+    // A click is a press and a release on the same link; a drag that collected
+    // text never opens anything.
+    const openClickLink = (point: SelectionPoint | null): void => {
+      const url = clickTarget(linkPressRef.current, urlAt(point));
+      if (url) openLink(url);
+    };
+    // Dialog rows are one row tall each, so the press row picks the row and the
+    // column inside that row picks the link.
+    const dialogUrlAt = (report: MouseReport): string | null => {
+      for (const [index, node] of infoLineNodesRef.current) {
+        const position = absolutePosition(node);
+        if (!position || report.y - 1 !== position.top) continue;
+        const url = findUrlAt(infoDialogLinesRef.current[index] ?? "", report.x - 1 - position.left);
+        if (url) return url;
+      }
+      return null;
     };
     const onData = (chunk: Buffer) => {
       let up = 0;
@@ -977,7 +1027,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             selectionAnchorRef.current = null;
             selectionRef.current = selected;
             setSelection(selected);
-            copySelection(selected);
+            if (!copySelection(selected)) openClickLink(focus);
             continue;
           }
           const drag = dragRef.current;
@@ -995,6 +1045,13 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         }
 
         if (!isLeftPress(report)) continue;
+
+        // A press on a link inside a read-only dialog opens it: with mouse
+        // reporting on, the terminal no longer handles clicks itself.
+        const dialogUrl = dialogUrlAt(report);
+        if (dialogUrl) { linkPressRef.current = null; openLink(dialogUrl); continue; }
+
+        linkPressRef.current = null;
 
         const request = questionRequestRef.current;
         if (request) {
@@ -1023,6 +1080,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         // Anywhere else in the transcript starts a selection.
         const anchor = selectionPoint(report, false);
         selectionAnchorRef.current = anchor;
+        linkPressRef.current = urlAt(anchor);
         selectionRef.current = anchor ? { anchor, focus: anchor } : null;
         setSelection(selectionRef.current);
       }
@@ -1299,6 +1357,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     try {
       stdout.write(osc52CopySequence(text));
     } catch { /* OSC52 unsupported: fall back to helper below */ }
+    // A native helper starts a process (PowerShell on Windows), so confirm the
+    // OSC 52 path immediately and refine the notice when the write settles.
+    setNotice("已发送 OSC52 复制 · 正在写入系统剪贴板…");
     const system = await writeSystemClipboard(text);
     if (system) {
       setNotice("已复制到系统剪贴板 · Ctrl+V 粘贴");
@@ -1307,7 +1368,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     try {
       const path = join(config.home, "last-copy.md");
       await writeFile(path, text, "utf8");
-      setNotice(`OSC52 已发送（GNOME Terminal 可能忽略）· 未检测到剪贴板工具，已另存 ${path}`);
+      setNotice(`OSC52 已发送（Windows Terminal/GNOME 可能忽略）· 未找到系统剪贴板工具，内容已另存 ${path}`);
     } catch (error) {
       setNotice(`已发送 OSC52 复制 · 文件备份失败: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -2746,6 +2807,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     if (growth <= 0) return;
     setScrollOffset((current) => current > 0 ? Math.min(streamView.maxOffset, current + growth) : 0);
   }, [streamView.total, streamView.maxOffset, scrollLayout]);
+  // Rows of the current info dialog, so a click can be resolved to a link.
+  infoDialogLinesRef.current = dialog?.type === "info" ? (dialog.content ?? "").split("\n").slice(0, 200) : [];
   const taskPlan = readPlan(sessionRef.current.messages);
   const remotePlan = useMemo(() => focusedRecords?.length ? jobPlan(focusedRecords) : undefined, [focusedRecords, meshStreamRevision]);
   const remotePlanOwner = showMesh && remotePlan && focusedJob
@@ -2812,7 +2875,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {dialog?.type === "mcp" ? <SelectDialog title="MCP · Enter 试连 · e 启停 · t 信任 · x 删除" rows={mcpRows} index={Math.min(dialog.index, Math.max(0, mcpRows.length - 1))} query="" /> : null}
         {dialog?.type === "diff" ? <DiffDialog diff={diff} /> : null}
         {dialog?.type === "verify" ? <VerifyDialog records={verifications} gate={verificationStatus} /> : null}
-        {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} loading={dialog.loading} /> : null}
+        {dialog?.type === "info" ? <InfoDialog title={dialog.title ?? "结果"} content={dialog.content ?? ""} loading={dialog.loading} measureLine={measureInfoLine} /> : null}
         {dialog?.type === "codex-reset" ? <ResetDialog content={dialog.content ?? ""} /> : null}
         {dialog?.type === "theme" ? <ThemeDialog index={dialog.index} preview={rows >= 36 && terminalSize.columns >= 80} /> : null}
         {dialog?.type === "export" ? <ExportDialog value={dialogQuery} defaultName={defaultExportFilename(config.project, sessionRef.current.id)} dest={expandExportPath(dialogQuery, config.project, sessionRef.current.id)} /> : null}
@@ -2941,7 +3004,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             <Text color={theme.dim} wrap="truncate-end">
               {`${config.model.name}  ${usage.input}↑ ${usage.output}↓${usage.cached ? ` · cache ${Math.round(usage.cached / Math.max(1, usage.input) * 100)}%` : ""} · ctx ${contextPct}%`}
               <Text color={theme.text}>  Enter 发送 · Ctrl+J 换行</Text>
-              <Text>  Ctrl+Y 复制回答 · 拖选即复制</Text>
+              <Text>  Ctrl+Y 复制 · 拖选即复制 · 点击链接打开</Text>
               {pendingCount ? <Text color={theme.accent}>  {pendingCount} pending</Text> : null}
             </Text>
           </Box>

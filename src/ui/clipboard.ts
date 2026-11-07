@@ -8,45 +8,93 @@ export function osc52CopySequence(text: string): string {
   return `\x1b]52;c;${payload}\x07`;
 }
 
-/** Clipboard helpers, tried in order: Wayland first, then X11. */
-const CLIPBOARD_COMMANDS: Array<{ command: string; args: string[] }> = [
-  { command: "wl-copy", args: [] },
-  { command: "xclip", args: ["-selection", "clipboard"] },
-  { command: "xsel", args: ["--clipboard", "--input"] },
-];
+/**
+ * One way to reach the system clipboard.
+ *
+ * `args` returns null when the payload does not fit that writer (Windows caps a
+ * command line), and `stdin` returns null when the text is already carried in
+ * the arguments. Both are functions so a large selection can skip the first
+ * writer and fall through to the next instead of failing outright.
+ */
+export interface ClipboardWriter {
+  command: string;
+  args: (text: string) => string[] | null;
+  stdin?: (text: string) => string | Buffer | null;
+  timeoutMs?: number;
+}
 
-/** Pipe text into one clipboard helper; resolve true only on a clean exit. */
-function pipeToClipboard(command: string, args: string[], text: string, timeoutMs = 1500): Promise<boolean> {
+/** Longest base64 payload that stays well inside the Windows command-line limit. */
+const MAX_POWERSHELL_PAYLOAD = 20000;
+
+/**
+ * `Set-Clipboard` with the text as a base64 argument.
+ *
+ * Piping text into clip.exe decodes it with the console code page, so a Chinese
+ * selection reaches the clipboard as mojibake. PowerShell is given the UTF-8
+ * bytes instead and decodes them itself, which is independent of the console.
+ */
+export function powershellClipboardArgs(text: string): string[] | null {
+  const payload = Buffer.from(text, "utf8").toString("base64");
+  if (!payload || payload.length > MAX_POWERSHELL_PAYLOAD) return null;
+  return [
+    "-NoProfile", "-NonInteractive", "-Command",
+    `Set-Clipboard -Value ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}')))`,
+  ];
+}
+
+/**
+ * Clipboard helpers for the current platform, in the order they are tried.
+ *
+ * OSC 52 alone is not enough: Windows Terminal and conhost ignore it, and VTE
+ * (GNOME Terminal) disables clipboard writes from applications by default, so a
+ * copy that "succeeded" over OSC 52 never reaches the user's Ctrl+V. A native
+ * helper writes straight to the desktop clipboard, which is the path that works.
+ */
+export function clipboardWriters(platform: NodeJS.Platform = process.platform): ClipboardWriter[] {
+  if (platform === "darwin") return [
+    { command: "pbcopy", args: () => [], stdin: (text) => text },
+  ];
+  if (platform === "win32") return [
+    // PowerShell starts slower than clip.exe but handles CJK and long text.
+    { command: "powershell.exe", args: powershellClipboardArgs, timeoutMs: 5000 },
+    // Last resort: ASCII-only in practice, but better than losing the copy.
+    { command: "clip", args: () => [], stdin: (text) => text, timeoutMs: 2000 },
+  ];
+  return [
+    { command: "wl-copy", args: () => [], stdin: (text) => text },
+    { command: "xclip", args: () => ["-selection", "clipboard"], stdin: (text) => text },
+    { command: "xsel", args: () => ["--clipboard", "--input"], stdin: (text) => text },
+  ];
+}
+
+/** Run one writer; resolve true only on a clean exit. */
+function runWriter(writer: ClipboardWriter, text: string): Promise<boolean> {
+  const args = writer.args(text);
+  if (!args) return Promise.resolve(false);
+  const input = writer.stdin ? writer.stdin(text) : null;
   return new Promise((resolve) => {
     let settled = false;
     const done = (value: boolean) => { if (!settled) { settled = true; resolve(value); } };
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(command, args, { stdio: ["pipe", "ignore", "ignore"] });
+      child = spawn(writer.command, args, { stdio: [input === null ? "ignore" : "pipe", "ignore", "ignore"] });
     } catch {
       done(false);
       return;
     }
-    const timer = setTimeout(() => { child.kill(); done(false); }, timeoutMs);
+    const timer = setTimeout(() => { child.kill(); done(false); }, writer.timeoutMs ?? 1500);
     timer.unref?.();
     child.on("error", () => { clearTimeout(timer); done(false); });
     child.on("close", (code) => { clearTimeout(timer); done(code === 0); });
     child.stdin?.on("error", () => { /* EPIPE when the helper died early; close decides. */ });
-    child.stdin?.end(text);
+    if (input !== null) child.stdin?.end(input);
   });
 }
 
-/**
- * Write the system clipboard through a native helper.
- *
- * OSC 52 alone is not enough on GNOME Terminal: VTE disables clipboard writes
- * from terminal applications by default, so a copy that "succeeded" over OSC 52
- * never reaches the user's Ctrl+V. wl-copy/xclip/xsel go straight to the
- * desktop clipboard and are the path that actually works there.
- */
-export async function writeSystemClipboard(text: string): Promise<boolean> {
-  for (const { command, args } of CLIPBOARD_COMMANDS) {
-    if (await pipeToClipboard(command, args, text)) return true;
+/** Write the system clipboard through the first native helper that works. */
+export async function writeSystemClipboard(text: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+  for (const writer of clipboardWriters(platform)) {
+    if (await runWriter(writer, text)) return true;
   }
   return false;
 }
