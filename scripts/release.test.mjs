@@ -20,13 +20,15 @@ test("native platform and architecture artifact matrix", () => {
     for (const arch of arches) {
       const plan = planned([], host, arch, "2.0.1");
       assert.equal(plan.platform, platform);
-      assert.equal(plan.artifacts.length, 2);
+      // Windows adds a single-file exe to every CLI build, plus an installer for `all`.
+      assert.equal(plan.artifacts.length, platform === "windows" ? 4 : 2);
       assert.equal(plan.script, `package-${platform}.mjs`);
       assert.ok(plan.artifacts.every(name => name.includes("2.0.1")));
     }
   }
   assert.deepEqual(planned(["--kind", "desktop"], "linux", "x64", "2.0.1").artifacts, ["luban-desktop_2.0.1_amd64.deb"]);
-  assert.deepEqual(planned(["--kind", "cli"], "win32", "x64", "2.0.1").artifacts, ["luban-cli-2.0.1-win-x64.zip"]);
+  assert.deepEqual(planned(["--kind", "cli"], "win32", "x64", "2.0.1").artifacts, ["luban-cli-2.0.1-win-x64.zip", "luban-2.0.1-win-x64.exe"]);
+  assert.deepEqual(planned(["--kind", "setup"], "win32", "x64", "2.0.1").artifacts, ["luban-2.0.1-win-x64-setup.exe"]);
   // macOS desktop ships a disk image; every other target keeps a single archive.
   assert.deepEqual(planned(["--platform", "mac", "--dry-run"], "darwin", "arm64", "2.0.1").artifacts, ["luban-cli-2.0.1-mac-arm64.zip", "luban-desktop-2.0.1-mac-arm64.dmg"]);
   assert.deepEqual(planned(["--platform", "mac"], "darwin", "x64", "2.0.1").fallbacks, [null, "luban-desktop-2.0.1-mac-x64.zip"]);
@@ -37,6 +39,8 @@ test("rejects invalid options and cross compilation before starting builds", () 
   for (const args of [["--platform", "windows"], ["--kind", "bad"], ["--platform"], ["--bogus"], ["--platform", "other"]]) {
     assert.throws(() => releasePlan(args, "linux", "x64"));
   }
+  // The installer wraps the Windows single-file build only.
+  assert.throws(() => releasePlan(["--kind", "setup"], "linux", "x64"));
   assert.throws(() => releasePlan([], "win32", "arm64"));
   assert.throws(() => releasePlan([], "freebsd", "x64"));
   assert.equal(planned(["--dry-run"], "linux", "arm64", "2.0.1").dryRun, true);

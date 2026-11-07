@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Box, Text } from "ink";
 import { PNG } from "pngjs";
+import { resourceRoot } from "../runtime-env.js";
 import { activeTheme, theme, type LoadingAnimation } from "./theme.js";
 
 export type PetPixel = readonly [number, number, number, number];
@@ -44,12 +46,21 @@ export function loadPetFrames(animation: LoadingAnimation): PetFrame[] | null {
   if (cache.has(animation)) return cache.get(animation)!;
   let frames: PetFrame[] | null = null;
   try {
-    const built = new URL(`../assets/${animation.asset}`, import.meta.url);
-    const source = new URL(`../../assets/${animation.asset}`, import.meta.url);
-    frames = rasterizePet(PNG.sync.read(readFileSync(existsSync(built) ? built : source)), animation);
+    frames = rasterizePet(PNG.sync.read(readFileSync(artworkPath(animation.asset))), animation);
   } catch { /* Missing artwork must never interrupt an agent run. */ }
   cache.set(animation, frames);
   return frames;
+}
+
+/** Packaged artwork beside a SEA executable, else the dist or source asset. */
+function artworkPath(name: string): string | URL {
+  const packaged = resourceRoot();
+  const candidates = [
+    packaged ? join(packaged, "assets", name) : undefined,
+    new URL(`../assets/${name}`, import.meta.url),
+    new URL(`../../assets/${name}`, import.meta.url),
+  ];
+  return candidates.find(candidate => candidate && existsSync(candidate)) ?? candidates[2]!;
 }
 
 /** Braille preserves eight silhouette samples per cell without solid color blocks. */

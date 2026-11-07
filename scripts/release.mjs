@@ -9,9 +9,10 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** @type {Record<string, string>} */
 const aliases = { linux: "linux", windows: "windows", win32: "windows", macos: "macos", mac: "macos", darwin: "macos" };
-const help = `Usage: npm run release -- [--platform auto|linux|windows|macos] [--kind all|cli|desktop] [--dry-run]
+const help = `Usage: npm run release -- [--platform auto|linux|windows|macos] [--kind all|cli|desktop|setup] [--dry-run]
 
 Defaults: current OS, CLI and Desktop. Outputs go to release/ with SHA-256 checksums.
+Windows CLI builds also emit a single-file luban.exe; all/setup add a 7-Zip SFX installer.
 macOS Desktop prefers a .dmg image and falls back to a .zip when hdiutil fails.
 Build on the target OS using its native Node architecture; cross-compilation is not supported.
 Install dependencies with npm ci first. No git changes, tags, or uploads are performed.
@@ -47,21 +48,42 @@ export function releasePlan(args, host = process.platform, arch = process.arch, 
   }
   platform = platform === "auto" ? aliases[host] : aliases[platform];
   if (!platform || typeof platform !== "string") throw new Error("Unsupported platform; choose linux, windows, or macos");
-  if (!["all", "cli", "desktop"].includes(kind)) throw new Error("--kind must be all, cli, or desktop");
+  if (!["all", "cli", "desktop", "setup"].includes(kind)) throw new Error("--kind must be all, cli, desktop, or setup");
   if (platform !== aliases[host]) throw new Error(`Build ${platform} on a ${platform} host; cross-compilation is not supported`);
   if (!(platform === "windows" ? ["x64"] : ["x64", "arm64"]).includes(arch)) {
     throw new Error(`Unsupported architecture: ${platform}/${arch}`);
   }
+  // The installer wraps the Windows single-file build, so it has no peer elsewhere.
+  if (kind === "setup" && platform !== "windows") throw new Error("--kind setup is Windows-only; use cli or desktop elsewhere");
   const kinds = kind === "all" ? ["cli", "desktop"] : [kind];
-  const artifacts = kinds.map(item => platform === "linux"
-    ? `luban-${item}_${version}_${arch === "x64" ? "amd64" : arch}.deb`
-    : `luban-${item}-${version}-${platform === "windows" ? "win" : "mac"}-${arch}.${platform === "macos" && item === "desktop" ? "dmg" : "zip"}`);
-  // macOS Desktop is built as a DMG first; package-macos.mjs writes the zip when
-  // the image cannot be created, so checksumming has to follow what exists.
-  const fallbacks = kinds.map((item, index) => platform === "macos" && item === "desktop"
-    ? artifacts[index].replace(/\.dmg$/, ".zip")
-    : null);
-  return { platform, arch, kind, dryRun, artifacts, fallbacks, script: `package-${platform}.mjs`,
+  /** @typedef {{name: string, fallback: string | null}} Artifact */
+  /** @type {Artifact[]} */
+  const selected = [];
+  for (const item of kinds) {
+    if (platform === "linux") {
+      selected.push({ name: `luban-${item}_${version}_${arch === "x64" ? "amd64" : arch}.deb`, fallback: null });
+    } else if (platform === "windows") {
+      if (item === "setup") {
+        selected.push({ name: `luban-${version}-win-${arch}-setup.exe`, fallback: null });
+        continue;
+      }
+      selected.push({ name: `luban-${item}-${version}-win-${arch}.zip`, fallback: null });
+      // The CLI zip ships a portable runtime; the single-file exe is the same
+      // product without a node.exe tree next to it.
+      if (item === "cli") selected.push({ name: `luban-${version}-win-${arch}.exe`, fallback: null });
+    } else {
+      const extension = item === "desktop" ? "dmg" : "zip";
+      const name = `luban-${item}-${version}-mac-${arch}.${extension}`;
+      // macOS Desktop is built as a DMG first; package-macos.mjs writes the zip
+      // when the image cannot be created, so checksumming follows what exists.
+      selected.push({ name, fallback: extension === "dmg" ? name.replace(/\.dmg$/u, ".zip") : null });
+    }
+  }
+  if (platform === "windows" && kind === "all") {
+    selected.push({ name: `luban-${version}-win-${arch}-setup.exe`, fallback: null });
+  }
+  return { platform, arch, kind, dryRun, artifacts: selected.map(entry => entry.name),
+    fallbacks: selected.map(entry => entry.fallback), script: `package-${platform}.mjs`,
     checksums: `SHA256SUMS-${version}-${platform}-${arch}-${kind}.txt` };
 }
 
@@ -124,9 +146,10 @@ async function main() {
   console.log(`Release ${pkg.version}: ${plan.platform}/${plan.arch} (${plan.kind})`);
   console.log([...plan.artifacts, plan.checksums].map(name => `  release/${name}`).join("\n"));
   if (plan.dryRun) return;
-  // Electron 44 does not download its runtime during npm ci. CLI-only builds
-  // stay independent of Electron; desktop builds ensure its native runtime.
-  if (plan.kind !== "cli") run(join(root, "node_modules", "electron", "install.js"));
+  // Electron 44 does not download its runtime during npm ci. CLI-only and
+  // installer-only builds stay independent of Electron; desktop builds ensure
+  // its native runtime.
+  if (plan.kind === "all" || plan.kind === "desktop") run(join(root, "node_modules", "electron", "install.js"));
   const directory = join(root, "release");
   /** @type {Map<string, string|null>} */
   const before = new Map();

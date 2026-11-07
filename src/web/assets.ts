@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resourceRoot } from "../runtime-env.js";
 
 /**
  * Built React bundle directory.
@@ -8,6 +9,9 @@ import { fileURLToPath } from "node:url";
  * in dist/web-ui. Keeping them apart means neither build can overwrite the other.
  */
 export function webRoot(): string {
+  // A SEA executable ships web-ui beside the binary; there is no dist/ tree.
+  const packaged = resourceRoot();
+  if (packaged) return join(packaged, "web-ui");
   return join(dirname(fileURLToPath(import.meta.url)), "..", "web-ui");
 }
 

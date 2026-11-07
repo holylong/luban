@@ -148,7 +148,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          # The single-file exe needs SEA support for an ES module main script
+          # ({ "mainFormat": "module" }), which Node 22 does not provide.
+          node-version: "26"
           cache: npm
       - name: Verify version tag
         shell: pwsh
@@ -163,19 +165,21 @@ jobs:
       # never runs during `npm ci`. Fetch the runtime explicitly before packaging.
       - name: Ensure Electron runtime
         run: node node_modules/electron/install.js
-      - name: Build Windows CLI and Desktop packages
+      - name: Build Windows ZIPs, single-file exe and installer
         run: npm run release -- --platform windows
       - name: Write release notes
         shell: pwsh
         run: |
           $version = node -p "require('./package.json').version"
           $lines = @(
-            "Windows x64 ZIP 包（解压即用，无需安装）：",
+            "Windows x64 安装程序与便携包：",
             "",
+            "luban-${version}-win-x64-setup.exe：安装程序，安装到 %LOCALAPPDATA%\Programs\luban，自动加入用户 PATH 并创建开始菜单/桌面快捷方式；从「设置 > 应用」或安装目录的 uninstall.cmd 卸载。",
+            "luban-${version}-win-x64.exe：单文件终端版，可放到任意目录运行；把安装目录的 assets 与 web-ui 放在同级即可获得完整皮肤和浏览器控制台。",
             "luban-cli-${version}-win-x64.zip：终端版，解压后运行 luban.cmd。",
             "luban-desktop-${version}-win-x64.zip：图形桌面版，解压后运行 luban-desktop.cmd（内含 luban.cmd）。",
             "",
-            "两个 ZIP 可单独使用，也可同时解压。解压包已内置 Node.js 运行时，无需预装 Node.js。",
+            "所有包均已内置 Node.js 运行时，无需预装 Node.js。",
             "配置目录：%USERPROFILE%\.luban\config.json。"
           )
           Set-Content -Path windows-release-notes.md -Value $lines -Encoding utf8
@@ -187,7 +191,9 @@ jobs:
           $version = node -p "require('./package.json').version"
           $cli = "release/luban-cli-${version}-win-x64.zip"
           $desktop = "release/luban-desktop-${version}-win-x64.zip"
-          foreach ($asset in @($cli, $desktop)) {
+          $exe = "release/luban-${version}-win-x64.exe"
+          $setup = "release/luban-${version}-win-x64-setup.exe"
+          foreach ($asset in @($cli, $desktop, $exe, $setup)) {
             if (-not (Test-Path $asset) -or (Get-Item $asset).Length -eq 0) {
               throw "missing or empty asset: $asset"
             }
@@ -199,10 +205,10 @@ jobs:
             $uploaded = $false
             gh release view $env:GITHUB_REF_NAME *> $null
             if ($LASTEXITCODE -eq 0) {
-              gh release upload $env:GITHUB_REF_NAME $cli $desktop --clobber
+              gh release upload $env:GITHUB_REF_NAME $cli $desktop $exe $setup --clobber
               $uploaded = ($LASTEXITCODE -eq 0)
             } else {
-              gh release create $env:GITHUB_REF_NAME $cli $desktop --verify-tag --title "luban $version" --notes-file windows-release-notes.md
+              gh release create $env:GITHUB_REF_NAME $cli $desktop $exe $setup --verify-tag --title "luban $version" --notes-file windows-release-notes.md
               $uploaded = ($LASTEXITCODE -eq 0)
             }
             if ($uploaded) { break }
@@ -211,7 +217,7 @@ jobs:
           }
           if (-not $uploaded) { throw "release publish did not succeed after 5 attempts" }
           $count = gh release view $env:GITHUB_REF_NAME --json assets --jq '.assets | length'
-          if ([int]$count -lt 2) { throw "expected at least 2 assets, found $count" }
+          if ([int]$count -lt 4) { throw "expected at least 4 assets, found $count" }
 
   macos:
     needs: verify
@@ -324,8 +330,10 @@ jobs:
           - \`luban-cli_${version}_amd64.deb\`：终端版，安装后运行 \`luban\` 或 \`luban-cli\`。
           - \`luban-desktop_${version}_amd64.deb\`：图形桌面版，安装后运行 \`luban-desktop\`。
 
-          **Windows x64**（ZIP，解压即用，已内置 Node.js）
+          **Windows x64**（安装程序、单文件 exe 与 ZIP，均已内置 Node.js）
 
+          - \`luban-${version}-win-x64-setup.exe\`：安装程序，安装到 \`%LOCALAPPDATA%\\Programs\\luban\` 并加入用户 PATH；从「设置 > 应用」或安装目录的 \`uninstall.cmd\` 卸载。
+          - \`luban-${version}-win-x64.exe\`：单文件终端版，可放到任意目录运行。
           - \`luban-cli-${version}-win-x64.zip\`：解压后运行 \`luban.cmd\`。
           - \`luban-desktop-${version}-win-x64.zip\`：解压后运行 \`luban-desktop.cmd\`（含 \`luban.cmd\`）。
 

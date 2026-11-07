@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PNG } from "pngjs";
 import stringWidth from "string-width";
+import { resourceRoot } from "../runtime-env.js";
 import { activeThemeId, theme } from "./theme.js";
 
 type RGB = [number, number, number];
@@ -125,8 +127,16 @@ export function mascotOutput(stdout: NodeJS.WriteStream, env = process.env): Nod
     || env.NO_COLOR !== undefined || env.FORCE_COLOR === "0" || env.TERM === "dumb") return stdout;
   let image: PNG;
   try {
-    const built = new URL("../assets/luban-mascot.png", import.meta.url);
-    image = PNG.sync.read(readFileSync(existsSync(built) ? built : new URL("../../assets/luban-mascot.png", import.meta.url)));
+    // A SEA executable ships its artwork beside the binary; the dist and source
+    // copies stay as fallbacks for a normal Node install.
+    const packaged = resourceRoot();
+    const candidates = [
+      packaged ? join(packaged, "assets", "luban-mascot.png") : undefined,
+      new URL("../assets/luban-mascot.png", import.meta.url),
+      new URL("../../assets/luban-mascot.png", import.meta.url),
+    ];
+    const file = candidates.find(candidate => candidate && existsSync(candidate)) ?? candidates[2]!;
+    image = PNG.sync.read(readFileSync(file));
   } catch { return stdout; }
   const trueColor = /^(truecolor|24bit)$/i.test(env.COLORTERM ?? "") || env.FORCE_COLOR === "3"
     || Boolean(env.WT_SESSION) || /kitty|direct/i.test(env.TERM ?? "");
