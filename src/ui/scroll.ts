@@ -12,6 +12,12 @@
  * makes the wheel feel broken).
  */
 
+/** Preserve a scrolled reader's position only for output growth in the same layout.
+ * Expanding details or rewrapping lines must not add a second scroll movement. */
+export function outputGrowth(previous: { total: number; layout: string }, next: { total: number; layout: string }): number {
+  return previous.layout === next.layout ? Math.max(0, next.total - previous.total) : 0;
+}
+
 export interface ListWindow {
   total: number;
   pageSize: number;

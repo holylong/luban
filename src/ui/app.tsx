@@ -47,7 +47,7 @@ import { createTranscriptLayout, TranscriptLineView } from "./transcript-lines.j
 import { selectedTranscriptText, selectionSpan, type SelectionPoint, type TranscriptSelection } from "./transcript-selection.js";
 import { TextArea } from "./text-area.js";
 import { DiffLine as CodeDiffLine } from "./execution-view.js";
-import { listWindow, scrollPercent, scrollbarThumb } from "./scroll.js";
+import { listWindow, outputGrowth, scrollPercent, scrollbarThumb } from "./scroll.js";
 import { absolutePosition, ScrollBar, type LayoutNode } from "./scroll-bar.js";
 import {
   MOUSE_WHEEL_DOWN,
@@ -874,7 +874,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // long-lived stdin listener: re-subscribing on every streamed line would
   // churn, and a closed-over value would freeze mid-run counts.
   const streamMetricsRef = useRef({ totalLines: 0, viewport: 24 });
-  const lastStreamTotalRef = useRef(0);
+  const lastStreamTotalRef = useRef({ total: 0, layout: "" });
   const scrollOffsetRef = useRef(0);
   // Where the scrollbar column sits on screen, so a press can be hit-tested
   // against the track rather than guessed from layout constants.
@@ -2738,12 +2738,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   inputGeometryRef.current = screenRect(inputNodeRef.current);
   // New output would otherwise push the reader's place away: while scrolled
   // back, follow the growth so the same lines stay on screen.
+  const scrollLayout = JSON.stringify([showDetails, streamTextWidth, showMesh, focusedJobId, sessionRef.current.id]);
   useEffect(() => {
-    const growth = streamView.total - lastStreamTotalRef.current;
-    lastStreamTotalRef.current = streamView.total;
+    const next = { total: streamView.total, layout: scrollLayout };
+    const growth = outputGrowth(lastStreamTotalRef.current, next);
+    lastStreamTotalRef.current = next;
     if (growth <= 0) return;
     setScrollOffset((current) => current > 0 ? Math.min(streamView.maxOffset, current + growth) : 0);
-  }, [streamView.total, streamView.maxOffset]);
+  }, [streamView.total, streamView.maxOffset, scrollLayout]);
   const taskPlan = readPlan(sessionRef.current.messages);
   const remotePlan = useMemo(() => focusedRecords?.length ? jobPlan(focusedRecords) : undefined, [focusedRecords, meshStreamRevision]);
   const remotePlanOwner = showMesh && remotePlan && focusedJob

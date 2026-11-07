@@ -32,6 +32,26 @@ export function toAttachedImage(path: string): AttachedImage | null {
 
 export interface ResolvedImage { mime: string; base64: string; path: string }
 
+export class InvalidImageError extends Error {}
+
+/** Validate the declared format before forwarding bytes to a model gateway. */
+export function validateImageBytes(bytes: Buffer, mime: string, path: string): void {
+  const png = Buffer.from("89504e470d0a1a0a", "hex");
+  const valid = mime === "image/png" ? bytes.subarray(0, 8).equals(png)
+    : mime === "image/jpeg" ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    : mime === "image/gif" ? /^(GIF87a|GIF89a)$/.test(bytes.subarray(0, 6).toString("ascii"))
+    : mime === "image/webp" ? bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP"
+    : mime === "image/bmp" ? bytes.subarray(0, 2).toString() === "BM"
+    : mime === "image/avif" ? bytes.subarray(4, 8).toString() === "ftyp" && /avif|avis/.test(bytes.subarray(8, 32).toString("ascii"))
+    : false;
+  if (valid) return;
+  const offset = bytes.indexOf(png);
+  const hint = offset > 0
+    ? ` PNG signature is at byte ${offset}, not byte 0; screenshot warnings or shell redirection may have polluted the file. Capture binary output separately from stderr (for Android, use adb shell screencap -p /sdcard/shot.png then adb pull).`
+    : " File bytes do not match the declared image format; recapture or export a valid image.";
+  throw new InvalidImageError(`Invalid image ${path} (${mime}).${hint}`);
+}
+
 /** Read attached image bytes fresh from the workspace; skips unreadable files. */
 export async function resolveImageParts(workspace: string, images: AttachedImage[] | undefined): Promise<ResolvedImage[]> {
   if (!images?.length) return [];
@@ -45,9 +65,12 @@ export async function resolveImageParts(workspace: string, images: AttachedImage
       const abs = await resolveInside(workspace, image.path);
       const info = await stat(abs);
       if (!info.isFile() || info.size > MAX_IMAGE_BYTES) continue;
-      const base64 = (await readFile(abs)).toString("base64");
+      const bytes = await readFile(abs);
+      validateImageBytes(bytes, image.mime, image.path);
+      const base64 = bytes.toString("base64");
       out.push({ mime: image.mime, base64, path: image.path });
-    } catch {
+    } catch (error) {
+      if (error instanceof InvalidImageError) throw error;
       // Dropped attachments are reported by the caller via remaining text.
     }
   }
@@ -74,6 +97,7 @@ export function attachImageTools(messages: ChatMessage[], workspace: string): To
       if (!attached) throw new Error("attach_image supports png/jpg/gif/webp/bmp/avif");
       const info = await stat(abs);
       if (!info.isFile() || info.size > MAX_IMAGE_BYTES) throw new Error(`image is too large (${info.size} bytes, max 8 MB)`);
+      validateImageBytes(await readFile(abs), attached.mime, rel);
       const target = [...messages].reverse().find((message) => message.role === "user");
       if (!target) throw new Error("no user message to attach to");
       target.images = [...(target.images ?? [])];

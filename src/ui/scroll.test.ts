@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { listWindow, scrollPercent, scrollbarThumb, streamWindow } from "./scroll.js";
+import { listWindow, outputGrowth, scrollPercent, scrollbarThumb, streamWindow } from "./scroll.js";
 
-const targets = (detailTotal: number, transcriptTotal: number, active = true): ScrollTargets => ({
-  detail: { total: detailTotal, pageSize: 10, active },
-  transcript: { total: transcriptTotal, pageSize: 4 },
+describe("output growth anchoring", () => {
+  it("does not jump on the first wheel notch that expands details", () => {
+    const growth = outputGrowth({ total: 100, layout: "collapsed" }, { total: 500, layout: "expanded" });
+    const view = listWindow(500, 20, 2 + growth);
+    expect(view.offset).toBe(2);
+    expect(view.end).toBe(498);
+  });
+  it("preserves position for new output but not resize or view switches", () => {
+    expect(outputGrowth({ total: 500, layout: "expanded:80:local" }, { total: 505, layout: "expanded:80:local" })).toBe(5);
+    expect(outputGrowth({ total: 500, layout: "expanded:80:local" }, { total: 700, layout: "expanded:60:local" })).toBe(0);
+    expect(outputGrowth({ total: 500, layout: "local" }, { total: 700, layout: "remote" })).toBe(0);
+    expect(outputGrowth({ total: 500, layout: "expanded" }, { total: 100, layout: "expanded" })).toBe(0);
+  });
 });
 
 describe("listWindow", () => {

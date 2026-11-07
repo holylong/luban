@@ -39,6 +39,25 @@ describe("vision attachments", () => {
     expect(parts).toEqual([]);
   });
 
+  it("rejects screenshot warning prefixes before attaching or sending", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-bad-screenshot-"));
+    const png = Buffer.from(TINY_PNG_BASE64, "base64");
+    await writeFile(join(root, "shot.png"), Buffer.concat([Buffer.from("[Warning] Multiple displays were found\n"), png]));
+    const messages: ChatMessage[] = [{ role: "user", content: "look" }];
+    const [attach] = attachImageTools(messages, root);
+    await expect(attach!.execute({ path: "shot.png" }, new AbortController().signal)).rejects.toThrow("PNG signature is at byte");
+    expect(messages[0]?.images).toBeUndefined();
+    await expect(openAiWireMessages([{ role: "user", content: "look", images: [{ path: "shot.png", mime: "image/png" }] }], root)).rejects.toThrow("screenshot warnings");
+    await writeFile(join(root, "shot.png"), png);
+    await expect(attach!.execute({ path: "shot.png" }, new AbortController().signal)).resolves.toContain("attached shot.png");
+  });
+
+  it("rejects bytes that do not match the declared MIME", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-wrong-mime-"));
+    await writeFile(join(root, "shot.jpg"), Buffer.from(TINY_PNG_BASE64, "base64"));
+    await expect(resolveImageParts(root, [{ path: "shot.jpg", mime: "image/jpeg" }])).rejects.toThrow("Invalid image");
+  });
+
   it("lets the model attach images to the current request", async () => {
     const root = await mkdtemp(join(tmpdir(), "luban-vision-attach-"));
     await writeFile(join(root, "shot.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
