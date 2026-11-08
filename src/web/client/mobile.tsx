@@ -745,12 +745,12 @@ export function MobileApp(): React.ReactElement {
   }
 
   return (
-    <div className="m-app">
+    <div className={`m-app ${tab === "live" ? "m-app-compose" : ""}`}>
       <header className="m-head">
         <div className="m-head-row">
           <span className={`m-dot ${dotClass}`} />
-          <span className="m-brand">luban <small>网页 {webVersion}</small></span>
-          <span className="m-head-meta">{nodeLabel}</span>
+          <span className="m-brand">luban</span>
+          <small className="m-version">{webVersion}</small>
           {relayMode && relayNodes.length > 0 && (
             <select value={scope ?? ""} onChange={event => chooseNode(event.target.value)} aria-label="选择 luban 实例">
               {relayNodes.map(item => (
@@ -760,7 +760,8 @@ export function MobileApp(): React.ReactElement {
           )}
           {relayMode && relayNodes.length === 0 && <span className="m-chip failed" style={{ marginLeft: "auto" }}>无设备</span>}
         </div>
-        <div className="m-head-meta">
+        <div className="m-head-meta" title={nodeLabel}>{nodeLabel}</div>
+        <div className="m-head-context">
           {job ? `${job.title || job.id} · ${STATUS_LABELS[job.status] ?? job.status}` : node?.workspace || (relayMode ? "选择一台电脑开始" : "未选择任务")}
           {activeJobs > 1 ? ` · ${activeJobs} 个进行中` : ""}
         </div>
@@ -1048,13 +1049,14 @@ export function MobileApp(): React.ReactElement {
         )}
       </main>
 
-      <div className="m-compose">
+      <div className="m-compose" hidden={tab !== "live"}>
         <div className="m-compose-box">
           <textarea
             ref={composerRef}
             value={draft}
             rows={1}
-            placeholder={continueSession ? `继续：${continueSession.title}` : job && ACTIVE_STATUS.has(job.status) ? "补充指令，Agent 会在下一步执行" : "让这台电脑的 Agent 做什么？"}
+            aria-label="任务指令"
+            placeholder={continueSession ? "继续当前会话…" : job && ACTIVE_STATUS.has(job.status) ? "补充指令…" : "让电脑帮你做什么？"}
             onChange={event => setDraft(event.target.value)}
             onKeyDown={event => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
@@ -1062,6 +1064,8 @@ export function MobileApp(): React.ReactElement {
           />
           <button className="m-send" disabled={busy || !draft.trim() || !node || Boolean(continueSession && (!sessionDetail || sessionError || sessionDetail.live?.running))} onClick={() => void submit()} aria-label="发送">↑</button>
         </div>
+        <details className="m-compose-options">
+          <summary>派活选项 <span>{continueSession ? "接续会话" : "新会话"} · {project || "当前工作区"} · {MODE_LABELS[mode]}</span></summary>
         <div className="m-compose-hint">
           {sessions.length > 0 && (
             <select
@@ -1094,6 +1098,7 @@ export function MobileApp(): React.ReactElement {
           </select>
           <span style={{ marginLeft: "auto" }}>{node?.interactive ? "可审批" : "自动放行"}</span>
         </div>
+        </details>
       </div>
 
       <nav className="m-tabs">

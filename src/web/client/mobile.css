@@ -150,6 +150,10 @@ a { color: var(--blue); }
   /* A long <select> option would otherwise size the implicit grid column to
      its max-content width, pushing the fifth tab off the right edge. */
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  /* A hidden composer must not leave an implicit row below navigation. */
+}
+.m-app-compose {
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   background: var(--bg);
 }
@@ -166,8 +170,9 @@ a { color: var(--blue); }
   gap: 8px;
 }
 .m-head-row { display: flex; align-items: center; gap: 9px; }
-.m-brand { font-size: 17px; font-weight: 750; letter-spacing: .01em; }
-.m-brand small { margin-left: 6px; font-size: 11.5px; font-weight: 500; color: var(--dim); letter-spacing: 0; }
+.m-brand { flex: none; font-size: 19px; font-weight: 750; letter-spacing: -.03em; }
+.m-version { flex: none; color: var(--dim); font: 11px var(--mono); }
+.m-head-context { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
 .m-dot.online { background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
 .m-dot.offline { background: var(--red); }
@@ -176,7 +181,10 @@ a { color: var(--blue); }
 .m-head-meta { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-head select {
   margin-left: auto;
-  max-width: 62%;
+  min-width: 0;
+  width: 52%;
+  max-width: 52%;
+  text-overflow: ellipsis;
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 11px;
@@ -296,8 +304,10 @@ a { color: var(--blue); }
 }
 .m-job.active { border-color: var(--active-line); background: var(--active-bg); }
 .m-job-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.m-job-meta { display: flex; align-items: center; gap: 7px; margin-top: 6px; color: var(--dim); font-size: 12.5px; }
+.m-job-meta { display: flex; flex-wrap: wrap; overflow-wrap: anywhere; align-items: center; gap: 7px; margin-top: 6px; color: var(--dim); font-size: 12.5px; }
 .m-chip {
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 3px 9px;
   border: 1px solid var(--line);
   border-radius: 99px;
@@ -393,6 +403,7 @@ a { color: var(--blue); }
   outline: 0;
   background: transparent;
   resize: none;
+  line-height: 1.5;
 }
 .m-send {
   width: 46px;
@@ -405,6 +416,12 @@ a { color: var(--blue); }
   font-weight: 800;
 }
 .m-send:disabled { opacity: .35; }
+.m-compose[hidden] { display: none; }
+.m-compose-options summary { display: flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; color: var(--muted); font-size: 12px; list-style: none; }
+.m-compose-options summary::after { content: "⌄"; margin-left: auto; }
+.m-compose-options[open] summary::after { content: "⌃"; }
+.m-compose-options summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.m-compose-options[open] .m-compose-hint { margin-top: 8px; }
 .m-compose-hint { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--dim); font-size: 12.5px; }
 .m-compose-hint select { min-width: 0; max-width: 100%; width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--muted); font-size: 13.5px; text-overflow: ellipsis; }
 .m-compose-hint select[aria-label="继续会话"] { grid-column: 1 / -1; }
@@ -431,7 +448,8 @@ a { color: var(--blue); }
   gap: 4px;
   justify-items: center;
 }
-.m-tab.active { color: var(--blue); }
+.m-tab.active { color: var(--blue); background: linear-gradient(var(--blue-soft), transparent); }
+.m-tab.active::before { content: ""; position: absolute; top: 0; width: 24px; height: 3px; border-radius: 0 0 3px 3px; background: var(--blue); }
 .m-tab .icon { font-size: 20px; line-height: 1; }
 .m-badge {
   position: absolute;
@@ -525,7 +543,7 @@ a { color: var(--blue); }
 .m-device { transition: border-color .15s ease, background .15s ease; }
 .m-device.active { border-color: var(--device-line); background: linear-gradient(180deg, var(--device-bg), var(--panel)); }
 .m-device-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.m-device-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-device-row strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-device-row .m-chip { margin-left: auto; }
 .m-device-path { margin-top: 6px; color: var(--dim); font: 12.5px var(--mono); overflow-wrap: anywhere; }
 .m-device-job { display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; font-size: 13.5px; line-height: 1.5; }
