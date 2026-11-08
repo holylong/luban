@@ -6,6 +6,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writ
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { patchInk } from "./patch-ink.mjs";
+import { ensureElectron, installRuntime } from "./lib/release-network.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
@@ -13,7 +14,10 @@ const selection = process.argv[2] || "all";
 if (process.platform !== "win32" || process.arch !== "x64") {
   throw new Error("package:windows requires Windows x64");
 }
-if (!["all", "cli", "desktop", "setup"].includes(selection)) throw new Error("choose all, cli, desktop, or setup");
+if (!["all", "cli", "desktop", "exe", "setup"].includes(selection)) throw new Error("choose all, cli, desktop, exe, or setup");
+if (["exe", "setup"].includes(selection) && Number(process.versions.node.split(".")[0]) < 25) {
+  throw new Error("Experimental EXE builds require Node.js >=25. Use npm run release for ZIP packages instead.");
+}
 
 const releaseDir = join(root, "release");
 const stageRoot = join(releaseDir, ".stage");
@@ -234,9 +238,8 @@ function copyRuntime(payload, kind) {
   for (const name of ["package.json", "package-lock.json", "README.md"]) {
     copyFileSync(join(root, name), join(app, name));
   }
-  // npm ci rejects a redirected stdin ("Input redirection is not supported"),
-  // which is exactly what a piped release run hands it.
-  run(`Install ${kind} runtime dependencies`, process.execPath, [npmCli(), "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], app, false, "ignore");
+  if (existsSync(join(root, ".npmrc"))) copyFileSync(join(root, ".npmrc"), join(app, ".npmrc"));
+  installRuntime(root, app, npmCli());
   patchInk(app);
   copyFileSync(process.execPath, join(payload, "node.exe"));
   const nodeLicense = resolve(dirname(process.execPath), "LICENSE");
@@ -289,7 +292,8 @@ async function packageVariant(kind) {
 }
 
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")]);
+if (selection === "all" || selection === "desktop") ensureElectron(root);
 if (selection === "all" || selection === "cli") await packageVariant("cli");
 if (selection === "all" || selection === "desktop") await packageVariant("desktop");
-if (selection === "all" || selection === "cli") await packageSingleExe();
-if (selection === "all" || selection === "setup") await packageSetup();
+if (selection === "exe") await packageSingleExe();
+if (selection === "setup") await packageSetup();

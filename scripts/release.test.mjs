@@ -4,6 +4,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { artifactSignature, releasePlan, resolveArtifacts, writeChecksums } from "./release.mjs";
+import { releaseEnvironment } from "./lib/release-network.mjs";
+
+test("domestic Electron mirror defaults preserve explicit overrides", () => {
+  assert.equal(releaseEnvironment({}).ELECTRON_MIRROR, "https://npmmirror.com/mirrors/electron/");
+  assert.equal(releaseEnvironment({ ELECTRON_MIRROR: "https://example.org/" }).ELECTRON_MIRROR, "https://example.org/");
+  assert.deepEqual(planned(["--kind", "exe"], "win32", "x64", "2.0.1").artifacts, ["luban-2.0.1-win-x64.exe"]);
+});
 
 /** @param {string[]} args @param {string} host @param {string} arch @param {string} version
  * @returns {import("./release.mjs").ReleasePlan} */
@@ -20,14 +27,13 @@ test("native platform and architecture artifact matrix", () => {
     for (const arch of arches) {
       const plan = planned([], host, arch, "2.0.1");
       assert.equal(plan.platform, platform);
-      // Windows adds a single-file exe to every CLI build, plus an installer for `all`.
-      assert.equal(plan.artifacts.length, platform === "windows" ? 4 : 2);
+      assert.equal(plan.artifacts.length, 2);
       assert.equal(plan.script, `package-${platform}.mjs`);
       assert.ok(plan.artifacts.every(name => name.includes("2.0.1")));
     }
   }
   assert.deepEqual(planned(["--kind", "desktop"], "linux", "x64", "2.0.1").artifacts, ["luban-desktop_2.0.1_amd64.deb"]);
-  assert.deepEqual(planned(["--kind", "cli"], "win32", "x64", "2.0.1").artifacts, ["luban-cli-2.0.1-win-x64.zip", "luban-2.0.1-win-x64.exe"]);
+  assert.deepEqual(planned(["--kind", "cli"], "win32", "x64", "2.0.1").artifacts, ["luban-cli-2.0.1-win-x64.zip"]);
   assert.deepEqual(planned(["--kind", "setup"], "win32", "x64", "2.0.1").artifacts, ["luban-2.0.1-win-x64-setup.exe"]);
   // macOS desktop ships a disk image; every other target keeps a single archive.
   assert.deepEqual(planned(["--platform", "mac", "--dry-run"], "darwin", "arm64", "2.0.1").artifacts, ["luban-cli-2.0.1-mac-arm64.zip", "luban-desktop-2.0.1-mac-arm64.dmg"]);
