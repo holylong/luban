@@ -15,7 +15,9 @@ const roots: string[] = [];
 afterEach(async () => {
   waiting.mockReset();
   waiting.mockImplementation(async (_ms, signal) => { signal.throwIfAborted(); });
-  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+  // A closed runner can still flush a subagent record for a tick; retry the
+  // recursive remove instead of failing the test with ENOTEMPTY on that race.
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 async function setup(api = "openai") {
   const workspace = await mkdtemp(join(tmpdir(), "luban-recovery-")); roots.push(workspace);

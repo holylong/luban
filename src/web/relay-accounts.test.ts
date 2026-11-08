@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LubanRelayServer } from "./relay.js";
 import { TunnelClient } from "./tunnel.js";
+import { instanceDeviceId } from "./device-id.js";
 import { VERSION } from "../version.js";
 
 /** Accounts are the multi-device path: one phone login, many enrolled laptops. */
@@ -173,6 +174,38 @@ describe("relay accounts", () => {
       method: "POST", headers: { cookie: other, "content-type": "text/plain" }, body: "hello",
     });
     expect(denied.status).toBe(503);
+  });
+
+  it("lists separate workspaces from one machine as separate nodes", async () => {
+    const cookie = await register("owner@example.com");
+    const token = await enroll(cookie);
+    const home = join(root, "home");
+    const apiId = instanceDeviceId(home, "/tmp/api");
+    const webId = instanceDeviceId(home, "/tmp/web");
+    const first = new TunnelClient({
+      relayUrl, nodeToken: "", deviceToken: token, deviceId: apiId,
+      localPort: node.port, name: "laptop · api", version: VERSION, workspace: "/tmp/api",
+    });
+    const second = new TunnelClient({
+      relayUrl, nodeToken: "", deviceToken: token, deviceId: webId,
+      localPort: node.port, name: "laptop · web", version: VERSION, workspace: "/tmp/web",
+    });
+    await first.start();
+    await second.start();
+    try {
+      await waitFor(async () => {
+        const body = await (await call("/relay/nodes", { headers: { cookie } })).json() as { nodes?: Array<{ id: string; online: boolean }> };
+        return body.nodes?.length === 2 && body.nodes.every(item => item.online);
+      });
+      const body = await (await call("/relay/nodes", { headers: { cookie } })).json() as { nodes: Array<{ id: string; name: string; workspace: string }> };
+      expect(body.nodes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: apiId, name: "laptop · api", workspace: "/tmp/api" }),
+        expect.objectContaining({ id: webId, name: "laptop · web", workspace: "/tmp/web" }),
+      ]));
+    } finally {
+      first.stop();
+      second.stop();
+    }
   });
 
   it("persists devices after they go offline and removes them", async () => {

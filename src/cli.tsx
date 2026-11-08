@@ -2,7 +2,7 @@
 import "./runtime-env.js";
 import React from "react";
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { createInterface as createCallbackInterface } from "node:readline";
 import { createInterface } from "node:readline/promises";
 import { existsSync, readFileSync } from "node:fs";
@@ -33,13 +33,14 @@ import { LubanRelayServer } from "./web/relay.js";
 import { TunnelClient, normalizeRelayUrl } from "./web/tunnel.js";
 import { generateToken } from "./web/auth.js";
 import { defaultAccountsPath } from "./web/accounts.js";
-import { ensureDeviceIdentity } from "./web/device-id.js";
+import { instanceDeviceId } from "./web/device-id.js";
 import { readDeviceStatus } from "./web/device-status.js";
+import { loginRelayAccount, saveRelayDeviceToken } from "./web/relay-login.js";
 import { installProcessGuard } from "./core/process-guard.js";
 import { generateTlsMaterial, readTlsMaterial } from "./web/tls.js";
 import { sendVerificationEmail, smtpFromEnv } from "./web/mailer.js";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 
 import { VERSION } from "./version.js";
 
@@ -90,6 +91,12 @@ function lanAddresses(bindHost: string): string[] {
     }
   }
   return [...hosts];
+}
+
+/** Phone-visible label: host name plus the project folder that instance serves. */
+function relayNodeName(nodeName: string, workspace: string): string {
+  const folder = basename(workspace);
+  return folder && folder !== nodeName ? `${nodeName} · ${folder}` : nodeName;
 }
 
 async function readStdin(): Promise<string> {
@@ -339,12 +346,12 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
           relayUrl,
           nodeToken: relayToken || "",
           ...(relayDeviceToken ? { deviceToken: relayDeviceToken } : {}),
-          deviceId: ensureDeviceIdentity(config.home).id,
+          deviceId: instanceDeviceId(config.home, config.workspace),
           status: () => readDeviceStatus(config, mesh),
           localPort: web.port,
           localHost: "127.0.0.1",
           localToken: token,
-          name: config.mesh.nodeName,
+          name: relayNodeName(config.mesh.nodeName, config.workspace),
           version: VERSION,
           workspace: config.workspace,
           projects: mesh.projectMap(),
@@ -532,12 +539,6 @@ async function readStdinText(): Promise<string> {
   return text.trim();
 }
 
-function responseCookie(response: Response): string | undefined {
-  const headers = response.headers as Headers & { getSetCookie?: () => string[] };
-  const all = headers.getSetCookie ? headers.getSetCookie() : [response.headers.get("set-cookie") ?? ""];
-  return all.map(value => value.split(";")[0]!.trim()).find(value => value.startsWith("luban_account="));
-}
-
 /**
  * `luban login relay` — sign in with an account without opening the phone UI,
  * then save the device token where `luban` and `luban web` already look for it.
@@ -562,8 +563,7 @@ async function runRelayLogin(argv: string[]): Promise<number> {
 
   try {
     const home = process.env.LUBAN_HOME?.trim() || join(homedir(), ".luban");
-    const configPath = join(home, "config.json");
-    const config = await readJsonObject(configPath);
+    const config = await readJsonObject(join(home, "config.json"));
     const remoteRaw = config.remote && typeof config.remote === "object" && !Array.isArray(config.remote)
       ? config.remote as Record<string, unknown>
       : {};
@@ -578,88 +578,40 @@ async function runRelayLogin(argv: string[]): Promise<number> {
       throw new Error("账号登录必须使用 HTTPS；只有本机回环地址允许 HTTP");
     }
 
-    const envKey = (typeof remoteRaw.device_token_env === "string" && remoteRaw.device_token_env.trim())
-      || "LUBAN_RELAY_DEVICE_TOKEN";
-    if (!/^[A-Z_][A-Z0-9_]*$/u.test(envKey)) throw new Error(`无效的设备令牌变量名：${envKey}`);
-    const envPath = resolve((typeof remoteRaw.node_token_file === "string" && remoteRaw.node_token_file.trim())
-      || (process.env.LUBAN_HOME?.trim() ? join(home, "relay.env") : join(homedir(), ".config/luban/relay.env")));
+    const token = options.deviceToken?.trim() || "";
+    if (token) {
+      const saved = await saveRelayDeviceToken({ home, relayUrl, token, writeConfig: options.config });
+      process.stdout.write(`中继 ${saved.relayUrl}\n`);
+      process.stdout.write(`设备令牌已保存到 ${saved.envPath}（权限 600）\n`);
+      process.stdout.write(saved.wroteConfig
+        ? `已写入 ${saved.configPath}：remote.enabled=true\n`
+        : "未修改 config.json；需要手动加载该环境文件\n");
+      return 0;
+    }
 
     let email = options.email?.trim() || "";
-    let token = options.deviceToken?.trim() || "";
-    let generated = false;
-    if (!token) {
-      email = email || (process.stdin.isTTY ? await promptLine("邮箱: ") : "");
-      if (!email) throw new Error("缺少邮箱：加 --email you@example.com");
-      const password = options.passwordStdin
-        ? await readStdinText()
-        : process.stdin.isTTY
-          ? await promptHidden("密码: ")
-          : "";
-      if (!password) throw new Error("缺少密码：在终端运行，或使用 --password-stdin 从标准输入读取");
+    if (!email) email = (await promptLine("邮箱: ")).trim();
+    if (!email) throw new Error("缺少邮箱：加 --email you@example.com");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) throw new Error("邮箱格式不正确，请重新运行");
+    process.stdout.write(`邮箱已记录：${email}\n`);
 
-      const login = await fetch(`${relayUrl}/api/auth/login`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const loginPayload = await login.json().catch(() => ({})) as {
-        ok?: boolean; error?: string; account?: { email?: string };
-      };
-      if (!login.ok || !loginPayload.ok) throw new Error(loginPayload.error || `登录失败：HTTP ${login.status}`);
-      const cookie = responseCookie(login);
-      if (!cookie) throw new Error("登录成功但没有收到账户 Cookie，请确认中继版本");
+    const password = options.passwordStdin
+      ? await readStdinText()
+      : process.stdin.isTTY
+        ? await promptHidden("密码（输入不显示，回车确认）: ")
+        : "";
+    if (!password) throw new Error("缺少密码：在终端运行，或使用 --password-stdin 从标准输入读取");
+    if (options.passwordStdin) process.stdout.write("密码已读取，正在登录…\n");
+    else process.stdout.write("正在登录并生成本机设备令牌…\n");
 
-      const enrollment = await fetch(`${relayUrl}/api/account/device-token`, {
-        method: "POST",
-        headers: { cookie },
-      });
-      const enrollmentPayload = await enrollment.json().catch(() => ({})) as {
-        ok?: boolean; error?: string; token?: string;
-      };
-      if (!enrollment.ok || !enrollmentPayload.ok || !enrollmentPayload.token) {
-        throw new Error(enrollmentPayload.error || `生成设备令牌失败：HTTP ${enrollment.status}`);
-      }
-      token = enrollmentPayload.token;
-      generated = true;
-      email = loginPayload.account?.email || email;
-    }
-
-    await mkdir(dirname(envPath), { recursive: true, mode: 0o700 });
-    let lines: string[] = [];
-    try {
-      lines = (await readFile(envPath, "utf8")).split(/\r?\n/u);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    const keyPattern = new RegExp(`^\\s*(?:export\\s+)?${envKey}\\s*=`, "u");
-    const kept = lines.filter(line => !keyPattern.test(line));
-    while (kept.length > 0 && kept.at(-1) === "") kept.pop();
-    kept.push(`${envKey}=${token}`);
-    await writeFile(envPath, `${kept.join("\n")}\n`, { mode: 0o600 });
-    await chmod(envPath, 0o600);
-
-    if (options.config) {
-      const nextRemote = {
-        ...remoteRaw,
-        enabled: true,
-        relay_url: relayUrl,
-        device_token_env: envKey,
-        node_token_file: envPath,
-      };
-      await mkdir(home, { recursive: true, mode: 0o700 });
-      await writeFile(configPath, `${JSON.stringify({ ...config, remote: nextRemote }, null, 2)}\n`, { mode: 0o600 });
-      await chmod(configPath, 0o600);
-    }
-
-    process.stdout.write(`已登录${email ? ` ${email}` : ""}\n`);
-    process.stdout.write(`中继 ${relayUrl}\n`);
-    process.stdout.write(`设备令牌已保存到 ${envPath}（权限 600）\n`);
-    process.stdout.write(options.config
-      ? `已写入 ${configPath}：remote.enabled=true\n`
+    const saved = await loginRelayAccount({ home, relayUrl, email, password, writeConfig: options.config });
+    process.stdout.write(`已登录 ${saved.email}\n`);
+    process.stdout.write(`中继 ${saved.relayUrl}\n`);
+    process.stdout.write(`设备令牌已保存到 ${saved.envPath}（权限 600）\n`);
+    process.stdout.write(saved.wroteConfig
+      ? `已写入 ${saved.configPath}：remote.enabled=true\n`
       : "未修改 config.json；需要手动加载该环境文件\n");
-    if (generated) {
-      process.stdout.write("注意：新设备令牌会替换账户原来的设备令牌；其他电脑需要重新登录或更新令牌。\n");
-    }
+    process.stdout.write("注意：新设备令牌会替换账户原来的设备令牌；其他电脑需要重新登录或更新令牌。\n");
     process.stdout.write("现在运行 luban <项目路径>，手机端即可看到这台电脑。\n");
     return 0;
   } catch (error) {
@@ -905,13 +857,13 @@ async function main(): Promise<number> {
           relayUrl: normalizedRelayUrl,
           nodeToken: nodeToken || "",
           ...(deviceToken ? { deviceToken } : {}),
-          deviceId: ensureDeviceIdentity(config.home).id,
+          deviceId: instanceDeviceId(config.home, config.workspace),
           status: () => readDeviceStatus(config, mesh),
           accessToken: phoneToken,
           localHost: "127.0.0.1",
           localPort: remoteWeb.port,
           localToken,
-          name: mesh.config.mesh.nodeName,
+          name: relayNodeName(mesh.config.mesh.nodeName, config.workspace),
           version: VERSION,
           workspace: config.workspace,
           projects: mesh.projectMap(),

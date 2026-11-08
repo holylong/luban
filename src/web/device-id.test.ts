@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureDeviceIdentity, readDeviceIdentity } from "./device-id.js";
+import { ensureDeviceIdentity, instanceDeviceId, readDeviceIdentity } from "./device-id.js";
 
 let home: string;
 
@@ -29,5 +29,16 @@ describe("device identity", () => {
     const identity = ensureDeviceIdentity(home);
     expect(identity.id).toMatch(/^dev-[a-f0-9]{24}$/u);
     expect(JSON.parse(await readFile(join(home, "device.json"), "utf8")).id).toBe(identity.id);
+  });
+
+  it("gives each workspace its own stable instance id", () => {
+    const machine = ensureDeviceIdentity(home).id;
+    const api = instanceDeviceId(home, join(home, "projects", "api"));
+    const web = instanceDeviceId(home, join(home, "projects", "web"));
+
+    expect(api).toMatch(/^dev-[a-f0-9]{24}-[a-f0-9]{16}$/u);
+    expect(api.startsWith(`${machine}-`)).toBe(true);
+    expect(instanceDeviceId(home, join(home, "projects", "api", "..", "api"))).toBe(api);
+    expect(web).not.toBe(api);
   });
 });

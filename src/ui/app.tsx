@@ -16,6 +16,7 @@ import { isZenFreeModel } from "../core/opencode-zen.js";
 import { estimateMessagesTokens } from "../core/context.js";
 import { loadConfig, savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
 import { ProviderAuthDialog } from "./provider-auth-dialog.js";
+import { RelayLoginDialog } from "./relay-login-dialog.js";
 import { consumeCodexReset, formatCodexResetOutcome, formatCodexRateLimits, formatCodexUsage, readCodexRateLimits, readCodexUsage } from "../core/codex-account.js";
 import type { JobStreamRecord, MeshChatMessage, MeshJob, MeshRuntime } from "../core/mesh/runtime.js";
 import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
@@ -114,6 +115,7 @@ const COMMANDS = [
   ["/clear", "clear conversation"],
   ["/settings", "current context"],
   ["/token", "show phone login token and link"],
+  ["/relay", "relay login · 登录中继账户"],
   ["/permissions", "ask / edits / allow"],
   ["/peers", "LAN collaborators"],
   ["/ping", "ping <peer>"],
@@ -159,6 +161,8 @@ const RUN_IMMEDIATE_COMMANDS = new Set([
 
 const COMMAND_USAGE: Record<string, string> = {
   "/report": "/report daily|weekly|monthly|yearly [YYYY-MM-DD] [输出路径] — 汇总本机所有项目会话",
+  "/token": "/token — show phone login token and one-tap link",
+  "/relay": "/relay login [中继地址] — 登录中继账户，自动保存设备令牌",
   "/mode": "/mode auto|agent|ask",
   "/theme": "/theme [名称] — 不带参数列出全部配色，带名称即时切换并保存",
   "/skin": "/skin [名称] — 选择皮肤与加载动画，例如 /skin ollobot；/skin midnight 恢复默认",
@@ -295,9 +299,10 @@ interface QuestionRequest {
 }
 
 interface DialogState {
-  type: "model-providers" | "models" | "provider-auth" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme" | "pending" | "mcp";
+  type: "model-providers" | "models" | "provider-auth" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme" | "pending" | "mcp" | "relay-login";
   index: number;
   provider?: string;
+  relayUrl?: string;
   parentIndex?: number;
   parentQuery?: string;
   modelIndex?: number;
@@ -567,7 +572,7 @@ function HelpPanel() {
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /usage /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
       <Text color={theme.muted}>直接输入任务，!command 执行 shell，/ 命令补全（含参数用法）</Text>
-      <Text color={theme.dim}>/new /sessions /models /mode /permissions /theme /skin /plan /details /mesh /copy /export /help /exit</Text>
+      <Text color={theme.dim}>/new /sessions /models /mode /permissions /relay /theme /skin /plan /details /mesh /copy /export /help /exit</Text>
     </Box>
   );
 }
@@ -605,6 +610,7 @@ export function argumentMatches(input: string): string[] {
   const command = match[1]!.toLowerCase();
   const options = command === "/report" ? ["daily", "weekly", "monthly", "yearly"] : command === "/mode" ? MODES
     : command === "/permissions" ? ["ask", "edits", "allow"]
+      : command === "/relay" ? ["login"]
       : command === "/theme" || command === "/skin" ? THEMES.map((item) => item.id)
         : command === "/sync" ? ["push", "pull"] : [];
   return options.filter((option) => option.startsWith(match[2]!.toLowerCase()));
@@ -1999,6 +2005,16 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       }
       return;
     }
+    if (command === "/relay") {
+      const [subcommand, ...rest] = argument.trim().split(/\s+/u).filter(Boolean);
+      if (subcommand?.toLowerCase() !== "login") {
+        setNotice("用法：/relay login [中继地址]");
+        return;
+      }
+      const relayUrl = rest.join(" ").trim() || config.remote.relayUrl?.trim() || process.env.LUBAN_RELAY_PUBLIC_URL?.trim() || "";
+      setDialog({ type: "relay-login", index: 0, relayUrl });
+      return;
+    }
     if (command === "/token") {
       if (mobileLink) {
         setDialog({ type: "info", index: 0, title: "本实例手机登录", content: mobileLink });
@@ -2539,7 +2555,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         }
         return;
       }
-      if (dialog.type === "provider-auth") return;
+      if (dialog.type === "provider-auth" || dialog.type === "relay-login") return;
       if ((dialog.type === "model-providers" || dialog.type === "models") && key.ctrl && character.toLowerCase() === "a") {
         const provider = dialog.type === "models" ? dialog.provider : providerRows[dialog.index]?.key;
         if (!provider) return;
@@ -2901,6 +2917,15 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             setConfig(nextConfig);
             swapRunner(() => new AgentRunner(nextConfig, undefined, mesh));
             setNotice(`Provider ${dialog.provider} 鉴权已更新`);
+          }} /> : null}
+        {dialog?.type === "relay-login" ? <RelayLoginDialog home={config.home} relayUrl={dialog.relayUrl}
+          onClose={() => setDialog(null)}
+          onSaved={result => {
+            setConfig(current => ({ ...current, remote: {
+              ...current.remote, enabled: true, relayUrl: result.relayUrl,
+              deviceTokenEnv: result.envKey, nodeTokenFile: result.envPath,
+            } }));
+            setNotice(`中继账户已登录：${result.email} · 设备令牌已保存 · 重新启动 luban 后自动接入`);
           }} /> : null}
         {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} /> : null}
         {dialog?.type === "pending" ? <SelectDialog title="Pending · Enter 撤回" rows={pendingRows} index={Math.min(dialog.index, Math.max(0, pendingRows.length - 1))} query="" /> : null}

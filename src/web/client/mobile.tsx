@@ -390,7 +390,32 @@ export function MobileApp(): React.ReactElement {
       const payload = await response.json() as { ok?: boolean; nodes?: RelayNode[] };
       if (!payload?.ok) { setRelayMode(false); return; }
       setRelayMode(true);
-      setRelayNodes(payload.nodes ?? []);
+      const nodes = payload.nodes ?? [];
+      setRelayNodes(nodes);
+      // The stored node may have been removed, or an older build used one
+      // machine-wide id for every workspace. Pick a live replacement instead
+      // of pinning every request to a node that no longer exists.
+      const stored = localStorage.getItem(NODE_KEY) || undefined;
+      const selected = stored ? nodes.find(item => item.id === stored || item.node_id === stored) : undefined;
+      if (selected) {
+        if (selected.id !== stored) {
+          setNodeScope(selected.id);
+          setScope(selected.id);
+          localStorage.setItem(NODE_KEY, selected.id);
+        }
+      } else {
+        const fallback = nodes.find(item => item.online) ?? nodes[0];
+        if (fallback) {
+          setNodeScope(fallback.id);
+          setScope(fallback.id);
+          localStorage.setItem(NODE_KEY, fallback.id);
+          setProject("");
+        } else {
+          setNodeScope(undefined);
+          setScope(undefined);
+          localStorage.removeItem(NODE_KEY);
+        }
+      }
     } catch {
       setRelayMode(false);
     }
@@ -572,14 +597,21 @@ export function MobileApp(): React.ReactElement {
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const chooseNode = useCallback((id: string) => {
+    setNodeScope(id || undefined);
     setScope(id || undefined);
     if (id) localStorage.setItem(NODE_KEY, id);
     else localStorage.removeItem(NODE_KEY);
+    setNode(undefined);
+    setJobs([]);
     setJob(undefined);
+    setSelectedId(undefined);
+    localStorage.removeItem(JOB_KEY);
     setEvents([]);
     setSessions([]);
     setContinueSession(undefined);
-  }, []);
+    setProject("");
+    void refresh();
+  }, [refresh]);
 
   const openDevice = useCallback((id: string) => {
     chooseNode(id);
@@ -641,7 +673,7 @@ export function MobileApp(): React.ReactElement {
           <span className="m-brand">luban</span>
           <span className="m-head-meta">{nodeLabel}</span>
           {relayMode && relayNodes.length > 0 && (
-            <select value={scope ?? ""} onChange={event => chooseNode(event.target.value)} aria-label="选择电脑">
+            <select value={scope ?? ""} onChange={event => chooseNode(event.target.value)} aria-label="选择 luban 实例">
               {relayNodes.map(item => (
                 <option key={item.id} value={item.id}>{item.online ? "● " : "○ "}{item.name}</option>
               ))}
@@ -658,7 +690,7 @@ export function MobileApp(): React.ReactElement {
       <main className="m-main">
         {relayMode && relayNodes.length === 0 && (
           <div className="m-banner warn">
-            账户下还没有电脑。打开「设置 → 添加电脑」生成设备令牌，然后在电脑上运行：
+            账户下还没有 luban 实例。打开「设置 → 添加电脑」生成设备令牌，然后在电脑上运行：
             <pre style={{ margin: "8px 0 0", font: "11.5px var(--mono)", whiteSpace: "pre-wrap" }}>luban web &lt;项目路径&gt; --relay {location.origin} --relay-device-token &lt;设备令牌&gt;</pre>
           </div>
         )}
@@ -752,7 +784,7 @@ export function MobileApp(): React.ReactElement {
               <div className="m-empty"><h2>直连模式</h2><p>当前页面直接连接本机 luban；登录中继账户后，这里会列出账户下的所有电脑。</p></div>
             )}
             {relayMode && relayNodes.length === 0 && (
-              <div className="m-empty"><h2>账户下还没有电脑</h2><p>在「设置 → 添加电脑」生成设备令牌，然后在电脑上启动 luban web 并接入中继。</p></div>
+              <div className="m-empty"><h2>还没有 luban 实例</h2><p>在「设置 → 添加电脑」生成设备令牌，然后在电脑上启动 luban web 并接入中继。</p></div>
             )}
             {relayNodes.map(device => {
               const deviceJobs = device.status?.jobs ?? [];
@@ -768,10 +800,17 @@ export function MobileApp(): React.ReactElement {
                   </div>
                   <div className="m-device-path">{device.workspace || "未报告工作区"}{device.status?.model ? ` · ${device.status.model}` : ""}</div>
                   {latest ? (
-                    <div className="m-device-job">
-                      <span className={`m-chip ${latest.status}`}>{STATUS_LABELS[latest.status as keyof typeof STATUS_LABELS] ?? latest.status}</span>
-                      <span>{latest.title || latest.instruction || latest.id}</span>
-                    </div>
+                    <>
+                      <div className="m-device-job">
+                        <span className={`m-chip ${latest.status}`}>{STATUS_LABELS[latest.status as keyof typeof STATUS_LABELS] ?? latest.status}</span>
+                        <span>{latest.title || latest.instruction || latest.id}</span>
+                      </div>
+                      <div className="m-note" style={{ marginTop: 5 }}>
+                        {ACTIVE_STATUS.has(latest.status) ? `进度 ${Math.round(latest.progress)}%` : "最近任务"}
+                        {latest.updated_at ? ` · ${relativeTime(latest.updated_at)}前更新` : ""}
+                        {deviceJobs.length > 1 ? ` · 共 ${deviceJobs.length} 条记录` : ""}
+                      </div>
+                    </>
                   ) : <div className="m-note">{device.online ? "空闲，等待派活" : "离线"}</div>}
                   <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
                     <button className="m-btn primary" disabled={!device.online} onClick={() => openDevice(device.id)}>打开并派活</button>
@@ -844,7 +883,7 @@ export function MobileApp(): React.ReactElement {
                 <h3>账户</h3>
                 <dl className="m-kv">
                   <dt>邮箱</dt><dd>{account.email}</dd>
-                  <dt>设备</dt><dd>{relayNodes.length} 台</dd>
+                  <dt>实例</dt><dd>{relayNodes.length} 个</dd>
                 </dl>
                 <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
                   <button className="m-btn primary" onClick={() => void requestDeviceToken()}>添加电脑</button>
@@ -870,7 +909,7 @@ export function MobileApp(): React.ReactElement {
             </div>
             {relayMode && (
               <div className="m-card">
-                <h3>{account ? "账户设备" : "中继节点"}</h3>
+                <h3>{account ? "账户实例" : "中继节点"}</h3>
                 {relayNodes.length === 0 && <p className="m-note">还没有节点连上中继。</p>}
                 {relayNodes.map(item => (
                   <button key={item.id} className={`m-job ${item.id === scope ? "active" : ""}`} onClick={() => chooseNode(item.id)}>
