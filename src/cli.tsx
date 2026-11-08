@@ -2,7 +2,9 @@
 import "./runtime-env.js";
 import React from "react";
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createInterface as createCallbackInterface } from "node:readline";
+import { createInterface } from "node:readline/promises";
 import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 import { Command } from "commander";
@@ -30,10 +32,14 @@ import { AcpServer } from "./core/acp.js";
 import { LubanRelayServer } from "./web/relay.js";
 import { TunnelClient, normalizeRelayUrl } from "./web/tunnel.js";
 import { generateToken } from "./web/auth.js";
+import { defaultAccountsPath } from "./web/accounts.js";
+import { ensureDeviceIdentity } from "./web/device-id.js";
+import { readDeviceStatus } from "./web/device-status.js";
 import { installProcessGuard } from "./core/process-guard.js";
 import { generateTlsMaterial, readTlsMaterial } from "./web/tls.js";
+import { sendVerificationEmail, smtpFromEnv } from "./web/mailer.js";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { VERSION } from "./version.js";
 
@@ -65,6 +71,7 @@ interface DaemonOptions {
   relay?: string;
   relayToken?: string;
   relayCa?: string;
+  relayDeviceToken?: string;
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -176,6 +183,7 @@ function daemonConfig(workspace: string, options: Pick<DaemonOptions, "model" | 
     mesh: options.mesh,
     meshName: options.meshName,
     meshPort: options.meshPort,
+    seedDefaults: true,
   });
 }
 
@@ -208,6 +216,7 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     .option("--token <token>", "browser access token (or LUBAN_WEB_TOKEN; generated for non-loopback binds)")
     .option("--relay <url>", "dial out to a luban relay so a phone on the internet can reach this workspace")
     .option("--relay-token <token>", "relay node token (or LUBAN_RELAY_NODE_TOKEN)")
+    .option("--relay-device-token <token>", "account device-enrollment token (or LUBAN_RELAY_DEVICE_TOKEN)")
     .option("--relay-ca <path>", "PEM CA to trust when the relay URL is https with a self-signed certificate")
     .showHelpAfterError();
   program.parse(argv, { from: "user" });
@@ -308,8 +317,9 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
       if (options.relay) {
         const relayUrl = normalizeRelayUrl(options.relay);
         const relayToken = options.relayToken?.trim() || process.env.LUBAN_RELAY_NODE_TOKEN?.trim();
-        if (!relayToken) {
-          process.stderr.write("--relay requires --relay-token or LUBAN_RELAY_NODE_TOKEN: the relay prints its node token when it starts\n");
+        const relayDeviceToken = options.relayDeviceToken?.trim() || process.env.LUBAN_RELAY_DEVICE_TOKEN?.trim();
+        if (!relayToken && !relayDeviceToken) {
+          process.stderr.write("--relay requires --relay-token or --relay-device-token: the relay prints its node token, or generate a device token in the phone settings\n");
           return 2;
         }
         // Node's TLS `ca` option wants the PEM body, not a path: read the file
@@ -327,7 +337,10 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
         // which may differ from --port when 0 was requested.
         tunnel = new TunnelClient({
           relayUrl,
-          nodeToken: relayToken,
+          nodeToken: relayToken || "",
+          ...(relayDeviceToken ? { deviceToken: relayDeviceToken } : {}),
+          deviceId: ensureDeviceIdentity(config.home).id,
+          status: () => readDeviceStatus(config, mesh),
           localPort: web.port,
           localHost: "127.0.0.1",
           localToken: token,
@@ -376,14 +389,19 @@ async function runRelay(argv: string[]): Promise<number> {
     .option("--port <port>", "bind port", (value) => Number(value), 8788)
     .option("--token <token>", "phone access token (or LUBAN_RELAY_ACCESS_TOKEN; generated when omitted)")
     .option("--node-token <token>", "node registration token (or LUBAN_RELAY_NODE_TOKEN; generated when omitted)")
+    .option("--accounts <path>", "account database (defaults to <LUBAN_HOME>/relay-accounts.json; use 'none' to disable accounts)")
     .option("--public-url <url>", "public base URL, when it differs from host:port")
     .option("--https", "serve HTTPS for secure phone access and browser PWA installation")
     .option("--tls-key <path>", "PEM private key for --https (a LAN certificate is generated when omitted)")
     .option("--tls-cert <path>", "PEM certificate for --https, paired with --tls-key")
     .option("--tls-dir <path>", "directory to persist a generated LAN certificate so the phone trusts it once")
+    .option("--smtp-email <address>", "mailbox used to send registration codes (or LUBAN_RELAY_SMTP_EMAIL)")
+    .option("--smtp-password <password>", "SMTP app password (or LUBAN_RELAY_SMTP_PASSWORD; prefer the env file)")
+    .option("--smtp-host <host>", "SMTP host (default smtp.163.com)")
+    .option("--smtp-port <port>", "SMTP TLS port (default 465)", (value) => Number(value))
     .showHelpAfterError();
   program.parse(argv, { from: "user" });
-  const options = program.opts<{ host: string; port: number; token?: string; nodeToken?: string; publicUrl?: string; https?: boolean; tlsKey?: string; tlsCert?: string; tlsDir?: string }>();
+  const options = program.opts<{ host: string; port: number; token?: string; nodeToken?: string; accounts?: string; publicUrl?: string; https?: boolean; tlsKey?: string; tlsCert?: string; tlsDir?: string; smtpEmail?: string; smtpPassword?: string; smtpHost?: string; smtpPort?: number }>();
   process.stderr.write(`luban v${VERSION}\n`);
   let tls: { key: string; cert: string; ca: string } | undefined;
   let caPath: string | undefined;
@@ -397,11 +415,28 @@ async function runRelay(argv: string[]): Promise<number> {
       caPath = `${options.tlsDir || join(tmpdir(), "luban-relay-tls")}/ca.pem`;
     }
   }
+  const accountsPath = options.accounts === "none"
+    ? undefined
+    : options.accounts?.trim() || defaultAccountsPath(process.env.LUBAN_HOME?.trim() || join(homedir(), ".luban"));
+  const smtpEnv = smtpFromEnv();
+  const smtp = options.smtpEmail || options.smtpPassword
+    ? {
+      host: options.smtpHost?.trim() || smtpEnv?.host || "smtp.163.com",
+      port: options.smtpPort || smtpEnv?.port || 465,
+      from: options.smtpEmail?.trim() || smtpEnv?.from || "",
+      password: options.smtpPassword || smtpEnv?.password || "",
+    }
+    : smtpEnv;
+  const email = smtp?.from && smtp.password
+    ? { sendVerificationCode: (to: string, code: string) => sendVerificationEmail(smtp, to, code) }
+    : undefined;
   const relay = new LubanRelayServer({
     host: options.host,
     port: options.port,
     token: options.token?.trim() || process.env.LUBAN_RELAY_ACCESS_TOKEN?.trim(),
     nodeToken: options.nodeToken?.trim() || process.env.LUBAN_RELAY_NODE_TOKEN?.trim(),
+    ...(accountsPath ? { accountsPath } : {}),
+    ...(email ? { email } : {}),
     publicUrl: options.publicUrl,
     tls,
     log: (message) => process.stderr.write(`relay: ${message}\n`),
@@ -412,13 +447,21 @@ async function runRelay(argv: string[]): Promise<number> {
       process.stderr.write("warning: the relay is bound to loopback; a phone on another network cannot reach it\n");
     }
     process.stdout.write(`luban relay ${url}\n`);
-    process.stdout.write(`手机访问 ${relay.mobileLink()}\n`);
+    if (accountsPath) {
+      process.stdout.write(`账号登录 ${relay.publicBaseUrl()}/m/  （注册或登录后查看账户下的所有电脑）\n`);
+      process.stdout.write(`账户库 ${accountsPath}\n`);
+      process.stdout.write(smtp?.from
+        ? `注册验证码 邮件由 ${smtp.from} 发送\n`
+        : "注册验证码 未配置邮箱（设置 LUBAN_RELAY_SMTP_EMAIL / LUBAN_RELAY_SMTP_PASSWORD）\n");
+    } else {
+      process.stdout.write(`手机访问 ${relay.mobileLink()}\n`);
+    }
     if (tls && caPath) {
       process.stdout.write(options.tlsKey && options.tlsCert
         ? "HTTPS：确保证书对手机访问的域名有效且受设备信任。\n"
         : `HTTPS：自签证书需受手机信任。把 ${caPath} 安装为手机 CA；电脑节点连接时使用 --relay-ca ${caPath}。\n`);
     }
-    process.stdout.write(`节点连接 luban web <项目路径> --relay ${relay.publicBaseUrl()} --relay-token ${relay.nodeToken}${tls ? " --relay-ca " + caPath : ""}\n`);
+    process.stdout.write(`节点连接 luban web <项目路径> --relay ${relay.publicBaseUrl()} --relay-token ${relay.nodeToken}${accountsPath ? " --relay-device-token <在手机“添加电脑”中生成的设备令牌>" : ""}${tls ? " --relay-ca " + caPath : ""}\n`);
     await waitForShutdown();
     return 0;
   } catch (error) {
@@ -426,6 +469,202 @@ async function runRelay(argv: string[]): Promise<number> {
     return 2;
   } finally {
     await relay.stop();
+  }
+}
+
+/** Read a JSON object, treating a missing file as an empty object. */
+async function readJsonObject(path: string): Promise<Record<string, unknown>> {
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+async function promptLine(label: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(label)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+/** Ask for a password without echoing it; the terminal still needs to be a TTY. */
+async function promptHidden(label: string): Promise<string> {
+  const input = process.stdin;
+  const wasRaw = Boolean(input.isTTY && input.isRaw);
+  // Readline echoes typed characters even when its own writer is muted, so turn
+  // off terminal echo for the duration of the prompt.
+  if (input.isTTY) input.setRawMode(true);
+  // The promises wrapper hides the underlying interface, whose writer must be
+  // muted; use the callback interface here so the override takes effect.
+  const rl = createCallbackInterface({ input, output: process.stdout, terminal: true });
+  const writer = rl as unknown as { _writeToOutput?: (text: string) => void };
+  const original = writer._writeToOutput;
+  writer._writeToOutput = () => {};
+  process.stdout.write(label);
+  try {
+    return await new Promise<string>((resolve) => {
+      let settled = false;
+      const finish = (value: string) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      rl.once("SIGINT", () => finish(""));
+      rl.once("close", () => finish(""));
+      rl.question("", answer => finish(answer));
+    });
+  } finally {
+    if (original) writer._writeToOutput = original;
+    rl.close();
+    if (input.isTTY && !wasRaw) input.setRawMode(false);
+    process.stdout.write("\n");
+  }
+}
+
+async function readStdinText(): Promise<string> {
+  let text = "";
+  for await (const chunk of process.stdin) text += String(chunk);
+  return text.trim();
+}
+
+function responseCookie(response: Response): string | undefined {
+  const headers = response.headers as Headers & { getSetCookie?: () => string[] };
+  const all = headers.getSetCookie ? headers.getSetCookie() : [response.headers.get("set-cookie") ?? ""];
+  return all.map(value => value.split(";")[0]!.trim()).find(value => value.startsWith("luban_account="));
+}
+
+/**
+ * `luban login relay` — sign in with an account without opening the phone UI,
+ * then save the device token where `luban` and `luban web` already look for it.
+ * Passwords only come from a hidden prompt or stdin and are never written down.
+ */
+async function runRelayLogin(argv: string[]): Promise<number> {
+  const program = new Command();
+  program
+    .name("luban login relay")
+    .description("Sign in to a relay account and enroll this computer without a browser")
+    .version(VERSION)
+    .option("--relay <url>", "relay URL (defaults to remote.relay_url in ~/.luban/config.json)")
+    .option("--email <email>", "account email; prompted when omitted")
+    .option("--password-stdin", "read the password from stdin instead of prompting")
+    .option("--device-token <token>", "save an existing device token instead of signing in")
+    .option("--no-config", "only save the token; do not change ~/.luban/config.json")
+    .showHelpAfterError();
+  program.parse(argv, { from: "user" });
+  const options = program.opts<{
+    relay?: string; email?: string; passwordStdin?: boolean; deviceToken?: string; config: boolean;
+  }>();
+
+  try {
+    const home = process.env.LUBAN_HOME?.trim() || join(homedir(), ".luban");
+    const configPath = join(home, "config.json");
+    const config = await readJsonObject(configPath);
+    const remoteRaw = config.remote && typeof config.remote === "object" && !Array.isArray(config.remote)
+      ? config.remote as Record<string, unknown>
+      : {};
+
+    const configuredRelay = typeof remoteRaw.relay_url === "string" ? remoteRaw.relay_url : "";
+    const relayInput = options.relay?.trim() || configuredRelay.trim() || process.env.LUBAN_RELAY_PUBLIC_URL?.trim()
+      || (process.stdin.isTTY ? await promptLine("中继地址（https://…）: ") : "");
+    if (!relayInput) throw new Error("缺少中继地址：加 --relay https://…");
+    const relayUrl = normalizeRelayUrl(relayInput);
+    const parsedRelay = new URL(relayUrl);
+    if (parsedRelay.protocol !== "https:" && !LOOPBACK.has(parsedRelay.hostname)) {
+      throw new Error("账号登录必须使用 HTTPS；只有本机回环地址允许 HTTP");
+    }
+
+    const envKey = (typeof remoteRaw.device_token_env === "string" && remoteRaw.device_token_env.trim())
+      || "LUBAN_RELAY_DEVICE_TOKEN";
+    if (!/^[A-Z_][A-Z0-9_]*$/u.test(envKey)) throw new Error(`无效的设备令牌变量名：${envKey}`);
+    const envPath = resolve((typeof remoteRaw.node_token_file === "string" && remoteRaw.node_token_file.trim())
+      || (process.env.LUBAN_HOME?.trim() ? join(home, "relay.env") : join(homedir(), ".config/luban/relay.env")));
+
+    let email = options.email?.trim() || "";
+    let token = options.deviceToken?.trim() || "";
+    let generated = false;
+    if (!token) {
+      email = email || (process.stdin.isTTY ? await promptLine("邮箱: ") : "");
+      if (!email) throw new Error("缺少邮箱：加 --email you@example.com");
+      const password = options.passwordStdin
+        ? await readStdinText()
+        : process.stdin.isTTY
+          ? await promptHidden("密码: ")
+          : "";
+      if (!password) throw new Error("缺少密码：在终端运行，或使用 --password-stdin 从标准输入读取");
+
+      const login = await fetch(`${relayUrl}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const loginPayload = await login.json().catch(() => ({})) as {
+        ok?: boolean; error?: string; account?: { email?: string };
+      };
+      if (!login.ok || !loginPayload.ok) throw new Error(loginPayload.error || `登录失败：HTTP ${login.status}`);
+      const cookie = responseCookie(login);
+      if (!cookie) throw new Error("登录成功但没有收到账户 Cookie，请确认中继版本");
+
+      const enrollment = await fetch(`${relayUrl}/api/account/device-token`, {
+        method: "POST",
+        headers: { cookie },
+      });
+      const enrollmentPayload = await enrollment.json().catch(() => ({})) as {
+        ok?: boolean; error?: string; token?: string;
+      };
+      if (!enrollment.ok || !enrollmentPayload.ok || !enrollmentPayload.token) {
+        throw new Error(enrollmentPayload.error || `生成设备令牌失败：HTTP ${enrollment.status}`);
+      }
+      token = enrollmentPayload.token;
+      generated = true;
+      email = loginPayload.account?.email || email;
+    }
+
+    await mkdir(dirname(envPath), { recursive: true, mode: 0o700 });
+    let lines: string[] = [];
+    try {
+      lines = (await readFile(envPath, "utf8")).split(/\r?\n/u);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const keyPattern = new RegExp(`^\\s*(?:export\\s+)?${envKey}\\s*=`, "u");
+    const kept = lines.filter(line => !keyPattern.test(line));
+    while (kept.length > 0 && kept.at(-1) === "") kept.pop();
+    kept.push(`${envKey}=${token}`);
+    await writeFile(envPath, `${kept.join("\n")}\n`, { mode: 0o600 });
+    await chmod(envPath, 0o600);
+
+    if (options.config) {
+      const nextRemote = {
+        ...remoteRaw,
+        enabled: true,
+        relay_url: relayUrl,
+        device_token_env: envKey,
+        node_token_file: envPath,
+      };
+      await mkdir(home, { recursive: true, mode: 0o700 });
+      await writeFile(configPath, `${JSON.stringify({ ...config, remote: nextRemote }, null, 2)}\n`, { mode: 0o600 });
+      await chmod(configPath, 0o600);
+    }
+
+    process.stdout.write(`已登录${email ? ` ${email}` : ""}\n`);
+    process.stdout.write(`中继 ${relayUrl}\n`);
+    process.stdout.write(`设备令牌已保存到 ${envPath}（权限 600）\n`);
+    process.stdout.write(options.config
+      ? `已写入 ${configPath}：remote.enabled=true\n`
+      : "未修改 config.json；需要手动加载该环境文件\n");
+    if (generated) {
+      process.stdout.write("注意：新设备令牌会替换账户原来的设备令牌；其他电脑需要重新登录或更新令牌。\n");
+    }
+    process.stdout.write("现在运行 luban <项目路径>，手机端即可看到这台电脑。\n");
+    return 0;
+  } catch (error) {
+    process.stderr.write(`login failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
   }
 }
 
@@ -492,7 +731,7 @@ async function runMeshCheck(argv: string[]): Promise<number> {
     process.stderr.write(`workspace does not exist: ${workspace}\n`);
     return 2;
   }
-  const config = loadConfig({ workspace, model: options.model });
+  const config = loadConfig({ workspace, model: options.model, seedDefaults: true });
   const mesh = new MeshRuntime(config);
   const write = (line: string) => process.stdout.write(`${line}\n`);
 
@@ -549,7 +788,7 @@ async function main(): Promise<number> {
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
     .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
     .option("-p, --prompt <text>", "run once without the TUI")
-    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
+    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban login relay   sign in to a relay account and enroll this computer\n  luban login codex   sign in to Codex through the official CLI\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
   program.parse();
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -567,6 +806,7 @@ async function main(): Promise<number> {
     meshName: options.meshName,
     meshPort: options.meshPort,
     theme: options.theme,
+    seedDefaults: true,
   });
   traceBoot("config");
   // Painted before the first frame: the whole UI reads one mutable palette, so
@@ -634,10 +874,12 @@ async function main(): Promise<number> {
       const relayUrl = config.remote.relayUrl.trim();
       const nodeToken = process.env[config.remote.nodeTokenEnv]?.trim()
         || readEnvFileValue(config.remote.nodeTokenFile, config.remote.nodeTokenEnv);
+      const deviceToken = process.env[config.remote.deviceTokenEnv]?.trim()
+        || readEnvFileValue(config.remote.nodeTokenFile, config.remote.deviceTokenEnv);
       if (!relayUrl) {
         process.stderr.write("手机远控未启动：在 ~/.luban/config.json 的 remote.relay_url 中设置中继地址。\n");
-      } else if (!nodeToken) {
-        process.stderr.write(`手机远控未启动：令牌文件 ${config.remote.nodeTokenFile} 中缺少 ${config.remote.nodeTokenEnv}。\n`);
+      } else if (!nodeToken && !deviceToken) {
+        process.stderr.write(`手机远控未启动：令牌文件 ${config.remote.nodeTokenFile} 中缺少 ${config.remote.nodeTokenEnv} 或 ${config.remote.deviceTokenEnv}。\n`);
       } else if (!mesh) {
         process.stderr.write("手机远控未启动：没有可用的本机 Web runtime。\n");
       } else {
@@ -661,7 +903,10 @@ async function main(): Promise<number> {
           : undefined;
         remoteTunnel = new TunnelClient({
           relayUrl: normalizedRelayUrl,
-          nodeToken,
+          nodeToken: nodeToken || "",
+          ...(deviceToken ? { deviceToken } : {}),
+          deviceId: ensureDeviceIdentity(config.home).id,
+          status: () => readDeviceStatus(config, mesh),
           accessToken: phoneToken,
           localHost: "127.0.0.1",
           localPort: remoteWeb.port,
@@ -738,7 +983,7 @@ async function runAcp(argv: string[]): Promise<number> {
     process.stderr.write(`workspace does not exist: ${workspace}\n`);
     return 2;
   }
-  const config = loadConfig({ workspace, model: options.model, allow: options.yes, mesh: false });
+  const config = loadConfig({ workspace, model: options.model, allow: options.yes, mesh: false, seedDefaults: true });
   const runners = new Map<string, { runner: AgentRunner; messages: ChatMessage[] }>();
   const server = new AcpServer(workspace, async (sessionId, sessionWorkspace, text, onChunk, signal) => {
     let state = runners.get(sessionId);
@@ -804,6 +1049,8 @@ const entry = command === "login" && process.argv[3] === "codex"
           }, reject);
       });
     })
+  : command === "login" && process.argv[3] === "relay"
+  ? runRelayLogin(process.argv.slice(4))
   : command === "bot"
   ? runBot(process.argv.slice(3))
   : command === "report"

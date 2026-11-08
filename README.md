@@ -79,6 +79,8 @@ macOS 登录后自动启动与权限边界见 [Bot 使用指南](bot.md)。
 ## 配置模型
 
 - 内置 provider：codex、opendesign、opencode-go / zen、deepseek、dashscope，以及本地 Qwen / Strata。
+- 首次启动且 `~/.luban/config.json` 不存在时，会自动写入一份可移植的默认配置：保留端口、超时、上下文、同步忽略、worker/step 上限与自动批准编辑，不包含任何 API Key、内网节点、私有网关或 relay 地址。已有配置不会被改写；删除 `config.json` 可在下次启动重新生成。
+- 默认模型是免密的 `opencode-zen/deepseek-v4.1-flash-free`，新安装无需先配置 Key 即可对话；要换成自己的模型，用 `/models` 选择（选中 provider 后按 `Ctrl+A` 可设置或登录）。
 - 在终端（含桌面内嵌终端）执行 `/models`，选中 provider 或进入其模型列表后按 `Ctrl+A` 配置鉴权：`K` 遮罩输入/更新 API Key，`D` 删除已保存 Key（需确认），`O` 打开支持的服务商密钥控制台。Codex 用 `L` 启动官方 CLI 设备码登录，按提示在浏览器授权；需要预先安装 `@openai/codex`。
 - Key 保存到 `~/.luban/provider-auth.json`（或 `LUBAN_HOME`），是本地明文，Unix 文件权限为 `0600`，不进入项目配置、输入历史或会话。保存后立即应用于该 provider 的所有模型，无需重启；优先于配置/环境变量，删除后恢复原来源。任务运行中需先等任务完成才能修改。当前独立 Web 模型选择器没有此鉴权面板。
 - Open Design 设 `OPEN_DESIGN_API_KEY`；OpenCode 设 `OPENCODE_API_KEY` 或 `OPENCODE_ZEN_API_KEY`。

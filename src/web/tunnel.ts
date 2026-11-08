@@ -5,6 +5,7 @@ import {
   FRAME_CHUNK, FRAME_END, FRAME_FAIL, FRAME_HEAD,
   type FailPayload, type ResponseHead, type TunnelMessage, type TunnelRequestMessage,
 } from "./tunnel-frames.js";
+import type { RelayDeviceStatus } from "./device-status.js";
 
 /**
  * Node side of the relay tunnel.
@@ -28,6 +29,12 @@ export interface TunnelClientOptions {
   nodeToken: string;
   /** Per-process phone credential; when supplied the relay pins its link to this node. */
   accessToken?: string;
+  /** Stable machine identity, so reconnects stay one device in the account view. */
+  deviceId?: string;
+  /** Account enrollment token; a relay with accounts maps this node to that account. */
+  deviceToken?: string;
+  /** Compact "what is this machine doing" snapshot sent with every poll. */
+  status?: () => Promise<RelayDeviceStatus> | RelayDeviceStatus;
   /** Address of the local web server this connector proxies to. */
   localHost?: string;
   localPort: number;
@@ -103,6 +110,10 @@ export class TunnelClient {
     return this.registration?.node_id;
   }
 
+  get machineId(): string | undefined {
+    return this.options.deviceId;
+  }
+
   private log(message: string): void {
     this.options.log?.(message);
   }
@@ -156,12 +167,15 @@ export class TunnelClient {
   }
 
   private async register(): Promise<Registration> {
+    const status = await this.status();
     const reply = await this.call("/tunnel/register", {
       name: this.options.name,
       version: this.options.version,
       workspace: this.options.workspace,
       projects: this.options.projects ?? {},
       access_token: this.options.accessToken,
+      device_id: this.options.deviceId,
+      ...(status ? { status } : {}),
     });
     const parsed = reply as Partial<Registration>;
     if (!parsed?.node_id) throw new Error("relay did not return a node id");
@@ -172,7 +186,12 @@ export class TunnelClient {
     const registration = this.registration;
     if (!registration) return;
     const waitMs = registration.poll_wait_ms ?? this.options.pollWaitMs ?? 25_000;
-    const reply = await this.call("/tunnel/poll", { node_id: registration.node_id, wait_ms: waitMs }, waitMs + POLL_RESPONSE_GRACE_MS);
+    const status = await this.status();
+    const reply = await this.call("/tunnel/poll", {
+      node_id: registration.node_id,
+      wait_ms: waitMs,
+      ...(status ? { status } : {}),
+    }, waitMs + POLL_RESPONSE_GRACE_MS);
     const messages = (reply as { messages?: TunnelMessage[] }).messages ?? [];
     for (const message of messages) {
       if (message.type === "request") void this.proxy(message);
@@ -206,6 +225,7 @@ export class TunnelClient {
         "content-type": "application/octet-stream",
         "x-luban-node-token": this.options.nodeToken,
         "x-luban-node-id": this.registration?.node_id ?? "",
+        ...(this.options.deviceToken ? { "x-luban-device-token": this.options.deviceToken } : {}),
         "transfer-encoding": "chunked",
       },
       agent: this.relayAgent,
@@ -277,6 +297,7 @@ export class TunnelClient {
           "content-length": payload.length,
           "x-luban-node-token": this.options.nodeToken,
           "x-luban-node-id": this.registration?.node_id ?? "",
+          ...(this.options.deviceToken ? { "x-luban-device-token": this.options.deviceToken } : {}),
         },
         agent: this.relayAgent,
         signal: this.controller?.signal,
@@ -302,6 +323,16 @@ export class TunnelClient {
       request.on("error", (error: Error) => reject(error));
       request.end(payload);
     });
+  }
+
+  private async status(): Promise<RelayDeviceStatus | undefined> {
+    if (!this.options.status) return undefined;
+    try {
+      return await this.options.status();
+    } catch (error) {
+      this.log(`status snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
   }
 }
 

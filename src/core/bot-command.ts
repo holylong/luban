@@ -41,7 +41,7 @@ async function publishStatus(home: string, startedAt: number): Promise<void> {
 }
 
 const execute: BotExecute = async (task, signal) => {
-  const config = loadConfig({ workspace: task.workspace, model: task.model, mesh: false });
+  const config = loadConfig({ workspace: task.workspace, model: task.model, mesh: false, seedDefaults: true });
   // Never inherit LUBAN_ALLOW_TOOLS or project-config approval overrides in an unattended process.
   config.permissionMode = "ask";
   config.permissions = { allow: [], deny: config.permissions?.deny ?? [] };

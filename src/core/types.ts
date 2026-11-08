@@ -173,6 +173,7 @@ export interface RemoteControlSettings {
   relayUrl: string;
   nodeTokenEnv: string;
   nodeTokenFile: string;
+  deviceTokenEnv: string;
   relayCa: string;
 }
 

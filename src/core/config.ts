@@ -5,6 +5,7 @@ import { basename, join, resolve } from "node:path";
 import type { ConflictPolicy, LubanConfig, McpServerSettings, MeshContact, ModelRef, SyncMode } from "./types.js";
 import { consoleAccessToken } from "./opencode-console.js";
 import { readProviderKeys } from "./provider-auth.js";
+import { ensureStarterConfig } from "./default-config.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -566,6 +567,11 @@ export interface LoadConfigOptions {
   planning?: string;
   /** Terminal color scheme id or alias; overrides config and preferences. */
   theme?: string;
+  /**
+   * Write the portable starter config when this home has none. Only real entry
+   * points opt in; library and test callers keep their home untouched.
+   */
+  seedDefaults?: boolean;
 }
 
 /**
@@ -591,6 +597,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const defaultHome = join(homedir(), ".luban");
   const home = resolve(process.env.LUBAN_HOME || defaultHome);
   if (home === defaultHome) migrateLegacyHome(defaultHome);
+  if (options.seedDefaults) ensureStarterConfig(home);
   const savedProviderKeys = readProviderKeys(home);
   const workspace = resolve(options.workspace || process.cwd());
   const globalConfig = readJson(join(home, "config.json"));
@@ -833,6 +840,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
       relayUrl: text(remoteRaw.relay_url, remoteRaw.relayUrl, process.env.LUBAN_RELAY_PUBLIC_URL),
       nodeTokenEnv: text(remoteRaw.node_token_env, remoteRaw.nodeTokenEnv, "LUBAN_RELAY_NODE_TOKEN"),
       nodeTokenFile: resolve(text(remoteRaw.node_token_file, remoteRaw.nodeTokenFile, join(homedir(), ".config/luban/relay.env"))),
+      deviceTokenEnv: text(remoteRaw.device_token_env, remoteRaw.deviceTokenEnv, "LUBAN_RELAY_DEVICE_TOKEN"),
       relayCa: text(remoteRaw.relay_ca, remoteRaw.relayCa),
     },
   };

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setNodeScope } from "./api";
-import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, ToolRun } from "./types";
+import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, SessionSummary, ToolRun } from "./types";
 import {
   deriveTimeline, editRecordStats, formatDuration, liveProgress, parseEditRecord,
   relativeTime, STATUS_LABELS, toolLabel, withOutcome,
@@ -17,11 +17,23 @@ import {
  * which of the two it is talking to.
  */
 
-type Tab = "live" | "jobs" | "approvals" | "settings";
+type Tab = "live" | "devices" | "jobs" | "approvals" | "settings";
 type TaskMode = "edits" | "agent" | "read";
+
+interface RelayJob {
+  id: string;
+  title: string;
+  instruction: string;
+  status: string;
+  progress: number;
+  updated_at: number;
+  session_id?: string;
+}
 
 interface RelayNode {
   id: string;
+  device_id?: string;
+  node_id?: string;
   name: string;
   version: string;
   workspace: string;
@@ -29,7 +41,21 @@ interface RelayNode {
   online: boolean;
   last_seen: number;
   connected_at: number;
+  status?: { updated_at: number; model?: string; jobs: RelayJob[] };
 }
+
+interface AccountView {
+  id: string;
+  email: string;
+  created_at: number;
+  has_device_token: boolean;
+}
+
+type AuthState =
+  | { state: "loading" }
+  | { state: "legacy" }
+  | { state: "anonymous"; emailVerification: boolean }
+  | { state: "account"; account: AccountView };
 
 interface Toast { id: number; text: string; error?: boolean }
 
@@ -110,12 +136,143 @@ function ToolCard({ run, open, onToggle }: {
 
 const ACTIVE_STATUS = new Set(["queued", "pending", "working"]);
 
+/** Login/register screen shown by a relay with accounts enabled. */
+function AuthScreen({ emailVerification, onAuthenticated }: {
+  emailVerification: boolean;
+  onAuthenticated: (account: AccountView) => void;
+}): React.ReactElement {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setTimeout(() => setCooldown(value => Math.max(0, value - 1)), 1000);
+    return () => clearTimeout(timer);
+  }, [cooldown]);
+
+  const sendCode = async (): Promise<void> => {
+    if (sending || cooldown > 0) return;
+    setSending(true);
+    setError(undefined);
+    try {
+      const response = await fetch("/api/auth/send-code", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setCodeSent(true);
+      setCooldown(60);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const submit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/auth/${mode}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          ...(mode === "register" && emailVerification ? { code: code.trim() } : {}),
+        }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string; account?: AccountView };
+      if (!response.ok || !payload.ok || !payload.account) throw new Error(payload.error || `HTTP ${response.status}`);
+      onAuthenticated(payload.account);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const switchMode = (): void => {
+    setMode(current => current === "login" ? "register" : "login");
+    setError(undefined);
+    setCode("");
+    setCodeSent(false);
+    setCooldown(0);
+  };
+
+  const needsCode = mode === "register" && emailVerification;
+  return (
+    <div className="m-app m-auth">
+      <div className="m-auth-card">
+        <div className="m-auth-brand"><span className="m-brand">luban</span><span className="m-auth-sub">手机远控</span></div>
+        <h1>{mode === "login" ? "登录你的账户" : "创建账户"}</h1>
+        <p className="m-note">
+          {mode === "login"
+            ? "登录后可以看到该账户下所有装了 luban 的电脑，并给任意一台上派活。"
+            : "注册后在这台手机上登录，然后在每台电脑上生成设备令牌接入。"}
+        </p>
+        <form onSubmit={event => void submit(event)}>
+          <label className="m-field">
+            <span>邮箱</span>
+            <input className="m-input" type="email" autoComplete="email" required value={email}
+              onChange={event => setEmail(event.target.value)} placeholder="you@example.com" />
+          </label>
+          <label className="m-field">
+            <span>密码</span>
+            <input className="m-input" type="password" required minLength={8}
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              value={password} onChange={event => setPassword(event.target.value)} placeholder="至少 8 位" />
+          </label>
+          {needsCode && (
+            <label className="m-field">
+              <span>邮箱验证码</span>
+              <div className="m-auth-code-row">
+                <input className="m-input" inputMode="numeric" pattern="[0-9]{6}" maxLength={6}
+                  required value={code} onChange={event => setCode(event.target.value.replace(/\D/gu, ""))}
+                  placeholder="6 位数字" />
+                <button className="m-auth-code-btn" type="button" disabled={sending || cooldown > 0 || !email.trim()}
+                  onClick={() => void sendCode()}>
+                  {sending ? "发送中…" : cooldown > 0 ? `${cooldown}s` : codeSent ? "重新发送" : "发送验证码"}
+                </button>
+              </div>
+              {codeSent && <span className="m-auth-hint">验证码已发送，请查收邮箱（包括垃圾箱）。</span>}
+            </label>
+          )}
+          {error && <div className="m-auth-error">{error}</div>}
+          <button className="m-send m-auth-submit" type="submit"
+            disabled={busy || !email.trim() || password.length < 8 || (needsCode && code.length !== 6)}>
+            {busy ? "请稍候…" : mode === "login" ? "登录" : "注册并登录"}
+          </button>
+        </form>
+        <button className="m-auth-switch" type="button" onClick={switchMode}>
+          {mode === "login" ? "没有账户？注册" : "已有账户？登录"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function MobileApp(): React.ReactElement {
   const [tab, setTab] = useState<Tab>("live");
+  const [auth, setAuth] = useState<AuthState>({ state: "loading" });
   const [relayMode, setRelayMode] = useState(false);
   const [relayNodes, setRelayNodes] = useState<RelayNode[]>([]);
   const [scope, setScope] = useState<string | undefined>(initialNodeScope);
   const [node, setNode] = useState<NodeInfo | undefined>();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [continueSession, setContinueSession] = useState<SessionSummary | undefined>();
+  const [deviceSetup, setDeviceSetup] = useState<{ token: string; command: string } | undefined>();
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>();
   const [live, setLive] = useState(false);
@@ -136,6 +293,39 @@ export function MobileApp(): React.ReactElement {
   const toastId = useRef(0);
   const selectedRef = useRef<string | undefined>(selectedId);
   selectedRef.current = selectedId;
+  const ready = auth.state === "account" || auth.state === "legacy";
+
+  // Ask the relay whether it has accounts. A plain `luban web` answers 404
+  // here and keeps the legacy token/LAN behaviour; a relay answers 401 until
+  // the phone signs in.
+  useEffect(() => {
+    let stopped = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/me");
+        if (stopped) return;
+        if (response.status === 404) { setAuth({ state: "legacy" }); return; }
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({})) as { email_verification?: boolean };
+          // Account mode still accepts a legacy one-tap token link. `/relay/nodes`
+          // answers with the legacy node list even when every node is offline,
+          // so this check does not depend on a laptop being awake.
+          const legacy = await fetch("/relay/nodes").then(reply => reply.ok).catch(() => false);
+          setAuth(legacy
+            ? { state: "legacy" }
+            : { state: "anonymous", emailVerification: payload.email_verification !== false });
+          return;
+        }
+        const payload = await response.json() as { account?: AccountView };
+        setAuth(payload.account
+          ? { state: "account", account: payload.account }
+          : { state: "anonymous", emailVerification: true });
+      } catch {
+        if (!stopped) setAuth({ state: "legacy" });
+      }
+    })();
+    return () => { stopped = true; };
+  }, []);
 
   const notify = useCallback((text: string, error = false) => {
     const id = ++toastId.current;
@@ -172,13 +362,30 @@ export function MobileApp(): React.ReactElement {
       setProject(current => current || (info.projects && Object.keys(info.projects).length ? Object.keys(info.projects)[0]! : ""));
     } catch (error) {
       setConnected(false);
+      if ((error as { status?: number }).status === 401) {
+        setAuth(current => current.state === "anonymous" ? current : { state: "anonymous", emailVerification: true });
+      }
       setConnectionError(error instanceof Error ? error.message : String(error));
     }
   }, []);
 
+  const refreshSessions = useCallback(async () => {
+    if (!ready || !node) return;
+    try {
+      setSessions(await api.sessions(project || node.project || ""));
+    } catch {
+      setSessions([]);
+    }
+  }, [ready, node, project]);
+
   const refreshRelayNodes = useCallback(async () => {
     try {
       const response = await fetch("/relay/nodes");
+      if (response.status === 401) {
+        setAuth(current => current.state === "anonymous" ? current : { state: "anonymous", emailVerification: true });
+        setRelayMode(false);
+        return;
+      }
       if (!response.ok) { setRelayMode(false); return; }
       const payload = await response.json() as { ok?: boolean; nodes?: RelayNode[] };
       if (!payload?.ok) { setRelayMode(false); return; }
@@ -201,6 +408,7 @@ export function MobileApp(): React.ReactElement {
   // Initial load: relay detection first, because it decides whether a node has
   // to be selected before any other call can succeed.
   useEffect(() => {
+    if (!ready) return;
     void (async () => {
       await refreshRelayNodes();
       await refresh();
@@ -208,21 +416,28 @@ export function MobileApp(): React.ReactElement {
       if (id) await loadJob(id).catch(() => { localStorage.removeItem(JOB_KEY); setSelectedId(undefined); });
       await refreshApprovals();
     })();
-  }, [refreshRelayNodes, refresh, loadJob, refreshApprovals]);
+  }, [ready, refreshRelayNodes, refresh, loadJob, refreshApprovals]);
+
+  useEffect(() => {
+    if (!ready) return;
+    void refreshSessions();
+  }, [ready, refreshSessions]);
 
   // Keep polling: the stream carries the detail, polling is the safety net for
   // a phone that was asleep, changed networks, or lost a frame.
   useEffect(() => {
+    if (!ready) return;
     const timer = setInterval(() => {
       void refresh();
       void refreshApprovals();
       if (relayMode) void refreshRelayNodes();
     }, 4000);
     return () => clearInterval(timer);
-  }, [refresh, refreshApprovals, refreshRelayNodes, relayMode]);
+  }, [ready, refresh, refreshApprovals, refreshRelayNodes, relayMode]);
 
   // Live stream.
   useEffect(() => {
+    if (!ready) return;
     let source: EventSource | undefined;
     let stopped = false;
     const streamUrl = scope ? `/api/events?node=${encodeURIComponent(scope)}` : "/api/events";
@@ -321,15 +536,19 @@ export function MobileApp(): React.ReactElement {
     if (!instruction) return;
     setBusy(true);
     try {
-      const reply = await api.submit({ instruction, project_id: project, mode, interaction: "on" });
+      const reply = await api.submit({
+        instruction, project_id: project, mode, interaction: "on",
+        ...(continueSession ? { session_id: continueSession.id } : {}),
+      });
       setDraft("");
+      setContinueSession(undefined);
       await refresh();
       selectJob(reply.job_id);
       if (!reply.interactive) notify("服务器未启用交互审批：本任务按自动放行执行");
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), true);
     } finally { setBusy(false); }
-  }, [draft, project, mode, refresh, selectJob, notify]);
+  }, [draft, project, mode, continueSession, refresh, selectJob, notify]);
 
   const cancel = useCallback(async () => {
     if (!selectedId) return;
@@ -350,15 +569,50 @@ export function MobileApp(): React.ReactElement {
     } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
   }, [notify]);
 
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+
   const chooseNode = useCallback((id: string) => {
     setScope(id || undefined);
     if (id) localStorage.setItem(NODE_KEY, id);
     else localStorage.removeItem(NODE_KEY);
     setJob(undefined);
     setEvents([]);
+    setSessions([]);
+    setContinueSession(undefined);
   }, []);
 
-  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const openDevice = useCallback((id: string) => {
+    chooseNode(id);
+    setTab("live");
+    setTimeout(() => composerRef.current?.focus(), 60);
+  }, [chooseNode]);
+
+  const requestDeviceToken = useCallback(async () => {
+    try {
+      const response = await fetch("/api/account/device-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string; token?: string; command?: string };
+      if (!response.ok || !payload.token) throw new Error(payload.error || `HTTP ${response.status}`);
+      setDeviceSetup({ token: payload.token, command: payload.command || "" });
+      notify("设备令牌已生成，只显示这一次");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), true);
+    }
+  }, [notify]);
+
+  const logout = useCallback(async () => {
+    try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* already offline */ }
+    setAuth(current => ({
+      state: "anonymous",
+      emailVerification: current.state === "anonymous" ? current.emailVerification : true,
+    }));
+    setRelayNodes([]);
+    setRelayMode(false);
+  }, []);
+
   useEffect(() => {
     const element = composerRef.current;
     if (!element) return;
@@ -369,6 +623,15 @@ export function MobileApp(): React.ReactElement {
   const dotClass = !connected ? "offline" : running ? "working" : live ? "online" : "offline";
   const nodeLabel = node ? `${node.name}${node.model ? ` · ${node.model}` : ""}` : connectionError ? "未连接" : "连接中";
   const activeJobs = jobs.filter(item => ACTIVE_STATUS.has(item.status)).length;
+  const account = auth.state === "account" ? auth.account : undefined;
+
+  if (auth.state === "loading") {
+    return <div className="m-app"><div className="m-empty"><h2>正在连接…</h2><p>检查这台手机与中继的登录状态。</p></div></div>;
+  }
+  if (auth.state === "anonymous") {
+    return <AuthScreen emailVerification={auth.emailVerification}
+      onAuthenticated={next => { setAuth({ state: "account", account: next }); setRelayMode(true); }} />;
+  }
 
   return (
     <div className="m-app">
@@ -377,17 +640,17 @@ export function MobileApp(): React.ReactElement {
           <span className={`m-dot ${dotClass}`} />
           <span className="m-brand">luban</span>
           <span className="m-head-meta">{nodeLabel}</span>
-          {relayNodes.length > 1 && (
-            <select value={scope ?? ""} onChange={event => chooseNode(event.target.value)} aria-label="选择节点">
+          {relayMode && relayNodes.length > 0 && (
+            <select value={scope ?? ""} onChange={event => chooseNode(event.target.value)} aria-label="选择电脑">
               {relayNodes.map(item => (
                 <option key={item.id} value={item.id}>{item.online ? "● " : "○ "}{item.name}</option>
               ))}
             </select>
           )}
-          {relayNodes.length === 1 && <span className="m-chip done" style={{ marginLeft: "auto" }}>{relayNodes[0]!.online ? "在线" : "离线"}</span>}
+          {relayMode && relayNodes.length === 0 && <span className="m-chip failed" style={{ marginLeft: "auto" }}>无设备</span>}
         </div>
         <div className="m-head-meta">
-          {job ? `${job.title || job.id} · ${STATUS_LABELS[job.status] ?? job.status}` : node?.workspace || "未选择任务"}
+          {job ? `${job.title || job.id} · ${STATUS_LABELS[job.status] ?? job.status}` : node?.workspace || (relayMode ? "选择一台电脑开始" : "未选择任务")}
           {activeJobs > 1 ? ` · ${activeJobs} 个进行中` : ""}
         </div>
       </header>
@@ -395,8 +658,8 @@ export function MobileApp(): React.ReactElement {
       <main className="m-main">
         {relayMode && relayNodes.length === 0 && (
           <div className="m-banner warn">
-            本机 luban 还没有连上中继。在电脑上运行：
-            <pre style={{ margin: "8px 0 0", font: "11.5px var(--mono)", whiteSpace: "pre-wrap" }}>luban web --relay {location.origin} --token &lt;节点令牌&gt;</pre>
+            账户下还没有电脑。打开「设置 → 添加电脑」生成设备令牌，然后在电脑上运行：
+            <pre style={{ margin: "8px 0 0", font: "11.5px var(--mono)", whiteSpace: "pre-wrap" }}>luban web &lt;项目路径&gt; --relay {location.origin} --relay-device-token &lt;设备令牌&gt;</pre>
           </div>
         )}
         {!connected && connectionError && relayMode && relayNodes.length > 0 && (
@@ -405,6 +668,14 @@ export function MobileApp(): React.ReactElement {
 
         {tab === "live" && (
           <>
+            {continueSession && (
+              <div className="m-banner">
+                将接续会话：{continueSession.title}
+                <div className="m-banner-actions">
+                  <button className="m-btn" onClick={() => setContinueSession(undefined)}>改为新会话</button>
+                </div>
+              </div>
+            )}
             {pendingApprovals.length + pendingQuestions.length > 0 && (
               <div className="m-banner">
                 ⚠️ 有 {pendingApprovals.length + pendingQuestions.length} 个问题或操作等待回应
@@ -475,6 +746,43 @@ export function MobileApp(): React.ReactElement {
           </>
         )}
 
+        {tab === "devices" && (
+          <>
+            {!relayMode && (
+              <div className="m-empty"><h2>直连模式</h2><p>当前页面直接连接本机 luban；登录中继账户后，这里会列出账户下的所有电脑。</p></div>
+            )}
+            {relayMode && relayNodes.length === 0 && (
+              <div className="m-empty"><h2>账户下还没有电脑</h2><p>在「设置 → 添加电脑」生成设备令牌，然后在电脑上启动 luban web 并接入中继。</p></div>
+            )}
+            {relayNodes.map(device => {
+              const deviceJobs = device.status?.jobs ?? [];
+              const active = deviceJobs.filter(item => ACTIVE_STATUS.has(item.status));
+              const latest = active[0] ?? deviceJobs[0];
+              return (
+                <div className={`m-card m-device ${device.id === scope ? "active" : ""}`} key={device.id}>
+                  <div className="m-device-row">
+                    <span className={`m-dot ${device.online ? "online" : "offline"}`} />
+                    <strong>{device.name}</strong>
+                    <span className={`m-chip ${device.online ? "done" : "failed"}`}>{device.online ? "在线" : "离线"}</span>
+                    {active.length > 1 && <span className="m-chip working">{active.length} 个进行中</span>}
+                  </div>
+                  <div className="m-device-path">{device.workspace || "未报告工作区"}{device.status?.model ? ` · ${device.status.model}` : ""}</div>
+                  {latest ? (
+                    <div className="m-device-job">
+                      <span className={`m-chip ${latest.status}`}>{STATUS_LABELS[latest.status as keyof typeof STATUS_LABELS] ?? latest.status}</span>
+                      <span>{latest.title || latest.instruction || latest.id}</span>
+                    </div>
+                  ) : <div className="m-note">{device.online ? "空闲，等待派活" : "离线"}</div>}
+                  <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
+                    <button className="m-btn primary" disabled={!device.online} onClick={() => openDevice(device.id)}>打开并派活</button>
+                    <button className="m-btn" onClick={() => { chooseNode(device.id); setTab("jobs"); }}>查看任务</button>
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+
         {tab === "jobs" && (
           <>
             {jobs.length === 0 && <div className="m-empty"><h2>还没有任务</h2><p>输入指令后，任务会出现在这里。</p></div>}
@@ -531,6 +839,24 @@ export function MobileApp(): React.ReactElement {
 
         {tab === "settings" && (
           <>
+            {account && (
+              <div className="m-card">
+                <h3>账户</h3>
+                <dl className="m-kv">
+                  <dt>邮箱</dt><dd>{account.email}</dd>
+                  <dt>设备</dt><dd>{relayNodes.length} 台</dd>
+                </dl>
+                <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
+                  <button className="m-btn primary" onClick={() => void requestDeviceToken()}>添加电脑</button>
+                </div>
+                {deviceSetup && (
+                  <div className="m-device-token">
+                    <p className="m-note">令牌只显示这一次；重新生成会使旧令牌失效。</p>
+                    <pre>{deviceSetup.command}</pre>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="m-card">
               <h3>连接</h3>
               <dl className="m-kv">
@@ -544,12 +870,12 @@ export function MobileApp(): React.ReactElement {
             </div>
             {relayMode && (
               <div className="m-card">
-                <h3>中继节点</h3>
+                <h3>{account ? "账户设备" : "中继节点"}</h3>
                 {relayNodes.length === 0 && <p className="m-note">还没有节点连上中继。</p>}
                 {relayNodes.map(item => (
                   <button key={item.id} className={`m-job ${item.id === scope ? "active" : ""}`} onClick={() => chooseNode(item.id)}>
                     <div className="m-job-title">{item.online ? "● " : "○ "}{item.name}</div>
-                    <div className="m-job-meta"><span>{item.workspace || "—"}</span><span>v{item.version}</span></div>
+                    <div className="m-job-meta"><span>{item.workspace || "—"}</span><span>v{item.version || "—"}</span></div>
                   </button>
                 ))}
               </div>
@@ -566,7 +892,9 @@ export function MobileApp(): React.ReactElement {
               <h3>使用提示</h3>
               <p className="m-note">在浏览器菜单里选择「添加到主屏幕」，即可像 App 一样全屏打开，并保留登录状态。</p>
               <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
-                <a className="m-btn" style={{ textAlign: "center", textDecoration: "none" }} href="/logout">退出登录</a>
+                {account
+                  ? <button className="m-btn" onClick={() => void logout()}>退出登录</button>
+                  : <a className="m-btn" style={{ textAlign: "center", textDecoration: "none" }} href="/logout">退出登录</a>}
               </div>
             </div>
           </>
@@ -579,7 +907,7 @@ export function MobileApp(): React.ReactElement {
             ref={composerRef}
             value={draft}
             rows={1}
-            placeholder={job && ACTIVE_STATUS.has(job.status) ? "补充指令，Agent 会在下一步执行" : "让本机 Agent 做什么？"}
+            placeholder={continueSession ? `继续：${continueSession.title}` : job && ACTIVE_STATUS.has(job.status) ? "补充指令，Agent 会在下一步执行" : "让这台电脑的 Agent 做什么？"}
             onChange={event => setDraft(event.target.value)}
             onKeyDown={event => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
@@ -588,6 +916,20 @@ export function MobileApp(): React.ReactElement {
           <button className="m-send" disabled={busy || !draft.trim() || !node} onClick={() => void submit()} aria-label="发送">↑</button>
         </div>
         <div className="m-compose-hint">
+          {sessions.length > 0 && (
+            <select
+              value={continueSession?.id ?? ""}
+              aria-label="继续会话"
+              onChange={event => {
+                const next = sessions.find(item => item.id === event.target.value);
+                setContinueSession(next);
+                if (next) setProject(next.project);
+              }}
+            >
+              <option value="">新会话</option>
+              {sessions.slice(0, 8).map(item => <option key={item.id} value={item.id}>继续：{item.title}</option>)}
+            </select>
+          )}
           <select value={project} onChange={event => setProject(event.target.value)} aria-label="项目">
             {Object.keys(node?.projects ?? {}).length === 0 && <option value="">默认工作区</option>}
             {Object.entries(node?.projects ?? {}).map(([name, path]) => <option key={name} value={name}>{name} · {String(path).split(/[\\/]/u).pop()}</option>)}
@@ -602,6 +944,10 @@ export function MobileApp(): React.ReactElement {
       <nav className="m-tabs">
         <button className={`m-tab ${tab === "live" ? "active" : ""}`} onClick={() => setTab("live")}>
           <span className="icon">◈</span><span>状态</span>
+        </button>
+        <button className={`m-tab ${tab === "devices" ? "active" : ""}`} onClick={() => setTab("devices")}>
+          <span className="icon">▣</span><span>设备</span>
+          {relayMode && <span className="m-badge">{relayNodes.filter(item => item.online).length}</span>}
         </button>
         <button className={`m-tab ${tab === "jobs" ? "active" : ""}`} onClick={() => setTab("jobs")}>
           <span className="icon">≡</span><span>任务</span>

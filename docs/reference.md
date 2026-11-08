@@ -435,6 +435,12 @@ TUI 里输入 `/mcp` 打开同一份列表：`Enter` 现场试连（连不上会
 完整示例见 [config.example.json](config.example.json)，其中 `model.active` 已选择 Codex；
 只需 Codex 登录和模型设置时，使用 [config.codex.example.json](../config.codex.example.json)。
 
+新安装（`~/.luban/config.json` 不存在）首次启动会写入一份可移植的起始配置：端口、超时、
+上下文、同步忽略、worker/step 上限与 `permission.mode: "edits"`，默认模型为免密的
+`opencode-zen/deepseek-v4.1-flash-free`。模板不包含 API Key、私有网关、内网节点、
+relay 地址或项目路径；已有配置不会被覆盖，删除该文件即可在下次启动重新生成。
+API Key 建议用 `/models` 里的 `Ctrl+A` 面板写入用户目录，而不是写进项目配置。
+
 本地模型走 OpenAI 兼容接口时，`baseURL` 要带 `/v1`；只返回 HTML 的端口是前端 UI，不能直接
 配置。示例中 `strata-local` 用 `127.0.0.1:8080/v1`，而 `web.port` 也是 `8080`——两者会冲突，
 跑 Strata 时请把 luban 的 Web 端口改成别的值。`api_key_env` 留空时，`resolveKey` 会回退到
@@ -1075,6 +1081,58 @@ WantedBy=default.target
 配置好后直接运行 `luban /path/to/project`。TUI 中输入 `/token` 显示**当前实例**的登录链接；在两个目录或两个终端分别运行时会注册成两个独立节点，令牌和远程任务各自固定到对应实例。手机端可以使用这一个实例的工作目录、项目、模型和任务存储。无需单独运行 `luban web` 或安装电脑端 systemd 常驻单元。
 
 节点令牌由中继部署时写入 `~/.config/luban/relay.env`；若使用 IP 直连而非域名，可配 Let's Encrypt 的 IP 证书并用定时任务自动续期。检查中继可运行 `systemctl status <中继服务名> <续期定时器名>`。服务器地址变化时，需要更新这里的 `remote.relay_url` 并重新申请证书。
+
+启用账户注册时，再在同一个 `relay.env` 中加入发信邮箱；密码使用邮箱服务商的**应用专用密码**，不是登录密码。默认按 163 的 SMTPS `smtp.163.com:465` 发信：
+
+```bash
+LUBAN_RELAY_SMTP_EMAIL=your-mailbox@163.com
+LUBAN_RELAY_SMTP_PASSWORD=your-app-password
+# 可选：LUBAN_RELAY_SMTP_HOST=smtp.163.com
+# 可选：LUBAN_RELAY_SMTP_PORT=465
+```
+
+配置后，`/m/` 注册页会显示“发送验证码”，验证码 10 分钟内有效、最多尝试 5 次、同一邮箱 60 秒内不能重发、每小时最多 5 封。未配置邮箱的中继仍允许无验证码注册，适合本机或受信任内网；公网中继不建议这样开放注册。命令行也可用 `--smtp-email`、`--smtp-password`、`--smtp-host`、`--smtp-port` 覆盖，但密码更建议只放在权限 `600` 的环境文件里。
+
+#### 电脑端接入账户
+
+电脑端不输入邮箱和密码，也不需要中继的共享节点令牌。登录手机账户后，打开「设置 → 账户 → 添加电脑」，生成**设备令牌**和一条命令；在电脑的项目目录运行这条命令即可：
+
+```bash
+luban web /path/to/project --relay https://relay.example.com --relay-device-token <设备令牌>
+```
+
+也可以不用打开手机或浏览器，直接在电脑终端登录账户：
+
+```bash
+luban login relay --relay https://relay.example.com --email you@example.com
+```
+
+密码会以隐藏输入方式询问，不写入 shell 历史；自动化环境可用 `--password-stdin` 从标准输入读取。登录成功后，命令会把设备令牌写入 `~/.config/luban/relay.env`（权限 `600`），并把 `remote.enabled`、`remote.relay_url` 写入 `~/.luban/config.json`；之后直接运行 `luban <项目路径>` 即可自动接入。已有设备令牌时，可用 `--device-token <令牌>` 只保存令牌，或加 `--no-config` 只写环境文件。
+
+设备令牌只显示一次，重新生成会使旧令牌失效；一个账户的设备令牌可以接入多台电脑。运行后手机会在「账户设备」里看到这台电脑，点选即可派活。关闭终端后节点会离线；需要长期在线时把命令做成 systemd 用户服务，或使用下面的配置文件方式。
+
+也可以让 TUI 启动时自动接入。编辑 `~/.luban/config.json`：
+
+```json
+{
+  "remote": {
+    "enabled": true,
+    "relay_url": "https://relay.example.com",
+    "device_token_env": "LUBAN_RELAY_DEVICE_TOKEN",
+    "node_token_file": "/home/you/.config/luban/relay.env",
+    "host": "127.0.0.1",
+    "port": 0
+  }
+}
+```
+
+把设备令牌写入权限 `600` 的 `~/.config/luban/relay.env`：
+
+```bash
+LUBAN_RELAY_DEVICE_TOKEN=<设备令牌>
+```
+
+之后正常运行 `luban /path/to/project`，TUI 会同时启动本机 Web 服务并拨出到中继；手机端选择这台电脑即可。不要把邮箱密码或中继的 `LUBAN_RELAY_NODE_TOKEN` 填进电脑端配置。
 
 ### Android APK 的构建、安装与使用
 

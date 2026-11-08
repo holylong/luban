@@ -119,7 +119,7 @@ export async function runMcp(argv: string[], paths?: McpPaths): Promise<number> 
   let config: ReturnType<typeof loadConfig> | undefined;
   const resolvedPaths = (): McpPaths => {
     if (paths) return paths;
-    config ??= loadConfig({ workspace: process.cwd() });
+    config ??= loadConfig({ workspace: process.cwd(), seedDefaults: true });
     return { home: config.home, workspace: config.workspace };
   };
   try {

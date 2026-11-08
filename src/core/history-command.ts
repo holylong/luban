@@ -26,7 +26,7 @@ export async function runHistory(argv: string[]): Promise<number> {
   program.parse(argv, { from: "user" });
   const workspace = (program.args[0] ?? process.cwd()) as string;
   const options = program.opts<{ query?: string; project?: string; limit?: number; full?: boolean }>();
-  const config = loadConfig({ workspace });
+  const config = loadConfig({ workspace, seedDefaults: true });
   const history = SessionHistory.openForRead(config.history, config.home);
   if (!history) {
     const directory = config.history.directory || `${config.home}/history`;
