@@ -3,6 +3,10 @@ import { api, setNodeScope } from "./api";
 import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, SessionDetail, SessionSummary, ToolRun } from "./types";
 import { MobileSessionHistory } from "./mobile-session";
 import { mobileProject, mobileProjects } from "./mobile-project";
+import {
+  appearanceOf, applyAppearance, loadAppearance, saveAppearance, systemDark,
+  THEME_OPTIONS, type Appearance, type ThemeMode,
+} from "./mobile-theme";
 import { version as webVersion } from "../../../package.json";
 import {
   deriveTimeline, editRecordStats, formatDuration, liveProgress, parseEditRecord,
@@ -268,6 +272,9 @@ function AuthScreen({ emailVerification, onAuthenticated }: {
 
 export function MobileApp(): React.ReactElement {
   const [tab, setTab] = useState<Tab>("live");
+  // Painted on <html> via data-luban-theme. The Android shell pins it with
+  // ?theme= so the native window and the page cannot disagree.
+  const [look, setLook] = useState<Appearance>(() => loadAppearance(location.search));
   const [auth, setAuth] = useState<AuthState>({ state: "loading" });
   const [relayMode, setRelayMode] = useState(false);
   const [relayNodes, setRelayNodes] = useState<RelayNode[]>([]);
@@ -300,6 +307,22 @@ export function MobileApp(): React.ReactElement {
   const selectedRef = useRef<string | undefined>(selectedId);
   selectedRef.current = selectedId;
   const ready = auth.state === "account" || auth.state === "legacy";
+  useEffect(() => { applyAppearance(look); }, [look]);
+  // Follow the OS while the page owns the choice. Inside the Android shell the
+  // shell resolves "跟随系统" itself and pins the result through ?theme=.
+  useEffect(() => {
+    if (look.locked || look.mode !== "system" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const sync = () => setLook(current => current.mode === "system" && !current.locked
+      ? appearanceOf("system", false, media.matches) : current);
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, [look.locked, look.mode]);
+  const chooseAppearance = useCallback((mode: ThemeMode) => {
+    if (look.locked) return;
+    saveAppearance(mode);
+    setLook(appearanceOf(mode, false, systemDark()));
+  }, [look.locked]);
 
   // Ask the relay whether it has accounts. A plain `luban web` answers 404
   // here and keeps the legacy token/LAN behaviour; a relay answers 401 until
@@ -942,6 +965,27 @@ export function MobileApp(): React.ReactElement {
 
         {tab === "settings" && (
           <>
+            <div className="m-card">
+              <h3>外观</h3>
+              <div className="m-choices" role="group" aria-label="主题">
+                {THEME_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    className={`m-choice ${look.mode === option.value ? "active" : ""}`}
+                    aria-pressed={look.mode === option.value}
+                    disabled={look.locked}
+                    onClick={() => chooseAppearance(option.value)}
+                  >{option.label}</button>
+                ))}
+              </div>
+              <p className="m-note" style={{ marginBottom: 0 }}>
+                {look.locked
+                  ? `主题由 luban App 控制，当前为${look.theme === "dark" ? "深色" : "浅色"}；可在 App 的「外观设置」里切换。`
+                  : look.mode === "system"
+                    ? `跟随系统，当前${look.theme === "dark" ? "深色" : "浅色"}。`
+                    : `已固定为${look.theme === "dark" ? "深色" : "浅色"}。`}
+              </p>
+            </div>
             {account && (
               <div className="m-card">
                 <h3>账户</h3>

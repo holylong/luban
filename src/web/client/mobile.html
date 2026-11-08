@@ -4,9 +4,28 @@
     <meta charset="utf-8" />
     <!-- viewport-fit=cover + safe-area insets: usable on a notched phone. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#050607" />
-    <!-- Home-screen app: no browser chrome, and the dark theme is kept. -->
+    <!-- Paint the stored/shell theme before the bundle loads, so a light-mode
+         phone does not flash a dark page on every cold start. -->
+    <script>
+      (function () {
+        try {
+          var query = new URLSearchParams(location.search).get("theme");
+          var stored = localStorage.getItem("luban.mobile.theme");
+          var known = function (value) { return value === "dark" || value === "light" || value === "system"; };
+          var system = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var mode = known(query) ? query : known(stored) ? stored : "system";
+          var theme = mode === "system" ? (system ? "dark" : "light") : mode;
+          document.documentElement.setAttribute("data-luban-theme", theme);
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", theme === "light" ? "#f4f6f9" : "#050607");
+        } catch (error) {
+          /* The bundle applies the default theme anyway. */
+        }
+      })();
+    </script>
+    <!-- Home-screen app: no browser chrome; the palette follows the picker. -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="luban" />
