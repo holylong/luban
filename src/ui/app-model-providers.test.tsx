@@ -1,6 +1,6 @@
 import React from "react";
 import { PassThrough } from "node:stream";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -102,6 +102,81 @@ it("groups models by provider, keeps submenu navigation, and saves only a select
     await expect.poll(() => frame).toContain("Models · alpha · 2 条");
     expect(frame).toContain("› Alpha Two");
     expect(frame).toContain("●当前");
+  } finally {
+    app.unmount();
+    app.cleanup();
+    if (oldHome === undefined) delete process.env.LUBAN_HOME; else process.env.LUBAN_HOME = oldHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 20000);
+
+it("opens custom-provider auth with Ctrl+A, persists the key, and preserves model navigation", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-model-auth-"));
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  await writeFile(join(home, "config.json"), JSON.stringify({
+    model: { active: "custom-gateway/two" },
+    providers: {
+      "custom-gateway": { api: "openai", base_url: "https://gateway.invalid/v1", models: { one: { name: "Gateway One" }, two: { name: "Gateway Two" } } },
+    },
+  }));
+  const config = loadConfig({ workspace });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 140, rows: 40, isTTY: true });
+  let frame = "";
+  let output = "";
+  stdout.on("data", data => { frame = stripVTControlCharacters(String(data)); output += String(data); });
+  const app = render(<App config={config} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: true, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame, { timeout: 5000 }).toContain("Auto");
+    stdin.write("/models");
+    await new Promise(resolve => setTimeout(resolve, 80));
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("Model providers");
+    for (const character of "custom-gateway") {
+      stdin.write(character);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    await expect.poll(() => frame).toContain("Model providers · 1 条 · filter: custom-gateway");
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("Models · custom-gateway · 2 条");
+    expect(frame).toContain("› Gateway Two");
+    for (const character of "two") {
+      stdin.write(character);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    await expect.poll(() => frame).toContain("Models · custom-gateway · 1 条 · filter: two");
+    stdin.write("\u0001");
+    await expect.poll(() => frame).toContain("Provider 鉴权 · custom-gateway");
+    stdin.write("k");
+    await expect.poll(() => frame).toContain("API Key:");
+    const secret = "sk-custom-provider-integration-secret";
+    stdin.write(secret);
+    await expect.poll(() => frame).toContain("•".repeat(secret.length));
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("API Key 已保存并生效");
+    const reloaded = loadConfig({ workspace });
+    expect(reloaded.models.filter(model => model.provider === "custom-gateway").map(model => model.apiKey)).toEqual([secret, secret]);
+    expect(reloaded.model.id).toBe("custom-gateway/two");
+    expect(output).not.toContain(secret);
+    expect(await readFile(join(home, "node-preferences.json"), "utf8").catch(() => "")).toBe("");
+    stdin.write("\u001b");
+    await expect.poll(() => frame).toContain("Models · custom-gateway · 1 条 · filter: two");
+    expect(frame).toContain("› Gateway Two");
+    stdin.write("\u001b[D");
+    await expect.poll(() => frame).toContain("Model providers · 1 条 · filter: custom-gateway");
+    expect(frame).toContain("› custom-gateway");
+    // Opening auth directly from the provider list must preserve that list too.
+    stdin.write("\u0001");
+    await expect.poll(() => frame).toContain("Provider 鉴权 · custom-gateway");
+    expect(frame).toContain("状态：已保存 luban API Key");
+    stdin.write("\u001b");
+    await expect.poll(() => frame).toContain("Model providers · 1 条 · filter: custom-gateway");
   } finally {
     app.unmount();
     app.cleanup();

@@ -4,6 +4,7 @@ import { homedir, hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { ConflictPolicy, LubanConfig, McpServerSettings, MeshContact, ModelRef, SyncMode } from "./types.js";
 import { consoleAccessToken } from "./opencode-console.js";
+import { readProviderKeys } from "./provider-auth.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -590,6 +591,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const defaultHome = join(homedir(), ".luban");
   const home = resolve(process.env.LUBAN_HOME || defaultHome);
   if (home === defaultHome) migrateLegacyHome(defaultHome);
+  const savedProviderKeys = readProviderKeys(home);
   const workspace = resolve(options.workspace || process.cwd());
   const globalConfig = readJson(join(home, "config.json"));
   // A project configured before v1.14 keeps its settings in .dagent/config.json;
@@ -677,7 +679,10 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     const stored = storedEfforts[model.id];
     const effort = (model.api === "codex" ? forcedEffort : undefined)
       ?? (stored === "" ? undefined : codexEffort(stored) ?? model.reasoningEffort ?? configuredEffort);
-    return { ...model, reasoningEffort: effort };
+    // Apply last so saved user keys beat project/global config, env and OAuth,
+    // including the legacy single-model (openai-compatible) fallback.
+    const apiKey = Object.hasOwn(savedProviderKeys, model.provider) ? savedProviderKeys[model.provider]! : model.apiKey;
+    return { ...model, apiKey, reasoningEffort: effort };
   });
   const requested = requestedModel;
   const active = models.find((item) => item.id === requested || item.model === requested)

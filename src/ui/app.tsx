@@ -14,7 +14,8 @@ import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
 import { isFreeTierError, isModelTimeoutError, isUpstreamUnavailableError } from "../core/model-errors.js";
 import { isZenFreeModel } from "../core/opencode-zen.js";
 import { estimateMessagesTokens } from "../core/context.js";
-import { savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
+import { loadConfig, savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
+import { ProviderAuthDialog } from "./provider-auth-dialog.js";
 import { consumeCodexReset, formatCodexResetOutcome, formatCodexRateLimits, formatCodexUsage, readCodexRateLimits, readCodexUsage } from "../core/codex-account.js";
 import type { JobStreamRecord, MeshChatMessage, MeshJob, MeshRuntime } from "../core/mesh/runtime.js";
 import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
@@ -294,7 +295,7 @@ interface QuestionRequest {
 }
 
 interface DialogState {
-  type: "model-providers" | "models" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme" | "pending" | "mcp";
+  type: "model-providers" | "models" | "provider-auth" | "codex-effort" | "sessions" | "diff" | "verify" | "info" | "codex-reset" | "export" | "theme" | "pending" | "mcp";
   index: number;
   provider?: string;
   parentIndex?: number;
@@ -840,7 +841,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const modelProviders = useMemo(() => {
     const counts = new Map<string, number>();
     for (const model of config.models) counts.set(model.provider, (counts.get(model.provider) ?? 0) + 1);
-    return [...counts].map(([provider, count]) => ({ key: provider, title: provider, detail: `${count} 个模型 ›` }));
+    return [...counts].map(([provider, count]) => ({ key: provider, title: provider,
+      detail: `${count} 个模型 › · ${provider === "codex" ? "ChatGPT 登录" : config.models.some(model => model.provider === provider && model.apiKey) ? "已有凭据" : "未配置 / 本地免密"}` }));
   }, [config.models]);
   const openModels = () => {
     setDialogQuery("");
@@ -2537,6 +2539,19 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         }
         return;
       }
+      if (dialog.type === "provider-auth") return;
+      if ((dialog.type === "model-providers" || dialog.type === "models") && key.ctrl && character.toLowerCase() === "a") {
+        const provider = dialog.type === "models" ? dialog.provider : providerRows[dialog.index]?.key;
+        if (!provider) return;
+        if (running) { setNotice("请等待当前任务完成后再修改 provider 鉴权。"); return; }
+        setDialog({ ...dialog, type: "provider-auth", provider,
+          modelIndex: dialog.type === "models" ? dialog.index : undefined,
+          modelQuery: dialog.type === "models" ? dialogQuery : undefined,
+          parentIndex: dialog.type === "model-providers" ? dialog.index : dialog.parentIndex,
+          parentQuery: dialog.type === "model-providers" ? dialogQuery : dialog.parentQuery });
+        setDialogQuery("");
+        return;
+      }
       const needle = dialogQuery.trim().toLowerCase();
       const visibleSessions = sessionChoices(sessions, sessionRef.current.id, needle);
       const visibleCount = dialog.type === "model-providers" ? providerRows.length
@@ -2870,6 +2885,23 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         {dialog?.type === "model-providers" ? <SelectDialog title="Model providers" rows={providerRows} index={Math.min(dialog.index, Math.max(0, providerRows.length - 1))} query={dialogQuery} activeKey={config.model.provider} /> : null}
         {dialog?.type === "models" ? <SelectDialog title={`Models · ${dialog.provider}`} rows={modelRows} index={Math.min(dialog.index, Math.max(0, modelRows.length - 1))} query={dialogQuery} activeKey={config.model.id} back /> : null}
         {dialog?.type === "codex-effort" ? <SelectDialog title={`Reasoning · ${config.models.find((item) => item.id === dialog.modelId)?.name ?? "Codex"}`} rows={CODEX_EFFORTS.filter((item) => item.value !== "ultra" || config.models.find((model) => model.id === dialog.modelId)?.model !== "gpt-6-luna").map((item) => ({ key: item.value ?? "default", title: item.title, detail: item.detail }))} index={dialog.index} query="" back /> : null}
+        {dialog?.type === "model-providers" || dialog?.type === "models" ? <Text color={theme.yellow}>Ctrl+A 配置所选 provider 鉴权 · API Key / 账号登录</Text> : null}
+        {dialog?.type === "provider-auth" && dialog.provider ? <ProviderAuthDialog home={config.home} provider={dialog.provider}
+          configured={config.models.some(model => model.provider === dialog.provider && Boolean(model.apiKey))}
+          onClose={() => {
+            setDialog({ ...dialog, type: dialog.modelIndex === undefined ? "model-providers" : "models",
+              index: dialog.modelIndex ?? dialog.parentIndex ?? 0 });
+            setDialogQuery(dialog.modelIndex === undefined ? dialog.parentQuery ?? "" : dialog.modelQuery ?? "");
+          }}
+          onChanged={key => {
+            const restored = key === null ? loadConfig({ workspace: config.workspace }).models : [];
+            const models = config.models.map(model => model.provider !== dialog.provider || key === undefined ? model
+              : { ...model, apiKey: key ?? restored.find(item => item.id === model.id)?.apiKey ?? "" });
+            const nextConfig = { ...config, models, model: models.find(model => model.id === config.model.id) ?? config.model };
+            setConfig(nextConfig);
+            swapRunner(() => new AgentRunner(nextConfig, undefined, mesh));
+            setNotice(`Provider ${dialog.provider} 鉴权已更新`);
+          }} /> : null}
         {dialog?.type === "sessions" ? <SelectDialog title="Sessions" rows={sessionRows} index={Math.min(dialog.index, Math.max(0, sessionRows.length - 1))} query={dialogQuery} /> : null}
         {dialog?.type === "pending" ? <SelectDialog title="Pending · Enter 撤回" rows={pendingRows} index={Math.min(dialog.index, Math.max(0, pendingRows.length - 1))} query="" /> : null}
         {dialog?.type === "mcp" ? <SelectDialog title="MCP · Enter 试连 · e 启停 · t 信任 · x 删除" rows={mcpRows} index={Math.min(dialog.index, Math.max(0, mcpRows.length - 1))} query="" /> : null}
