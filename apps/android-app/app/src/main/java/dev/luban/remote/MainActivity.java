@@ -535,7 +535,18 @@ public final class MainActivity extends Activity {
         // Comparing the value, not the URL string, is what keeps
         // shouldOverrideUrlLoading from reloading the same navigation forever.
         if (wanted.equals(parsed.getQueryParameter("theme"))) return url;
-        return parsed.buildUpon().removeQueryParameter("theme").appendQueryParameter("theme", wanted).build().toString();
+        // Uri.Builder has no "remove one parameter"; rebuild the query without it.
+        StringBuilder query = new StringBuilder();
+        for (String name : parsed.getQueryParameterNames()) {
+            if ("theme".equals(name)) continue;
+            for (String value : parsed.getQueryParameters(name)) {
+                if (query.length() > 0) query.append('&');
+                query.append(Uri.encode(name)).append('=').append(Uri.encode(value));
+            }
+        }
+        if (query.length() > 0) query.append('&');
+        query.append("theme=").append(wanted);
+        return parsed.buildUpon().clearQuery().encodedQuery(query.toString()).build().toString();
     }
 
     private void paintPageTheme(WebView view, Theme palette) {
