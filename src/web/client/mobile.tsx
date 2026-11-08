@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api, setNodeScope } from "./api";
 import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, SessionDetail, SessionSummary, ToolRun } from "./types";
 import { MobileSessionHistory } from "./mobile-session";
+import { mobileProject, mobileProjects } from "./mobile-project";
 import {
   deriveTimeline, editRecordStats, formatDuration, liveProgress, parseEditRecord,
   relativeTime, STATUS_LABELS, toolLabel, withOutcome,
@@ -354,8 +355,10 @@ export function MobileApp(): React.ReactElement {
   }, []);
 
   const refresh = useCallback(async () => {
+    const requestNode = localStorage.getItem(NODE_KEY);
     try {
       const [info, jobList] = await Promise.all([api.node(), api.jobs()]);
+      if (localStorage.getItem(NODE_KEY) !== requestNode) return;
       setNode(info);
       setConnected(true);
       setConnectionError(undefined);
@@ -364,8 +367,9 @@ export function MobileApp(): React.ReactElement {
       // selected job's status in sync so a missed completion cannot spin forever.
       const selected = jobList.find(item => item.id === selectedRef.current);
       if (selected) setJob(current => current?.id === selected.id ? { ...current, ...selected } : current);
-      setProject(current => current || (info.projects && Object.keys(info.projects).length ? Object.keys(info.projects)[0]! : ""));
+      setProject(current => mobileProject(info, current));
     } catch (error) {
+      if (localStorage.getItem(NODE_KEY) !== requestNode) return;
       setConnected(false);
       if ((error as { status?: number }).status === 401) {
         setAuth(current => current.state === "anonymous" ? current : { state: "anonymous", emailVerification: true });
@@ -376,10 +380,13 @@ export function MobileApp(): React.ReactElement {
 
   const refreshSessions = useCallback(async () => {
     if (!ready || !node) return;
+    const requestNode = localStorage.getItem(NODE_KEY);
     try {
-      setSessions(await api.sessions(project || node.project || ""));
-    } catch {
-      setSessions([]);
+      const list = await api.sessions(project || node.project || "");
+      if (localStorage.getItem(NODE_KEY) === requestNode) setSessions(list);
+    } catch (error) {
+      if (localStorage.getItem(NODE_KEY) !== requestNode) return;
+      setConnectionError(`会话列表读取失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }, [ready, node, project]);
 
@@ -450,7 +457,14 @@ export function MobileApp(): React.ReactElement {
 
   useEffect(() => {
     if (!ready) return;
-    void refreshSessions();
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async (): Promise<void> => {
+      await refreshSessions();
+      if (!stopped) timer = setTimeout(() => void poll(), 4000);
+    };
+    void poll();
+    return () => { stopped = true; clearTimeout(timer); };
   }, [ready, refreshSessions]);
 
   // Keep polling: the stream carries the detail, polling is the safety net for
@@ -1021,9 +1035,9 @@ export function MobileApp(): React.ReactElement {
               {sessions.slice(0, 8).map(item => <option key={item.id} value={item.id}>继续：{item.title}</option>)}
             </select>
           )}
-          <select value={project} onChange={event => setProject(event.target.value)} aria-label="项目">
-            {Object.keys(node?.projects ?? {}).length === 0 && <option value="">默认工作区</option>}
-            {Object.entries(node?.projects ?? {}).map(([name, path]) => <option key={name} value={name}>{name} · {String(path).split(/[\\/]/u).pop()}</option>)}
+          <select value={project} onChange={event => { setProject(event.target.value); setContinueSession(undefined); setSessionDetail(undefined); }} aria-label="项目">
+            {Object.keys(mobileProjects(node)).length === 0 && <option value="">电脑当前工作区</option>}
+            {Object.entries(mobileProjects(node)).map(([name, path]) => <option key={name} value={name}>{name} · {path}</option>)}
           </select>
           <select value={mode} onChange={event => setMode(event.target.value as TaskMode)} aria-label="权限">
             {(Object.keys(MODE_LABELS) as TaskMode[]).map(key => <option key={key} value={key}>{MODE_LABELS[key]}</option>)}

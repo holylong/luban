@@ -28,8 +28,10 @@ function scoped(path: string): string {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const requestScope = nodeScope;
   const response = await fetch(scoped(path), init);
   const text = await response.text();
+  if (requestScope !== nodeScope) throw new ApiError(409, "设备已切换，忽略旧设备响应");
   let body: unknown;
   try { body = text ? JSON.parse(text) : {}; }
   catch { body = { error: text.slice(0, 400) }; }
