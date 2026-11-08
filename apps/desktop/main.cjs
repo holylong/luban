@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, Menu, ipcMain, protocol, screen } = require("electron");
+const { app, BrowserWindow, dialog, Menu, nativeImage, ipcMain, protocol, screen, Tray } = require("electron");
 const { preparePetTask } = require("./pet-task.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
@@ -6,12 +6,25 @@ let backendAccess;
 let petJob;
 let petSubmitting = false;
 let quitting = false;
+let tray;
 // The desktop app is the bot's body: it owns the worker it started, and reports
 // a worker owned by a LaunchAgent or a terminal instead of duplicating it.
 let botChild;
 let botError;
 let botQuitting = false;
-function showMain() { if (window && !window.isDestroyed()) { window.show(); window.restore(); window.focus(); } }
+function showMain() {
+  if (window && !window.isDestroyed()) {
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    return;
+  }
+  // Closing the window with the tray present only hides it, but a crashed
+  // renderer can destroy it; reopen the last project instead of doing nothing.
+  if (opening) return;
+  void openWorkspace(currentWorkspace || savedWorkspace() || homedir())
+    .catch(error => dialog.showErrorBox("无法打开项目", error instanceof Error ? error.message : String(error)));
+}
 function trustedPet(event) {
   return pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame === pet.webContents.mainFrame && event.senderFrame.url === require('node:url').pathToFileURL(join(__dirname, 'pet.html')).href;
 }
@@ -67,6 +80,46 @@ function createPet() {
   pet.on('closed', () => { pet = undefined; });
   void pet.loadFile(join(__dirname, 'pet.html'));
 }
+// The window hides itself instead of closing and the pet has no frame, so the
+// tray is the dependable place to reopen luban and to quit it for good.
+function trayImage() {
+  const webUi = join(dirname(cli), "web-ui");
+  const bundled = join(webUi, process.platform === "win32" ? "icon.ico" : "icon-512.png");
+  const fallback = resolve(__dirname, "../../assets", process.platform === "win32" ? "luban.ico" : "luban-32.png");
+  const image = nativeImage.createFromPath(existsSync(bundled) ? bundled : fallback);
+  if (process.platform === "win32") return image;
+  // macOS and Linux panels want a small square; an ICO carries its own sizes.
+  const size = process.platform === "darwin" ? 18 : 22;
+  return image.resize({ width: size, height: size });
+}
+function trayTooltip() {
+  return `luban Desktop${currentWorkspace ? ` · ${basename(currentWorkspace)}` : ""}`;
+}
+function quitApp() {
+  // The tray may be the only visible surface; surface the window first so an
+  // "放弃未保存的更改？" prompt is not parented to a hidden window.
+  if (dirty) showMain();
+  app.quit();
+}
+function createTray() {
+  if (tray && !tray.isDestroyed()) return tray;
+  // A desktop environment without a status bar must not stop luban from opening.
+  try { tray = new Tray(trayImage()); }
+  catch { tray = undefined; return undefined; }
+  tray.setToolTip(trayTooltip());
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "打开主界面", click: showMain },
+    { label: "显示桌宠", click: createPet },
+    { type: "separator" },
+    { label: "打开项目文件夹…", click: async () => { const path = await chooseWorkspace(); if (path) await openWorkspace(path); } },
+    { type: "separator" },
+    { label: "退出 luban", click: quitApp },
+  ]));
+  // A single click is what Windows users try first; macOS opens the menu itself.
+  tray.on("click", showMain);
+  tray.on("double-click", showMain);
+  return tray;
+}
 const { createWorkspace } = require("./workspace.cjs");
 const { MEDIA_SCHEME, mediaResponse } = require("./media.cjs");
 
@@ -116,6 +169,8 @@ ipcMain.on("luban:setDirty", (event, value) => {
 });
 function confirmDiscard() {
   if (!dirty) return true;
+  // A modal prompt parented to a window hidden in the tray never shows up.
+  if (window && !window.isDestroyed()) window.show();
   return dialog.showMessageBoxSync(window, {
     type: "warning", title: "未保存的更改", message: "放弃未保存的更改？",
     buttons: ["取消", "放弃更改"], defaultId: 0, cancelId: 0, noLink: true,
@@ -202,6 +257,7 @@ function startBackend(workspace) {
         stopWorkspace();
         backendAccess = undefined;
         petJob = undefined;
+        showMain();
         dialog.showMessageBox(window, { type: "error", title: "luban", message: "桌面服务已停止", detail: errors.slice(-500) || `退出码 ${code}` });
       }
     });
@@ -209,6 +265,8 @@ function startBackend(workspace) {
 }
 async function chooseWorkspace() {
   const options = { title: "选择项目文件夹", defaultPath: savedWorkspace() || homedir(), properties: ["openDirectory"] };
+  // The tray can ask for a folder while the window is hidden behind it.
+  if (window && !window.isDestroyed()) window.show();
   const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
   return result.canceled ? undefined : result.filePaths[0];
 }
@@ -226,7 +284,9 @@ ipcMain.handle("luban:openWorkspace", async event => {
 });
 function installWindowGuards() {
   window.once("ready-to-show", () => window.show());
-  window.on('close', event => { if (!quitting && pet && !pet.isDestroyed()) { event.preventDefault(); window.hide(); } });
+  // Closing hides the window: the backend and the bot worker keep running and
+  // the tray icon reopens it. Without a usable tray the close stays a real one.
+  window.on('close', event => { if (!quitting && tray && !tray.isDestroyed()) { event.preventDefault(); window.hide(); } });
   window.on("closed", () => { window = undefined; dirty = false; stopWorkspace(); stopBackend(); });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-prevent-unload", event => {
@@ -278,6 +338,7 @@ async function openWorkspace(workspace) {
     }
     trustedOrigin = new URL(url).origin;
     window.setTitle(`luban · ${basename(workspace)}`);
+    if (tray && !tray.isDestroyed()) tray.setToolTip(trayTooltip());
     approvedUnload = true;
     await window.loadURL(`${url}?desktop=1&token=${encodeURIComponent(token)}`);
     window.show();
@@ -290,6 +351,9 @@ async function openWorkspace(workspace) {
 }
 app.whenReady().then(async () => {
   app.setName("luban Desktop");
+  // Create the tray before the workspace opens so an unopenable project still
+  // has a visible way out (退出 luban) instead of an invisible process.
+  createTray();
   protocol.handle(MEDIA_SCHEME, request => {
     try { return mediaResponse(workspaceService, request); }
     catch (error) { return new Response(error instanceof Error ? error.message : String(error), { status: 500 }); }
@@ -297,6 +361,7 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: "文件", submenu: [
       { label: "打开项目文件夹…", accelerator: "CmdOrCtrl+O", click: async () => { const path = await chooseWorkspace(); if (path) await openWorkspace(path); } },
+      { label: "隐藏到托盘", click: () => { if (window && !window.isDestroyed()) window.hide(); } },
       { type: "separator" }, { role: "quit", label: "退出" },
     ] },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
@@ -324,5 +389,8 @@ app.on('before-quit', event => {
   child.once('exit', () => { clearTimeout(timer); finish(); });
   child.kill('SIGTERM');
 });
-app.on("will-quit", () => { stopBot(); stopWorkspace(); stopBackend(); });
-app.on("window-all-closed", () => app.quit());
+app.on("activate", showMain);
+app.on("will-quit", () => { if (tray && !tray.isDestroyed()) tray.destroy(); tray = undefined; stopBot(); stopWorkspace(); stopBackend(); });
+// The tray keeps luban (and the bot worker) alive with no window; a close
+// without a usable tray still quits, since nothing could reopen the app.
+app.on("window-all-closed", () => { if (!tray || tray.isDestroyed()) app.quit(); });
