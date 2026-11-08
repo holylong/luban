@@ -33,7 +33,7 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body, #root { height: 100%; margin: 0; }
+html, body, #root { height: 100%; margin: 0; overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--fg);
@@ -47,11 +47,24 @@ input, textarea, select { font-size: 16px; }
 a { color: var(--blue); }
 
 .m-app {
-  height: 100dvh;
+  /* Android WebView's dvh can be smaller than the WebView itself, which
+     leaves a black strip below the tab bar. The shell already sizes the
+     WebView; 100% makes the page fill exactly that box and still shrinks
+     with the IME when the keyboard opens. */
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
   display: grid;
+  /* A long <select> option would otherwise size the implicit grid column to
+     its max-content width, pushing the fifth tab off the right edge. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto auto;
   background: var(--bg);
 }
+.m-head, .m-main, .m-compose, .m-tabs { min-width: 0; }
+.m-head-row > * { min-width: 0; }
+.m-head-meta { min-width: 0; }
 
 /* Header --------------------------------------------------------------- */
 .m-head {
@@ -91,6 +104,7 @@ a { color: var(--blue); }
   border-radius: var(--radius);
   background: #131a26;
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 .m-banner.warn { border-color: #5c3a3a; background: #1e1416; color: #ffd9de; }
 .m-banner.ok { border-color: #2c4a3c; background: #101d18; }

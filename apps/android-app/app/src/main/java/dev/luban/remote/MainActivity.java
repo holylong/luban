@@ -193,6 +193,15 @@ public final class MainActivity extends Activity {
         return "https".equals(uri.getScheme()) ? 443 : 80;
     }
 
+    private static boolean hasCookie(String header, String name) {
+        if (header == null) return false;
+        String prefix = name + "=";
+        for (String part : header.split(";")) {
+            if (part.trim().startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
     private boolean sameOrigin(Uri url) {
         return origin != null && origin.getScheme().equalsIgnoreCase(url.getScheme())
                 && origin.getHost().equalsIgnoreCase(url.getHost()) && port(origin) == port(url);
@@ -250,7 +259,10 @@ public final class MainActivity extends Activity {
                 if (view != web) return;
                 Uri loaded = Uri.parse(url);
                 String cookies = CookieManager.getInstance().getCookie(url);
-                boolean loggedIn = cookies != null && ("luban_token=".equals(cookies) || cookies.startsWith("luban_token=") || cookies.contains("; luban_token="));
+                // Account login stores luban_account; one-tap/token login stores
+                // luban_token. Accept either so the native status bar does not
+                // report "未登录" after a successful account sign-in.
+                boolean loggedIn = hasCookie(cookies, "luban_token") || hasCookie(cookies, "luban_account");
                 boolean consoleReady = mainFrameHttpError == null && sameOrigin(loaded)
                         && "/m/".equals(loaded.getPath()) && loggedIn;
                 if (consoleReady) {
@@ -304,9 +316,11 @@ public final class MainActivity extends Activity {
             String cookieOrigin = requested.buildUpon().path("/").clearQuery().fragment(null).build().toString();
             // Clear only this server's old login. Other saved servers keep their cookies.
             cookies.setCookie(cookieOrigin, "luban_token=; Path=/; Max-Age=0", ignored -> {
-                cookies.setCookie(cookieOrigin, "luban_node=; Path=/; Max-Age=0", ignoredNode -> {
-                    cookies.flush();
-                    target.post(() -> { if (web == target) target.loadUrl(destination); });
+                cookies.setCookie(cookieOrigin, "luban_account=; Path=/; Max-Age=0", ignoredAccount -> {
+                    cookies.setCookie(cookieOrigin, "luban_node=; Path=/; Max-Age=0", ignoredNode -> {
+                        cookies.flush();
+                        target.post(() -> { if (web == target) target.loadUrl(destination); });
+                    });
                 });
             });
         } else {
