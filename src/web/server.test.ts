@@ -57,6 +57,8 @@ describe("LubanWebServer", () => {
     const foreign = { ...session, id: "foreign-session", title: "secret" };
     liveSessions.publish(join(root, "other-home"), foreign);
     liveSessions.publish(config.home, session);
+    const draft = store.create(config.project, config.workspace, "agent", config.model.id, [{ role: "system", content: "harness" }]);
+    liveSessions.publish(config.home, draft);
     await mkdir(config.workspace, { recursive: true });
     mesh.setJobRunner(async () => ({ ok: true, text: "continued" }));
     await mesh.start();
@@ -101,6 +103,7 @@ describe("LubanWebServer", () => {
       expect(accepted.status).toBe(200);
     } finally {
       liveSessions.remove(config.home, session.project, session.id);
+      liveSessions.remove(config.home, draft.project, draft.id);
       liveSessions.remove(join(root, "other-home"), foreign.project, foreign.id);
       await web.stop();
       await mesh.stop();

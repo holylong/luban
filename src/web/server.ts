@@ -5,7 +5,7 @@ import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { JobStreamRecord, MeshEvent, MeshRuntime } from "../core/mesh/runtime.js";
-import { SessionStore } from "../core/session-store.js";
+import { hasConversation, SessionStore } from "../core/session-store.js";
 import { liveSessions } from "../core/live-session.js";
 import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
@@ -428,7 +428,7 @@ export class LubanWebServer {
         const saved = overlay.get(live.session.id);
         if (live.running || !saved || live.session.updatedAt >= saved.updatedAt) overlay.set(live.session.id, live.session);
       }
-      const sessions = [...overlay.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit).map(session => ({
+      const sessions = [...overlay.values()].filter(hasConversation).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit).map(session => ({
         id: session.id,
         title: session.title,
         project: session.project,

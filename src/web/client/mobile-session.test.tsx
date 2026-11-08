@@ -20,6 +20,13 @@ function fixture(): SessionDetail {
 }
 
 describe("mobile session transcript", () => {
+  it("explains an empty legacy draft rather than showing a blank transcript", () => {
+    const session = fixture();
+    session.messages = [{ role: "system", content: "private harness" }];
+    const html = renderToStaticMarkup(<MobileSessionHistory session={session} renderTool={() => null} />);
+    expect(html).toContain("此会话还没有可显示的交互记录");
+    expect(html).not.toContain("private harness");
+  });
   it("shows durable conversation, tool results and inline edits, never the system prompt", () => {
     const session = fixture();
     const items = sessionTimeline(session);

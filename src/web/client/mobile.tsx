@@ -3,6 +3,7 @@ import { api, setNodeScope } from "./api";
 import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, SessionDetail, SessionSummary, ToolRun } from "./types";
 import { MobileSessionHistory } from "./mobile-session";
 import { mobileProject, mobileProjects } from "./mobile-project";
+import { version as webVersion } from "../../../package.json";
 import {
   deriveTimeline, editRecordStats, formatDuration, liveProgress, parseEditRecord,
   relativeTime, STATUS_LABELS, toolLabel, withOutcome,
@@ -276,6 +277,7 @@ export function MobileApp(): React.ReactElement {
   const [continueSession, setContinueSession] = useState<SessionSummary | undefined>();
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | undefined>();
   const [sessionError, setSessionError] = useState<string | undefined>();
+  const [sessionListError, setSessionListError] = useState<string | undefined>();
   const [deviceSetup, setDeviceSetup] = useState<{ token: string; command: string } | undefined>();
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>();
@@ -383,10 +385,13 @@ export function MobileApp(): React.ReactElement {
     const requestNode = localStorage.getItem(NODE_KEY);
     try {
       const list = await api.sessions(project || node.project || "");
-      if (localStorage.getItem(NODE_KEY) === requestNode) setSessions(list);
+      if (localStorage.getItem(NODE_KEY) === requestNode) {
+        setSessions(list.filter(item => item.messages > 0));
+        setSessionListError(undefined);
+      }
     } catch (error) {
       if (localStorage.getItem(NODE_KEY) !== requestNode) return;
-      setConnectionError(`会话列表读取失败：${error instanceof Error ? error.message : String(error)}`);
+      setSessionListError(error instanceof Error ? error.message : String(error));
     }
   }, [ready, node, project]);
 
@@ -721,7 +726,7 @@ export function MobileApp(): React.ReactElement {
       <header className="m-head">
         <div className="m-head-row">
           <span className={`m-dot ${dotClass}`} />
-          <span className="m-brand">luban</span>
+          <span className="m-brand">luban <small>网页 {webVersion}</small></span>
           <span className="m-head-meta">{nodeLabel}</span>
           {relayMode && relayNodes.length > 0 && (
             <select value={scope ?? ""} onChange={event => chooseNode(event.target.value)} aria-label="选择 luban 实例">
@@ -739,6 +744,7 @@ export function MobileApp(): React.ReactElement {
       </header>
 
       <main className="m-main">
+        {sessionListError && <div className="m-banner warn">会话列表读取失败：{sessionListError}</div>}
         {relayMode && relayNodes.length === 0 && (
           <div className="m-banner warn">
             账户下还没有 luban 实例。打开「设置 → 添加电脑」生成设备令牌，然后在电脑上运行：
