@@ -6,6 +6,7 @@ import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { JobStreamRecord, MeshEvent, MeshRuntime } from "../core/mesh/runtime.js";
 import { SessionStore } from "../core/session-store.js";
+import { liveSessions } from "../core/live-session.js";
 import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
 import { savePreferredModel, saveTheme } from "../core/config.js";
@@ -422,7 +423,12 @@ export class LubanWebServer {
       const project = url.searchParams.get("project") || this.config.project;
       const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 60)));
       const store = new SessionStore(this.config.home, sharedHistory(this.config.history, this.config.home));
-      const sessions = (await store.list(project)).slice(0, limit).map(session => ({
+      const overlay = new Map((await store.list(project)).map(session => [session.id, session]));
+      for (const live of liveSessions.list(this.config.home, project)) {
+        const saved = overlay.get(live.session.id);
+        if (live.running || !saved || live.session.updatedAt >= saved.updatedAt) overlay.set(live.session.id, live.session);
+      }
+      const sessions = [...overlay.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit).map(session => ({
         id: session.id,
         title: session.title,
         project: session.project,
@@ -455,7 +461,10 @@ export class LubanWebServer {
     if (sessionMatch) {
       const store = new SessionStore(this.config.home, sharedHistory(this.config.history, this.config.home));
       const project = url.searchParams.get("project") || this.config.project;
-      const session = await store.load(decodeURIComponent(sessionMatch[1]!), project);
+      const id = decodeURIComponent(sessionMatch[1]!);
+      const saved = await store.load(id, project);
+      const live = liveSessions.get(this.config.home, project, id);
+      const session = live && (live.running || !saved || live.session.updatedAt >= saved.updatedAt) ? live.session : saved;
       if (!session) throw new HttpError(404, "unknown session");
       // Tool payloads can be megabytes; the transcript only needs a bounded tail.
       const messages = session.messages.map((message) => {
@@ -465,7 +474,7 @@ export class LubanWebServer {
           content: content.length > 20_000 ? `${content.slice(0, 20_000)}\n… (${content.length - 20_000} more characters)` : content,
         };
       });
-      return json(res, { ...session, messages });
+      return json(res, { ...session, messages, live: { running: live?.running ?? false, events: live?.running ? live.events : [] } });
     }
     throw new HttpError(404, "not found");
   }
@@ -535,12 +544,18 @@ export class LubanWebServer {
       const interaction = String(body.interaction || "auto");
       const project = String(body.project_id || this.config.project);
       const requestedSession = typeof body.session_id === "string" ? body.session_id.trim() : "";
+      if (requestedSession && liveSessions.get(this.config.home, project, requestedSession)?.running) {
+        throw new HttpError(409, "session is running in the terminal");
+      }
       // A continuation must reuse the session's own workspace, not the project
       // mapping: sessions record the directory the Agent actually worked in.
       const continued = requestedSession
         ? await new SessionStore(this.config.home, sharedHistory(this.config.history, this.config.home)).load(requestedSession, project)
         : undefined;
       if (requestedSession && !continued) throw new HttpError(404, "unknown session");
+      if (requestedSession && liveSessions.get(this.config.home, project, requestedSession)?.running) {
+        throw new HttpError(409, "session is running in the terminal");
+      }
       const job = await this.mesh.submitLocalJob({
         instruction: String(body.instruction || ""),
         project,

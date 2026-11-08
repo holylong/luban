@@ -23,6 +23,8 @@ import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
 import { chatBlocks, jobBlocks } from "./mesh-transcript.js";
 import { SessionStore } from "../core/session-store.js";
 import { sharedHistory } from "../core/session-history.js";
+import { liveSessions } from "../core/live-session.js";
+import { toJobStreamEvent } from "../core/mesh/agent-runner.js";
 import { exportWorkReport, type ReportPeriod } from "../core/work-report.js";
 import { summarizeToolArgs } from "../core/tools.js";
 import type {
@@ -1144,6 +1146,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // mid-run keeps accepting input for the task that is actually executing.
   const inboxRef = useRef<AgentInbox | null>(null);
 
+  // Replay checkpoints are explicit; unrelated draft/timer renders must not
+  // clone the session transcript. Saves publish lifecycle/metadata changes too.
+  useEffect(() => {
+    liveSessions.publish(config.home, sessionRef.current);
+  }, [config.home, messages, mode]);
+
   useEffect(() => () => {
     for (const query of detachedQueriesRef.current) query.abort(new Error("exited"));
     titleAbortRef.current?.abort(new Error("exited"));
@@ -1176,7 +1184,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     const record = sessionRef.current;
     record.messages = nextMessages;
     record.model = runnerRef.current.config.model.id;
+    liveSessions.publish(config.home, record);
     await store.save(record);
+    liveSessions.publish(config.home, record);
   };
 
   /**
@@ -1416,6 +1426,13 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   };
 
   const handleEvent = (event: AgentEvent) => {
+    const streamEvent = toJobStreamEvent(event);
+    const record = sessionRef.current;
+    // At these boundaries previous output is already in the durable transcript.
+    // In particular, input has no JobStreamEvent; checkpoint its accepted user
+    // message now instead of hiding steered input until the run finishes.
+    if (event.type === "model-call" || event.type === "input") liveSessions.checkpoint(config.home, record);
+    if (streamEvent) liveSessions.append(config.home, record.project, record.id, streamEvent);
     if (event.type === "input") {
       resetDraft(); setThinkingDraft("");
       setMessages([...sessionRef.current.messages]);
@@ -1556,6 +1573,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     lastOutputRef.current = Date.now();
     setCallIndex(0);
     setLivePhase({ kind: "waiting", detail: "正在准备请求…", since: lastOutputRef.current });
+    sessionRef.current.messages = nextMessages;
+    liveSessions.start(config.home, sessionRef.current);
+    runningRef.current = true;
     setRunning(true);
     const runMode = resolvedMode(sessionRef.current.mode, text);
     setStatus(runMode === "agent" ? "Agent mode" : runMode === "ask" ? "Ask mode" : "Auto mode");
@@ -1620,6 +1640,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       abortRef.current = null;
       inboxRef.current = null;
       setApproval(null);
+      liveSessions.finish(config.home, sessionRef.current);
+      runningRef.current = false;
       setRunning(false);
       thinkingStartedRef.current = null;
       setLivePhase(null);
@@ -1639,6 +1661,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     const next = [...messages, user];
     setMessages(next);
     setScrollOffset(0);
+    sessionRef.current.messages = next;
+    liveSessions.start(config.home, sessionRef.current);
+    runningRef.current = true;
     setRunning(true);
     const shellTrace: ToolTrace = { id: "direct-shell", name: "bash", detail: command, status: "running" };
     
@@ -1659,6 +1684,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setExecutionLog((current) => current.map((trace) => trace.id === "direct-shell" ? { ...trace, status: "failed", preview: message } : trace));
     } finally {
       abortRef.current = null;
+      liveSessions.finish(config.home, sessionRef.current);
+      runningRef.current = false;
       setRunning(false);
     }
   };
@@ -1676,14 +1703,17 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     const traceId = `mesh-${Date.now()}`;
     setMessages(next);
     setScrollOffset(0);
+    sessionRef.current.messages = next;
+    liveSessions.start(config.home, sessionRef.current);
+    runningRef.current = true;
     setRunning(true);
     const meshTrace: ToolTrace = { id: traceId, name: label, detail, status: "running" };
     
     setExecutionLog((current) => [...current, meshTrace]);
     const controller = new AbortController();
     abortRef.current = controller;
-    await save(next);
     try {
+      await save(next);
       const output = await action(controller.signal);
       const finished = [...next, { role: "assistant", content: output || "Done." } as ChatMessage];
       setMessages(finished);
@@ -1699,6 +1729,8 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       await save(finished);
     } finally {
       abortRef.current = null;
+      liveSessions.finish(config.home, sessionRef.current);
+      runningRef.current = false;
       setRunning(false);
     }
   };

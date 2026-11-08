@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setNodeScope } from "./api";
-import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, SessionSummary, ToolRun } from "./types";
+import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, SessionDetail, SessionSummary, ToolRun } from "./types";
+import { MobileSessionHistory } from "./mobile-session";
 import {
   deriveTimeline, editRecordStats, formatDuration, liveProgress, parseEditRecord,
   relativeTime, STATUS_LABELS, toolLabel, withOutcome,
@@ -272,6 +273,8 @@ export function MobileApp(): React.ReactElement {
   const [node, setNode] = useState<NodeInfo | undefined>();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [continueSession, setContinueSession] = useState<SessionSummary | undefined>();
+  const [sessionDetail, setSessionDetail] = useState<SessionDetail | undefined>();
+  const [sessionError, setSessionError] = useState<string | undefined>();
   const [deviceSetup, setDeviceSetup] = useState<{ token: string; command: string } | undefined>();
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>();
@@ -337,7 +340,9 @@ export function MobileApp(): React.ReactElement {
   useEffect(() => { setNodeScope(scope); }, [scope]);
 
   const loadJob = useCallback(async (id: string) => {
+    const requestNode = localStorage.getItem(NODE_KEY);
     const detail = await api.job(id);
+    if (selectedRef.current !== id || localStorage.getItem(NODE_KEY) !== requestNode) return detail;
     setJob(detail);
     setApprovals(current => {
       // Keep the approvals of other jobs so the tab badge stays truthful.
@@ -460,6 +465,28 @@ export function MobileApp(): React.ReactElement {
     return () => clearInterval(timer);
   }, [ready, refresh, refreshApprovals, refreshRelayNodes, relayMode]);
 
+  // Session detail is not a mesh job. Poll it independently, including after
+  // sleep/reconnect; cancel stale responses when switching sessions or nodes.
+  useEffect(() => {
+    setSessionDetail(undefined);
+    setSessionError(undefined);
+    if (!ready || !continueSession) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async (): Promise<void> => {
+      try {
+        const detail = await api.session(continueSession.id, continueSession.project);
+        if (!stopped) { setSessionDetail(detail); setSessionError(undefined); }
+      } catch (error) {
+        if (!stopped) setSessionError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (!stopped) timer = setTimeout(() => void load(), 1000);
+      }
+    };
+    void load();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [ready, scope, continueSession?.id, continueSession?.project]);
+
   // Live stream.
   useEffect(() => {
     if (!ready) return;
@@ -472,7 +499,9 @@ export function MobileApp(): React.ReactElement {
       source.onopen = () => {
         setLive(true);
         const id = selectedRef.current;
-        if (id) void api.jobStream(id, events.at(-1)?.seq ?? 0).then(reply => setEvents(current => mergeEvents(current, reply.events))).catch(() => undefined);
+        if (id) void api.jobStream(id, events.at(-1)?.seq ?? 0).then(reply => {
+          if (!stopped && selectedRef.current === id) setEvents(current => mergeEvents(current, reply.events));
+        }).catch(() => undefined);
       };
       source.onerror = () => setLive(false);
       source.addEventListener("job-event", message => {
@@ -509,7 +538,7 @@ export function MobileApp(): React.ReactElement {
     return () => { stopped = true; source?.close(); setLive(false); };
     // Reconnecting depends only on the selected node; `events` is read at connect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, loadJob, notify]);
+  }, [ready, scope, loadJob, notify]);
 
   // One-second clock, only while something is running, for the live elapsed time.
   const running = Boolean(job && ACTIVE_STATUS.has(job.status));
@@ -548,10 +577,13 @@ export function MobileApp(): React.ReactElement {
   }, [job?.status, notify]);
 
   const selectJob = useCallback((id: string) => {
+    selectedRef.current = id;
     setSelectedId(id);
     localStorage.setItem(JOB_KEY, id);
     setJob(undefined);
     setEvents([]);
+    setContinueSession(undefined);
+    setSessionDetail(undefined);
     void loadJob(id).catch(error => notify(error instanceof Error ? error.message : String(error), true));
     setTab("live");
   }, [loadJob, notify]);
@@ -559,6 +591,10 @@ export function MobileApp(): React.ReactElement {
   const submit = useCallback(async () => {
     const instruction = draft.trim();
     if (!instruction) return;
+    if (continueSession && (!sessionDetail || sessionError || sessionDetail.live?.running)) {
+      notify("请等待会话同步和电脑当前执行结束后再接续", true);
+      return;
+    }
     setBusy(true);
     try {
       const reply = await api.submit({
@@ -573,7 +609,7 @@ export function MobileApp(): React.ReactElement {
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), true);
     } finally { setBusy(false); }
-  }, [draft, project, mode, continueSession, refresh, selectJob, notify]);
+  }, [draft, project, mode, continueSession, sessionDetail, sessionError, refresh, selectJob, notify]);
 
   const cancel = useCallback(async () => {
     if (!selectedId) return;
@@ -601,6 +637,7 @@ export function MobileApp(): React.ReactElement {
     setScope(id || undefined);
     if (id) localStorage.setItem(NODE_KEY, id);
     else localStorage.removeItem(NODE_KEY);
+    selectedRef.current = undefined;
     setNode(undefined);
     setJobs([]);
     setJob(undefined);
@@ -724,7 +761,14 @@ export function MobileApp(): React.ReactElement {
                 <span className="clock">{progress.seconds}s</span>
               </div>
             )}
-            {!job && (
+            {continueSession && <>
+              {sessionError && <div className="m-banner warn">会话同步失败：{sessionError}（正在重试）</div>}
+              {!sessionDetail && !sessionError && <div className="m-note">正在加载会话记录…</div>}
+              {sessionDetail && <MobileSessionHistory session={sessionDetail} renderTool={run =>
+                <ToolCard run={run} open={openTools[run.callId] ?? false} onToggle={() => setOpenTools(current => ({ ...current, [run.callId]: !current[run.callId] }))} />
+              } />}
+            </>}
+            {!job && !continueSession && (
               <div className="m-empty">
                 <h2>手机上派活，电脑上干活</h2>
                 <p>在下方输入指令，本机的 luban 会执行；这里实时显示推理、工具调用和文件改动。</p>
@@ -952,7 +996,7 @@ export function MobileApp(): React.ReactElement {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
             }}
           />
-          <button className="m-send" disabled={busy || !draft.trim() || !node} onClick={() => void submit()} aria-label="发送">↑</button>
+          <button className="m-send" disabled={busy || !draft.trim() || !node || Boolean(continueSession && (!sessionDetail || sessionError || sessionDetail.live?.running))} onClick={() => void submit()} aria-label="发送">↑</button>
         </div>
         <div className="m-compose-hint">
           {sessions.length > 0 && (
@@ -962,6 +1006,14 @@ export function MobileApp(): React.ReactElement {
               onChange={event => {
                 const next = sessions.find(item => item.id === event.target.value);
                 setContinueSession(next);
+                setSessionDetail(undefined);
+                setSessionError(undefined);
+                selectedRef.current = undefined;
+                setJob(undefined);
+                setEvents([]);
+                setSelectedId(undefined);
+                localStorage.removeItem(JOB_KEY);
+                setTab("live");
                 if (next) setProject(next.project);
               }}
             >

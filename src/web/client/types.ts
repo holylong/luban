@@ -177,6 +177,7 @@ export interface SessionDetail extends Omit<SessionSummary, "messages" | "edits"
   messages: SessionMessage[];
   edits?: Array<{ id: string; name: string; preview: string }>;
   pendingInputs?: Array<{ id: string; text: string }>;
+  live?: { running: boolean; events: JobStreamRecord[] };
 }
 
 /** A tool invocation assembled from the structured event stream. */

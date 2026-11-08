@@ -6,6 +6,7 @@ import { MeshRuntime } from "../core/mesh/runtime.js";
 import { AgentRunner } from "../core/agent.js";
 import { configureRemoteJobs } from "../core/mesh/agent-runner.js";
 import { SessionStore } from "../core/session-store.js";
+import { liveSessions } from "../core/live-session.js";
 import { sharedHistory } from "../core/session-history.js";
 import type { LubanConfig } from "../core/types.js";
 import { LubanWebServer } from "./server.js";
@@ -44,6 +45,68 @@ async function waitForJob(base: string, id: string, status: string): Promise<Rec
 }
 
 describe("LubanWebServer", () => {
+  it("overlays unsaved terminal history and events, finishes cleanly, and guards running continuations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-live-"));
+    const config = testConfig(root);
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh);
+    const store = new SessionStore(config.home);
+    const session = store.create(config.project, config.workspace, "agent", config.model.id, [
+      { role: "system", content: "harness" }, { role: "user", content: "original question" },
+    ]);
+    const foreign = { ...session, id: "foreign-session", title: "secret" };
+    liveSessions.publish(join(root, "other-home"), foreign);
+    liveSessions.publish(config.home, session);
+    await mkdir(config.workspace, { recursive: true });
+    mesh.setJobRunner(async () => ({ ok: true, text: "continued" }));
+    await mesh.start();
+    const base = await web.start();
+    try {
+      const list = await (await fetch(`${base}api/sessions`)).json();
+      expect(list).toMatchObject([{ id: session.id, messages: 1 }]);
+      expect((await jsonRequest(`${base}api/sessions/${foreign.id}`)).status).toBe(404);
+      expect((await jsonRequest(`${base}api/sessions/${session.id}`)).body).toMatchObject({ messages: session.messages, live: { running: false, events: [] } });
+      await store.save(session);
+      session.messages.push({ role: "user", content: "new unsaved turn" });
+      liveSessions.start(config.home, session);
+      session.messages.push({ role: "assistant", content: "streamed answer" });
+      // An in-run checkpoint must not double-render messages and events.
+      await store.save(session);
+      liveSessions.publish(config.home, session);
+      liveSessions.append(config.home, session.project, session.id, { kind: "model-call", index: 1 });
+      liveSessions.append(config.home, session.project, session.id, { kind: "delta", text: "streamed answer" });
+      const detail = await jsonRequest(`${base}api/sessions/${session.id}`);
+      expect(detail.body.messages).toEqual(session.messages.slice(0, 3));
+      expect(detail.body.live).toMatchObject({ running: true, events: [
+        { seq: 1, event: { kind: "model-call", index: 1 } },
+        { seq: 2, event: { kind: "delta", text: "streamed answer" } },
+      ] });
+      expect(await (await fetch(`${base}api/sessions`)).json()).toMatchObject([{ id: session.id, messages: 2 }]);
+      const submit = () => jsonRequest(`${base}api/jobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ instruction: "continue", session_id: session.id }) });
+      expect((await submit()).status).toBe(409);
+      // Even a first turn without a disk record must report busy, not missing.
+      const unsaved = store.create(config.project, config.workspace, "agent", config.model.id, [{ role: "user", content: "busy" }]);
+      liveSessions.start(config.home, unsaved);
+      expect((await jsonRequest(`${base}api/jobs`, { method: "POST", body: JSON.stringify({ session_id: unsaved.id }) })).status).toBe(409);
+      liveSessions.remove(config.home, unsaved.project, unsaved.id);
+      liveSessions.finish(config.home, session);
+      const finished = await jsonRequest(`${base}api/sessions/${session.id}`);
+      expect(finished.body).toMatchObject({ messages: session.messages, live: { running: false, events: [] } });
+      // Finished bridge data must not hide a newer continuation saved by a job.
+      const newer = await store.load(session.id, session.project);
+      newer!.messages.push({ role: "assistant", content: "newer job history" });
+      await store.save(newer!);
+      expect((await jsonRequest(`${base}api/sessions/${session.id}`)).body.messages).toEqual(newer!.messages);
+      const accepted = await submit();
+      expect(accepted.status).toBe(200);
+    } finally {
+      liveSessions.remove(config.home, session.project, session.id);
+      liveSessions.remove(join(root, "other-home"), foreign.project, foreign.id);
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  });
   it("shares CLI themes, validates choices and persists without forgetting the model", async () => {
     const root = await mkdtemp(join(tmpdir(), "luban-web-theme-"));
     const config = testConfig(root);
