@@ -179,6 +179,8 @@ describe("relay accounts", () => {
   it("lists separate workspaces from one machine as separate nodes", async () => {
     const cookie = await register("owner@example.com");
     const token = await enroll(cookie);
+    // A second computer logs in separately; its token must not replace the first.
+    const secondToken = await enroll(cookie);
     const home = join(root, "home");
     const apiId = instanceDeviceId(home, "/tmp/api");
     const webId = instanceDeviceId(home, "/tmp/web");
@@ -187,7 +189,7 @@ describe("relay accounts", () => {
       localPort: node.port, name: "laptop · api", version: VERSION, workspace: "/tmp/api",
     });
     const second = new TunnelClient({
-      relayUrl, nodeToken: "", deviceToken: token, deviceId: webId,
+      relayUrl, nodeToken: "", deviceToken: secondToken, deviceId: webId,
       localPort: node.port, name: "laptop · web", version: VERSION, workspace: "/tmp/web",
     });
     await first.start();

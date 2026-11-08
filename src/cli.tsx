@@ -550,6 +550,7 @@ async function runRelayLogin(argv: string[]): Promise<number> {
     .name("luban login relay")
     .description("Sign in to a relay account and enroll this computer without a browser")
     .version(VERSION)
+    .argument("[url]", "relay address, same as --relay")
     .option("--relay <url>", "relay URL (defaults to remote.relay_url in ~/.luban/config.json)")
     .option("--email <email>", "account email; prompted when omitted")
     .option("--password-stdin", "read the password from stdin instead of prompting")
@@ -557,6 +558,7 @@ async function runRelayLogin(argv: string[]): Promise<number> {
     .option("--no-config", "only save the token; do not change ~/.luban/config.json")
     .showHelpAfterError();
   program.parse(argv, { from: "user" });
+  const positionalRelay = typeof program.args[0] === "string" ? program.args[0].trim() : "";
   const options = program.opts<{
     relay?: string; email?: string; passwordStdin?: boolean; deviceToken?: string; config: boolean;
   }>();
@@ -569,18 +571,16 @@ async function runRelayLogin(argv: string[]): Promise<number> {
       : {};
 
     const configuredRelay = typeof remoteRaw.relay_url === "string" ? remoteRaw.relay_url : "";
-    const relayInput = options.relay?.trim() || configuredRelay.trim() || process.env.LUBAN_RELAY_PUBLIC_URL?.trim()
-      || (process.stdin.isTTY ? await promptLine("中继地址（https://…）: ") : "");
-    if (!relayInput) throw new Error("缺少中继地址：加 --relay https://…");
-    const relayUrl = normalizeRelayUrl(relayInput);
-    const parsedRelay = new URL(relayUrl);
-    if (parsedRelay.protocol !== "https:" && !LOOPBACK.has(parsedRelay.hostname)) {
-      throw new Error("账号登录必须使用 HTTPS；只有本机回环地址允许 HTTP");
-    }
+    const relayInput = positionalRelay || options.relay?.trim() || configuredRelay.trim()
+      || process.env.LUBAN_RELAY_PUBLIC_URL?.trim()
+      || (process.stdin.isTTY ? await promptLine("中继地址（如 https://relay.example.com）: ") : "");
+    if (!relayInput) throw new Error("缺少中继地址：luban login relay https://relay.example.com");
+    // Normalization and the HTTPS policy live in web/relay-login so the CLI,
+    // the TUI dialog, and direct callers all accept the same addresses.
 
     const token = options.deviceToken?.trim() || "";
     if (token) {
-      const saved = await saveRelayDeviceToken({ home, relayUrl, token, writeConfig: options.config });
+      const saved = await saveRelayDeviceToken({ home, relayUrl: relayInput, token, writeConfig: options.config });
       process.stdout.write(`中继 ${saved.relayUrl}\n`);
       process.stdout.write(`设备令牌已保存到 ${saved.envPath}（权限 600）\n`);
       process.stdout.write(saved.wroteConfig
@@ -604,14 +604,14 @@ async function runRelayLogin(argv: string[]): Promise<number> {
     if (options.passwordStdin) process.stdout.write("密码已读取，正在登录…\n");
     else process.stdout.write("正在登录并生成本机设备令牌…\n");
 
-    const saved = await loginRelayAccount({ home, relayUrl, email, password, writeConfig: options.config });
+    const saved = await loginRelayAccount({ home, relayUrl: relayInput, email, password, writeConfig: options.config });
     process.stdout.write(`已登录 ${saved.email}\n`);
     process.stdout.write(`中继 ${saved.relayUrl}\n`);
     process.stdout.write(`设备令牌已保存到 ${saved.envPath}（权限 600）\n`);
     process.stdout.write(saved.wroteConfig
       ? `已写入 ${saved.configPath}：remote.enabled=true\n`
       : "未修改 config.json；需要手动加载该环境文件\n");
-    process.stdout.write("注意：新设备令牌会替换账户原来的设备令牌；其他电脑需要重新登录或更新令牌。\n");
+    process.stdout.write("提示：每台电脑使用各自的设备令牌；新增令牌不会影响其他电脑。\n");
     process.stdout.write("现在运行 luban <项目路径>，手机端即可看到这台电脑。\n");
     return 0;
   } catch (error) {

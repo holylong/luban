@@ -52,7 +52,10 @@ interface StoredAccount {
   salt: string;
   password_hash: string;
   created_at: number;
+  /** Older relays kept one enrollment token per account. */
   device_token_hash?: string;
+  /** One enrollment token per computer; new logins add instead of replacing. */
+  device_token_hashes?: string[];
 }
 
 interface StoredSession {
@@ -83,6 +86,17 @@ function validId(value: string): boolean {
   return ID.test(value);
 }
 
+/** At most one enrollment per computer we realistically expect on an account. */
+const MAX_DEVICE_TOKENS = 32;
+
+function deviceTokenHashes(account: StoredAccount): string[] {
+  const hashes = Array.isArray(account.device_token_hashes)
+    ? account.device_token_hashes.filter(value => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value))
+    : [];
+  if (account.device_token_hash && !hashes.includes(account.device_token_hash)) hashes.push(account.device_token_hash);
+  return hashes;
+}
+
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
@@ -92,7 +106,7 @@ function view(account: StoredAccount): RelayAccountView {
     id: account.id,
     email: account.email,
     created_at: account.created_at,
-    has_device_token: Boolean(account.device_token_hash),
+    has_device_token: deviceTokenHashes(account).length > 0,
   };
 }
 
@@ -242,7 +256,8 @@ export class RelayAccountStore {
   }
 
   /**
-   * Create (or rotate) the one device-enrollment token for an account. The
+   * Add one device-enrollment token for an account. Each computer logs in
+   * separately, so a new login must not invalidate the other machines. The
    * plaintext is returned once; only its hash is written to disk.
    */
   async createDeviceToken(accountId: string): Promise<string> {
@@ -250,7 +265,11 @@ export class RelayAccountStore {
     const account = this.findAccount(accountId);
     if (!account) throw new AccountError(404, "账户不存在");
     const token = randomBytes(24).toString("base64url");
-    account.device_token_hash = hashToken(token);
+    const hashed = hashToken(token);
+    const hashes = deviceTokenHashes(account).filter(value => value !== hashed);
+    hashes.push(hashed);
+    account.device_token_hashes = hashes.slice(-MAX_DEVICE_TOKENS);
+    delete account.device_token_hash;
     await this.persist();
     return token;
   }
@@ -259,7 +278,7 @@ export class RelayAccountStore {
     this.requireReady();
     if (!token) return undefined;
     const hashed = hashToken(token);
-    const account = this.data.accounts.find(item => item.device_token_hash === hashed);
+    const account = this.data.accounts.find(item => deviceTokenHashes(item).includes(hashed));
     return account ? view(account) : undefined;
   }
 

@@ -120,3 +120,21 @@ it("rejects plain HTTP relays that are not loopback", async () => {
     token: "token",
   })).rejects.toThrow(/HTTPS/u);
 });
+
+it("defaults a bare host to https and keeps loopback on http", async () => {
+  const test = await setup();
+  const remote = await saveRelayDeviceToken({
+    home: test.home,
+    relayUrl: "relay.example.com",
+    token: "token",
+    writeConfig: false,
+  });
+  expect(remote.relayUrl).toBe("https://relay.example.com");
+  const loopback = await saveRelayDeviceToken({
+    home: test.home,
+    relayUrl: "127.0.0.1:8642",
+    token: "token",
+    writeConfig: false,
+  });
+  expect(loopback.relayUrl).toBe("http://127.0.0.1:8642");
+});

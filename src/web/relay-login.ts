@@ -53,8 +53,19 @@ function remoteObject(config: Record<string, unknown>): Record<string, unknown> 
     : {};
 }
 
+/** Host part of a bare relay address, ignoring any scheme, path, and port. */
+function bareHost(value: string): string {
+  const withoutScheme = value.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//iu, "");
+  return withoutScheme.split(/[/?#]/u)[0]!.replace(/:\d+$/u, "").toLowerCase();
+}
+
 function checkedRelayUrl(value: string): string {
-  const relayUrl = normalizeRelayUrl(value);
+  const trimmed = value.trim();
+  // Account login is HTTPS-only off loopback, so a bare host such as
+  // `relay.example.com` becomes https here instead of failing later with a
+  // confusing "must use HTTPS" error.
+  const scheme = /^https?:\/\//iu.test(trimmed) ? "" : LOOPBACK.has(bareHost(trimmed)) ? "http://" : "https://";
+  const relayUrl = normalizeRelayUrl(`${scheme}${trimmed}`);
   let parsed: URL;
   try {
     parsed = new URL(relayUrl);

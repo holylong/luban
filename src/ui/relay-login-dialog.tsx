@@ -123,7 +123,7 @@ export function RelayLoginDialog({ home, relayUrl, onClose, onSaved }: {
       <Text color={theme.green}>✓ 已登录 {saved.email}</Text>
       <Text color={theme.dim}>设备令牌已保存到 {saved.envPath}（权限 600）</Text>
       <Text color={theme.dim}>已更新 {saved.configPath}；重新启动 luban 后自动接入中继。</Text>
-      <Text color={theme.yellow}>新令牌会替换账户原来的设备令牌；其他电脑需要重新登录或更新令牌。</Text>
+      <Text color={theme.dim}>每台电脑使用各自的设备令牌；重新登录不会让其他电脑掉线。</Text>
       <Text color={theme.dim}>Enter 或 Esc 关闭</Text>
     </Box> : null}
     {message ? <Text color={theme.yellow}>{message}</Text> : null}

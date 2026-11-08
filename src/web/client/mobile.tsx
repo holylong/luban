@@ -890,7 +890,7 @@ export function MobileApp(): React.ReactElement {
                 </div>
                 {deviceSetup && (
                   <div className="m-device-token">
-                    <p className="m-note">令牌只显示这一次；重新生成会使旧令牌失效。</p>
+                    <p className="m-note">令牌只显示这一次；重新生成只新增一枚，不影响其他电脑。</p>
                     <pre>{deviceSetup.command}</pre>
                   </div>
                 )}

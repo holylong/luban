@@ -1104,14 +1104,14 @@ luban web /path/to/project --relay https://relay.example.com --relay-device-toke
 也可以不用打开手机或浏览器，直接在电脑终端登录账户：
 
 ```bash
-luban login relay --relay https://relay.example.com --email you@example.com
+luban login relay https://relay.example.com --email you@example.com
 ```
 
-密码会以隐藏输入方式询问，不写入 shell 历史；自动化环境可用 `--password-stdin` 从标准输入读取。登录成功后，命令会把设备令牌写入 `~/.config/luban/relay.env`（权限 `600`），并把 `remote.enabled`、`remote.relay_url` 写入 `~/.luban/config.json`；之后直接运行 `luban <项目路径>` 即可自动接入。已有设备令牌时，可用 `--device-token <令牌>` 只保存令牌，或加 `--no-config` 只写环境文件。
+也可以写成 `luban login relay --relay https://relay.example.com --email you@example.com`；地址不带 `https://` 时默认按 HTTPS 处理（只有本机回环地址才允许 HTTP）。密码会以隐藏输入方式询问，不写入 shell 历史；自动化环境可用 `--password-stdin` 从标准输入读取。登录成功后，命令会把设备令牌写入 `~/.config/luban/relay.env`（权限 `600`），并把 `remote.enabled`、`remote.relay_url` 写入 `~/.luban/config.json`；之后直接运行 `luban <项目路径>` 即可自动接入。已有设备令牌时，可用 `--device-token <令牌>` 只保存令牌，或加 `--no-config` 只写环境文件。
 
 TUI 里也可以直接运行 `/relay login`（可带中继地址：`/relay login https://relay.example.com`）。依次输入中继地址、邮箱和密码，邮箱确认后会显示「邮箱已记录」，密码输入不回显；成功后同样保存设备令牌和配置。当前 TUI 进程不会立刻建立隧道，重新启动 `luban` 后自动接入。
 
-设备令牌只显示一次，重新生成会使旧令牌失效；一个账户的设备令牌可以接入多台电脑，也可以在同一台电脑的不同项目目录各启动一个实例。运行后手机会在「账户设备」里看到每个实例（名称带项目目录），点选即可查看任务进度并派活。关闭终端后对应节点会离线；需要长期在线时把命令做成 systemd 用户服务，或使用下面的配置文件方式。
+设备令牌只显示一次；每台电脑登录或生成自己的令牌，新增令牌不会让其他电脑掉线。一个账户的设备令牌可以接入多台电脑，也可以在同一台电脑的不同项目目录各启动一个实例。运行后手机会在「账户设备」里看到每个实例（名称带项目目录），点选即可查看任务进度并派活。关闭终端后对应节点会离线；需要长期在线时把命令做成 systemd 用户服务，或使用下面的配置文件方式。
 
 也可以让 TUI 启动时自动接入。编辑 `~/.luban/config.json`：
 

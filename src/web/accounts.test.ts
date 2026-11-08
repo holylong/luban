@@ -58,13 +58,33 @@ describe("relay accounts", () => {
     expect(await store.accountForDeviceToken("nope")).toBeUndefined();
   });
 
-  it("rotates the device token so an old machine enrollment stops working", async () => {
+  it("keeps an enrollment token per computer instead of rotating the previous one", async () => {
     const account = await store.register("devices@example.com", "password-1");
     const first = await store.createDeviceToken(account.id);
-    expect((await store.accountForDeviceToken(first))?.id).toBe(account.id);
     const second = await store.createDeviceToken(account.id);
-    expect(await store.accountForDeviceToken(first)).toBeUndefined();
+    expect((await store.accountForDeviceToken(first))?.id).toBe(account.id);
     expect((await store.accountForDeviceToken(second))?.id).toBe(account.id);
+
+    const reopened = new RelayAccountStore(path);
+    await reopened.initialize();
+    expect((await reopened.accountForDeviceToken(first))?.id).toBe(account.id);
+    expect((await reopened.accountForDeviceToken(second))?.id).toBe(account.id);
+  });
+
+  it("keeps an existing single-token account working after the upgrade", async () => {
+    const account = await store.register("legacy@example.com", "password-1");
+    const token = await store.createDeviceToken(account.id);
+    const data = JSON.parse(await readFile(path, "utf8")) as {
+      accounts: Array<{ id: string; device_token_hashes?: string[]; device_token_hash?: string }>;
+    };
+    const stored = data.accounts.find(item => item.id === account.id)!;
+    stored.device_token_hash = stored.device_token_hashes!.at(-1);
+    delete stored.device_token_hashes;
+    await import("node:fs/promises").then(fs => fs.writeFile(path, `${JSON.stringify(data, null, 2)}\n`));
+
+    const reopened = new RelayAccountStore(path);
+    await reopened.initialize();
+    expect((await reopened.accountForDeviceToken(token))?.id).toBe(account.id);
   });
 
   it("persists devices for offline visibility and removes them on request", async () => {
