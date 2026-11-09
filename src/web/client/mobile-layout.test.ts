@@ -17,6 +17,9 @@ describe("mobile layout", () => {
     expect(source).toContain('aria-label="任务指令"');
     expect(source).not.toContain('placeholder={continueSession ? `继续：${continueSession.title}`');
   });
+  it("shows the provider in the composer model picker", () => {
+    expect(source).toContain("{model.name} · {model.provider}");
+  });
   it("prevents status badges and the brand from shrinking into vertical text", () => {
     expect(css).toMatch(/\.m-chip\s*\{[^}]*flex-shrink: 0;[^}]*white-space: nowrap;/);
     expect(css).toMatch(/\.m-brand\s*\{[^}]*flex: none;/);

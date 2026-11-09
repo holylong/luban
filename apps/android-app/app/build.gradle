@@ -8,8 +8,8 @@ android {
         applicationId 'dev.luban.remote'
         minSdk 26
         targetSdk 35
-        versionCode 11621
-        versionName '1.16.21'
+        versionCode 11622
+        versionName '1.16.22'
     }
     buildTypes {
         release { minifyEnabled false }

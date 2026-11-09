@@ -1084,7 +1084,7 @@ export function MobileApp(): React.ReactElement {
                 <dt>模式</dt><dd>{relayMode ? "中继（公网）" : "直连（局域网）"}</dd>
                 <dt>节点</dt><dd>{node?.name || "—"}</dd>
                 <dt>工作区</dt><dd>{node?.workspace || "—"}</dd>
-                <dt>模型</dt><dd>{node?.model || "—"}</dd>
+                <dt>模型</dt><dd>{node?.model ? `${node.model}${node.provider ? ` · ${node.provider}` : ""}` : "—"}</dd>
                 <dt>版本</dt><dd>v{node?.version || "—"}</dd>
                 <dt>实时流</dt><dd>{live ? "已连接" : "断开"}</dd>
               </dl>
@@ -1211,7 +1211,7 @@ export function MobileApp(): React.ReactElement {
           <select value={node?.model_id ?? ""} aria-label="模型"
             onChange={event => { const id = event.target.value; if (id && id !== node?.model_id) void switchModel(id); }}>
             {modelCatalog.length === 0 && <option value="">模型</option>}
-            {modelCatalog.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+            {modelCatalog.map(model => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}
           </select>
           <select value={mode} onChange={event => setMode(event.target.value as TaskMode)} aria-label="权限">
             {(Object.keys(MODE_LABELS) as TaskMode[]).map(key => <option key={key} value={key}>{MODE_LABELS[key]}</option>)}
