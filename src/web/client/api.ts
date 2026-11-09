@@ -83,6 +83,8 @@ export const api = {
   file: (project: string, path: string) => request<FileContent>(`/api/file${query({ project, path })}`),
   fileVersions: (project: string, path: string) => request<FileVersions>(`/api/file-versions${query({ project, path })}`),
   diff: (project: string) => request<DiffPayload>(`/api/diff${query({ project })}`),
+  addProject: (input: { name?: string; path?: string }) =>
+    post<{ ok: boolean; project: string; workspace: string; created: boolean }>("/api/projects", input),
   sessions: (project: string, limit = 60) => request<SessionSummary[]>(`/api/sessions${query({ project, limit })}`),
   session: (id: string, project: string) => request<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}${query({ project })}`),
   sync: (input: { peer: string; direction: "push" | "pull"; project_id: string; mode: string }) =>

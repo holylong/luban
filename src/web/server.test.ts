@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -296,6 +296,59 @@ describe("LubanWebServer", () => {
       const finished = await waitForJob(base, String(submitted.body.job_id), "done");
       expect(finished.result).toContain("summarize: web context");
       expect(finished.logs).toEqual(expect.arrayContaining([expect.objectContaining({ level: "tool" })]));
+    } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
+
+  it("creates a default workspace and registers an existing directory for phone projects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-projects-"));
+    const config = testConfig(root);
+    const existing = join(root, "existing-project");
+    await mkdir(existing, { recursive: true });
+    await writeFile(join(existing, "README.md"), "existing context\n", "utf8");
+    const canonical = await realpath(existing);
+    const mesh = new MeshRuntime(config);
+    mesh.setJobRunner(async (job) => ({ ok: true, text: job.workspace }));
+    const web = new LubanWebServer(config, mesh, { port: 0 });
+    await mesh.start();
+    const base = await web.start();
+    const postProject = (body: Record<string, string>) => jsonRequest(`${base}api/projects`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    try {
+      const added = await postProject({ path: existing, name: "picked" });
+      expect(added.status).toBe(200);
+      expect(added.body).toMatchObject({ ok: true, project: "picked", workspace: canonical, created: false });
+      expect(JSON.parse(await readFile(join(config.home, "config.json"), "utf8"))).toMatchObject({ projects: { picked: canonical } });
+      expect((await jsonRequest(`${base}api/node`)).body.projects).toMatchObject({ picked: canonical });
+      // Registering the same directory again selects the existing project.
+      expect((await postProject({ path: existing })).body).toMatchObject({ project: "picked", workspace: canonical });
+
+      const created = await postProject({ name: "fresh" });
+      expect(created.status).toBe(200);
+      const fresh = join(config.mesh.workspacesDir, "fresh");
+      expect(created.body).toMatchObject({ ok: true, project: "fresh", workspace: fresh, created: true });
+      expect((await stat(fresh)).isDirectory()).toBe(true);
+      expect((await jsonRequest(`${base}api/node`)).body.projects).toMatchObject({ fresh });
+      expect((await jsonRequest(`${base}api/sessions?project=fresh`)).body).toEqual([]);
+
+      const submitted = await jsonRequest(`${base}api/jobs`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ instruction: "where am I", project_id: "fresh" }),
+      });
+      expect(submitted.status).toBe(200);
+      const finished = await waitForJob(base, String(submitted.body.job_id), "done");
+      expect(finished.workspace).toBe(fresh);
+      expect(finished.result).toBe(fresh);
+
+      expect((await postProject({ name: "picked" })).status).toBe(409);
+      expect((await postProject({ path: "relative/project" })).status).toBe(400);
+      expect((await postProject({ path: join(root, "missing") })).status).toBe(400);
+      expect((await postProject({ path: "/" })).status).toBe(400);
+      expect((await postProject({ name: "bad/name" })).status).toBe(400);
     } finally {
       await web.stop();
       await mesh.stop();

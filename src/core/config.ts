@@ -883,6 +883,17 @@ export async function savePermissionMode(home: string, mode: "ask" | "edits" | "
   await rename(temporary, path);
 }
 
+/** Register a workspace path so it survives a node restart and appears in the phone project list. */
+export async function saveProject(home: string, name: string, workspace: string): Promise<void> {
+  await mkdir(home, { recursive: true });
+  const path = join(home, "config.json");
+  const config = readJson(path);
+  const projects = { ...record(config.projects), [name]: workspace };
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ ...config, projects }, null, 2)}\n`, "utf8");
+  await rename(temporary, path);
+}
+
 export async function saveMeshContact(home: string, contact: MeshContact): Promise<void> {
   await mkdir(home, { recursive: true });
   const path = join(home, "config.json");

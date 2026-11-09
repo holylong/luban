@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, savePermissionMode, savePreferredModel, saveTheme, stripJsonComments } from "./config.js";
+import { loadConfig, savePermissionMode, savePreferredModel, saveProject, saveTheme, stripJsonComments } from "./config.js";
 
 const originalHome = process.env.LUBAN_HOME;
 const originalUserHome = process.env.HOME;
@@ -194,6 +194,19 @@ describe("config", () => {
     expect(loadConfig({ workspace }).permissionMode).toBe("allow");
     delete process.env.LUBAN_ALLOW_TOOLS;
     expect(loadConfig({ workspace }).permissionMode).toBe("ask");
+  });
+
+  it("persists a phone-registered project without dropping other config", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-project-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    await writeFile(join(home, "config.json"), JSON.stringify({ permission: { mode: "edits" }, projects: { old: "/old" } }));
+    process.env.LUBAN_HOME = home;
+    await saveProject(home, "picked", "/work/picked");
+    const raw = JSON.parse(await readFile(join(home, "config.json"), "utf8"));
+    expect(raw.projects).toEqual({ old: "/old", picked: "/work/picked" });
+    expect(raw.permission).toEqual({ mode: "edits" });
+    expect(loadConfig({ workspace }).mesh.projects).toEqual({ old: "/old", picked: "/work/picked" });
   });
 
   it("resolves the terminal theme from flags, config, and the last choice", async () => {

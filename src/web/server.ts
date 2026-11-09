@@ -1,15 +1,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { lstat, readdir, realpath, stat } from "node:fs/promises";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readdir, realpath, stat } from "node:fs/promises";
+import { basename, extname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { JobStreamRecord, MeshEvent, MeshRuntime } from "../core/mesh/runtime.js";
 import { hasConversation, SessionStore } from "../core/session-store.js";
 import { liveSessions } from "../core/live-session.js";
 import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
-import { savePreferredModel, saveTheme } from "../core/config.js";
+import { savePreferredModel, saveProject, saveTheme } from "../core/config.js";
 import { THEMES, findTheme, resolveTheme } from "../ui/theme.js";
 import { supportedReasoningEfforts } from "../core/model-controls.js";
 import { VERSION } from "../version.js";
@@ -35,6 +35,27 @@ class HttpError extends Error {
 
 function record(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
+}
+
+/** A project id is also a folder name under the default workspaces directory. */
+function cleanProjectName(value: unknown): string {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name) return "";
+  if (name.length > 80) throw new HttpError(400, "项目名称过长（最多 80 个字符）");
+  if (name === "." || name === ".." || /[\\/\u0000-\u001f]/u.test(name)) {
+    throw new HttpError(400, "项目名称不能包含路径分隔符");
+  }
+  if (["__proto__", "constructor", "prototype"].includes(name)) throw new HttpError(400, "项目名称不可用");
+  return name;
+}
+
+function uniqueProjectName(projects: Record<string, string>, base: string, workspace: string): string {
+  let name = base;
+  for (let suffix = 2; projects[name] && resolve(projects[name]!) !== workspace; suffix += 1) {
+    if (suffix > 99) throw new HttpError(409, "项目名称冲突，请指定一个名称");
+    name = `${base}-${suffix}`;
+  }
+  return name;
 }
 
 function send(res: ServerResponse, status: number, type: string, body: string | Buffer): void {
@@ -539,6 +560,44 @@ export class LubanWebServer {
       try { await savePreferredModel(this.config.home, found.id, found.reasoningEffort); }
       catch (error) { throw new HttpError(500, `could not save model choice: ${error instanceof Error ? error.message : String(error)}`); }
       return json(res, { ok: true, model_id: found.id, model: found.model, provider: found.provider, name: found.name });
+    }
+    if (url.pathname === "/api/projects") {
+      const rawPath = typeof body.path === "string" ? body.path.trim() : "";
+      const requested = cleanProjectName(body.name);
+      if (!rawPath && !requested) throw new HttpError(400, "请提供工作区名称或电脑目录");
+      let workspace: string;
+      if (rawPath) {
+        if (!isAbsolute(rawPath)) throw new HttpError(400, "请填写电脑上的绝对路径，例如 /home/me/project");
+        const resolved = resolve(rawPath);
+        if (parse(resolved).root === resolved) throw new HttpError(400, "不能把文件系统根目录注册为工作区");
+        try { workspace = await realpath(resolved); }
+        catch { throw new HttpError(400, "目录不存在或无法读取"); }
+        const info = await stat(workspace).catch(() => undefined);
+        if (!info?.isDirectory()) throw new HttpError(400, "路径不是目录");
+      } else {
+        const target = join(this.config.mesh.workspacesDir, requested);
+        const configured = this.config.mesh.projects[requested];
+        if (configured && resolve(configured) !== resolve(target)) {
+          throw new HttpError(409, `项目“${requested}”已存在：${configured}`);
+        }
+        await mkdir(target, { recursive: true });
+        workspace = await realpath(target);
+      }
+      // Registering the same directory twice should select it, not create a
+      // second project id that points at the same files.
+      const already = Object.entries(this.config.mesh.projects)
+        .find(([, path]) => resolve(path) === workspace);
+      if (already) return json(res, { ok: true, project: already[0], workspace, created: false });
+      let name = requested || cleanProjectName(basename(workspace));
+      if (!name) throw new HttpError(400, "无法从目录名生成项目名称，请指定名称");
+      if (this.config.mesh.projects[name]) {
+        if (requested) throw new HttpError(409, `项目“${name}”已被其他目录使用`);
+        name = uniqueProjectName(this.config.mesh.projects, name, workspace);
+      }
+      await saveProject(this.config.home, name, workspace);
+      this.config.mesh.projects = { ...this.config.mesh.projects, [name]: workspace };
+      this.mesh.registerProject(name, workspace);
+      return json(res, { ok: true, project: name, workspace, created: !rawPath });
     }
     if (url.pathname === "/api/jobs") {
       const interaction = String(body.interaction || "auto");

@@ -192,6 +192,12 @@ final class Api {
         return get("/api/node", node);
     }
 
+    JSONObject addProject(String node, String value, boolean existing) throws IOException, JSONException {
+        JSONObject body = new JSONObject();
+        if (existing) body.put("path", value); else body.put("name", value);
+        return post("/api/projects", node, body);
+    }
+
     JSONArray sessions(String node, String project, int limit) throws IOException, JSONException {
         String path = "/api/sessions?limit=" + limit + "&project=" + enc(project == null ? "" : project);
         return getArray(path, node);

@@ -302,6 +302,7 @@ export function MobileApp(): React.ReactElement {
   const [mode, setMode] = useState<TaskMode>("edits");
   const [busy, setBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [draft, setDraft] = useState(() => localStorage.getItem(DRAFT_KEY) || "");
   const [submissionPending, setSubmissionPending] = useState(() => Boolean(localStorage.getItem(PENDING_KEY)));
   const submittingRef = useRef(false);
@@ -422,6 +423,34 @@ export function MobileApp(): React.ReactElement {
       notify(error instanceof Error ? error.message : String(error), true);
     } finally { setModelBusy(false); }
   }, [modelBusy, refresh, notify]);
+
+  const addWorkspace = useCallback(async (kind: "new" | "existing") => {
+    const answer = window.prompt(kind === "new"
+      ? "新工作区名称（将在电脑默认工作区目录下创建）"
+      : "电脑上已有目录的绝对路径（例如 /home/me/project）");
+    const value = answer?.trim();
+    if (!value) return;
+    setWorkspaceBusy(true);
+    try {
+      const reply = await api.addProject(kind === "new" ? { name: value } : { path: value });
+      await refresh();
+      selectedRef.current = undefined;
+      setSelectedId(undefined);
+      setJob(undefined);
+      setEvents([]);
+      setContinueSession(undefined);
+      setSessionDetail(undefined);
+      setSessionError(undefined);
+      setSessionListError(undefined);
+      setSessions([]);
+      setProject(reply.project);
+      localStorage.removeItem(JOB_KEY);
+      setTab("live");
+      notify(`工作区已${reply.created ? "创建" : "添加"}：${reply.project}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), true);
+    } finally { setWorkspaceBusy(false); }
+  }, [refresh, notify]);
 
   const refreshSessions = useCallback(async () => {
     if (!ready || !node) return;
@@ -1188,6 +1217,10 @@ export function MobileApp(): React.ReactElement {
             {(Object.keys(MODE_LABELS) as TaskMode[]).map(key => <option key={key} value={key}>{MODE_LABELS[key]}</option>)}
           </select>
           <span style={{ marginLeft: "auto" }}>{node?.interactive ? "可审批" : "自动放行"}</span>
+          <div className="m-workspace-actions">
+            <button type="button" className="m-btn" disabled={workspaceBusy} onClick={() => void addWorkspace("new")}>＋ 新建工作区</button>
+            <button type="button" className="m-btn" disabled={workspaceBusy} onClick={() => void addWorkspace("existing")}>＋ 添加已有目录</button>
+          </div>
         </div>
         </details>
       </div>

@@ -699,28 +699,90 @@ public final class MainActivity extends Activity {
     }
 
     private void chooseProject() {
-        JSONObject projects = nodeInfo == null ? null : nodeInfo.optJSONObject("projects");
-        if (projects == null || projects.length() == 0) {
-            toast("这台电脑没有上报其他项目");
-            return;
-        }
-        List<String> names = new ArrayList<>();
-        names.add("当前工作区");
-        Iterator<String> keys = projects.keys();
+        final List<String> names = new ArrayList<>();
         final List<String> values = new ArrayList<>();
+        names.add("＋ 新建工作区…");
+        values.add("__new__");
+        names.add("＋ 添加电脑上已有目录…");
+        values.add("__existing__");
+        names.add("当前工作区");
         values.add("");
-        while (keys.hasNext()) {
-            String key = keys.next();
-            names.add(key + " · " + projects.optString(key, ""));
-            values.add(key);
+        JSONObject projects = nodeInfo == null ? null : nodeInfo.optJSONObject("projects");
+        if (projects != null) {
+            Iterator<String> keys = projects.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                names.add(key + " · " + projects.optString(key, ""));
+                values.add(key);
+            }
         }
         new AlertDialog.Builder(this)
-                .setTitle("选择项目")
+                .setTitle("工作区")
                 .setItems(names.toArray(new String[0]), (dialog, which) -> {
-                    project = values.get(which);
+                    String value = values.get(which);
+                    if (value.equals("__new__")) { promptWorkspace(false); return; }
+                    if (value.equals("__existing__")) { promptWorkspace(true); return; }
+                    project = value;
                     loadSessions();
                 })
                 .show();
+    }
+
+    private void promptWorkspace(boolean existing) {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint(existing ? "例如 /home/me/project 或 D:\\work\\project" : "例如 my-new-project");
+        input.setInputType(InputType.TYPE_CLASS_TEXT
+                | (existing ? InputType.TYPE_TEXT_VARIATION_URI : InputType.TYPE_TEXT_VARIATION_NORMAL));
+        input.setPadding(ui.dp(18), ui.dp(8), ui.dp(18), ui.dp(8));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(existing ? "添加电脑上的目录" : "新建工作区")
+                .setMessage(existing
+                        ? "输入电脑上已存在的绝对路径。仅注册目录，不复制文件。"
+                        : "输入名称，将在电脑默认工作区目录下创建。")
+                .setView(input)
+                .setPositiveButton("确定", null)
+                .setNegativeButton("取消", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(v -> {
+                    String value = input.getText().toString().trim();
+                    if (value.isEmpty()) {
+                        toast(existing ? "请填写目录绝对路径" : "请填写工作区名称");
+                        return;
+                    }
+                    dialog.dismiss();
+                    createWorkspace(value, existing);
+                }));
+        dialog.show();
+    }
+
+    private void createWorkspace(String value, boolean existing) {
+        final String targetNode = nodeId;
+        if (targetNode.isEmpty()) {
+            toast("请先选择一台电脑");
+            return;
+        }
+        toast(existing ? "正在添加目录…" : "正在创建工作区…");
+        runIo(() -> {
+            try {
+                JSONObject reply = api.addProject(targetNode, value, existing);
+                JSONObject refreshed = null;
+                try { refreshed = api.nodeInfo(targetNode); } catch (Exception ignored) { /* project is already registered */ }
+                final JSONObject info = refreshed;
+                postResult(() -> {
+                    if (info != null) nodeInfo = info;
+                    project = reply.optString("project", project);
+                    sessionId = "";
+                    jobId = "";
+                    saveActive();
+                    loadSessions();
+                    toast("工作区已" + (reply.optBoolean("created") ? "创建" : "添加") + "：" + project);
+                });
+            } catch (Exception error) {
+                postResult(() -> toast(messageOf(error)));
+            }
+        });
     }
 
     private View sessionCard(JSONObject session) {

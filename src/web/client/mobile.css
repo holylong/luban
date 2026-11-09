@@ -448,6 +448,8 @@ a { color: var(--blue); }
 .m-compose-hint select { min-width: 0; max-width: 100%; width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--muted); font-size: 13.5px; text-overflow: ellipsis; }
 .m-compose-hint select[aria-label="继续会话"] { grid-column: 1 / -1; }
 .m-compose-hint > span { grid-column: 1 / -1; }
+.m-workspace-actions { grid-column: 1 / -1; display: flex; gap: 8px; }
+.m-workspace-actions .m-btn { flex: 1; min-height: 36px; font-size: 12.5px; }
 .m-compose textarea { min-width: 0; }
 .m-main { min-height: 0; }
 
