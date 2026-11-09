@@ -740,7 +740,7 @@ export class MeshRuntime {
       });
       await logWrites.catch(() => undefined);
       const current = await this.store.get(id);
-      const paused = !result.ok && result.stopReason === "max_steps";
+      const paused = !result.ok && (result.stopReason === "max_steps" || result.stopReason === "truncated");
       if (current?.status !== "cancelled") await this.store.finish(id, result.ok ? "done" : paused ? "paused" : "failed", result.ok || paused ? result.text : "", result.ok || paused ? "" : result.text);
     } catch (error) {
       await logWrites.catch(() => undefined);
@@ -832,11 +832,12 @@ export class MeshRuntime {
     if (!previous || previous.target !== this.config.mesh.nodeName) throw new Error("unknown local job");
     if (!previous.session_id) throw new Error("job has no saved history; cannot resume");
     if (this.activeJobs.has(id)) throw new Error("job is still finishing; retry shortly");
-    const job = await this.store.transition(id, "paused", { status: "queued", done_at: null,
+    if (previous.status !== "paused" && previous.status !== "failed") throw new Error("only a paused or failed job can be resumed");
+    const job = await this.store.transition(id, previous.status, { status: "queued", done_at: null,
       result: "", error: "", resume_count: (previous.resume_count || 0) + 1,
       instance_id: this.instanceId, lease_seconds: 0, lease_deadline: 0,
       queued_at: now() });
-    if (!job) throw new Error("only a paused job can be resumed");
+    if (!job) throw new Error("only a paused or failed job can be resumed");
     this.ownedJobs.add(id);
     this.queuedJobs.push(id);
     this.emit({ type: "job", job });

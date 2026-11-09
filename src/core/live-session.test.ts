@@ -9,6 +9,31 @@ function session() {
 }
 
 describe("LiveSessionRegistry", () => {
+  it("protects remote ownership from stale desktop publication and rejects a second execution", () => {
+    const registry = new LiveSessionRegistry();
+    const record = session();
+    const stale = structuredClone(record);
+    const updates: boolean[] = [];
+    const unsubscribe = registry.subscribe((home, project, id) => {
+      updates.push(registry.get(home, project, id)!.running);
+    });
+    registry.start("/home/a", record, "remote-job");
+    record.title = "remote title";
+    record.messages.push({ role: "assistant", content: "remote output" });
+    registry.checkpoint("/home/a", record);
+    registry.publish("/home/a", stale);
+    expect(() => registry.start("/home/a", stale)).toThrow("already running");
+    expect(registry.get("/home/a", record.project, record.id)?.session).toEqual(record);
+    registry.finish("/home/a", record);
+    registry.publish("/home/a", stale);
+    expect(registry.get("/home/a", record.project, record.id)).toMatchObject({ jobId: "remote-job", running: false, session: record });
+    expect(updates).toEqual([true, true, false]);
+    unsubscribe();
+    registry.start("/home/a", record);
+    expect(registry.get("/home/a", record.project, record.id)?.jobId).toBeUndefined();
+    expect(updates).toHaveLength(3);
+  });
+
   it("clones initial snapshots, freezes running messages, and publishes the final history", () => {
     const registry = new LiveSessionRegistry();
     const record = session();

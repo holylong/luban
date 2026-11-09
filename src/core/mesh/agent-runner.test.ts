@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRunner } from "../agent.js";
 import { SessionStore } from "../session-store.js";
+import { liveSessions } from "../live-session.js";
+import type { ChatMessage, AgentEvent } from "../types.js";
 import { sharedHistory } from "../session-history.js";
 import type { LubanConfig } from "../types.js";
 import { configureRemoteJobs, toJobStreamEvent } from "./agent-runner.js";
@@ -76,6 +78,50 @@ async function waitForTitle(load: () => Promise<{ title: string; titleSource?: s
   }
   throw new Error("Timed out waiting for a model title");
 }
+
+describe("remote session execution", () => {
+  it("publishes checkpoints and preserves failed continuation history on retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "luban-remote-history-"));
+    const config = titleConfig(root);
+    mkdirSync(config.workspace, { recursive: true });
+    const store = new SessionStore(config.home, sharedHistory(config.history, config.home));
+    const session = store.create(config.project, config.workspace, "agent", config.model.id, [{ role: "user", content: "original" }]);
+    await store.save(session);
+    let handler: Parameters<MeshRuntime["setJobRunner"]>[0] | undefined;
+    const mesh = { setJobRunner: (fn: typeof handler) => { handler = fn; }, store: { update: vi.fn() } } as unknown as MeshRuntime;
+    let attempt = 0;
+    configureRemoteJobs(mesh, config, () => ({
+      run: async (messages: ChatMessage[], _mode: string, _signal: AbortSignal, emit: (event: AgentEvent) => void) => {
+        expect(messages.filter(message => message.content === "continuation")).toHaveLength(1);
+        expect(liveSessions.get(config.home, session.project, session.id)).toMatchObject({ running: true, jobId: "same-job" });
+        emit({ type: "delta", text: "streaming" });
+        expect(liveSessions.get(config.home, session.project, session.id)?.events).toHaveLength(1);
+        messages.push({ role: "assistant", content: `saved-${attempt}` });
+        emit({ type: "model-call", index: 2 });
+        const snapshot = liveSessions.get(config.home, session.project, session.id)!;
+        expect(snapshot.session.messages).toEqual(messages);
+        expect(snapshot.events).toHaveLength(1);
+        if (attempt++ === 0) throw new Error("upstream failed");
+        return { ok: true, text: "done", metrics: {} };
+      },
+      suggestTitle: async () => undefined, close: vi.fn(),
+    }) as unknown as AgentRunner);
+    const job = { id: "same-job", project_id: config.project, workspace: config.workspace, instruction: "continuation", session_id: session.id, continues_session: true } as MeshJob;
+    try {
+      await expect(handler!(job, new AbortController().signal, () => {})).rejects.toThrow("upstream failed");
+      expect(liveSessions.get(config.home, session.project, session.id)?.running).toBe(false);
+      expect((await store.load(session.id, config.project, config.workspace))?.messages.at(-1)?.content).toBe("saved-0");
+      await handler!({ ...job, resume_count: 1 }, new AbortController().signal, () => {});
+      const saved = await store.load(session.id, config.project, config.workspace);
+      expect(saved?.messages.filter(message => message.name === "resume-1")).toHaveLength(1);
+      expect(saved?.messages.some(message => message.content === "saved-0")).toBe(true);
+      expect(saved?.messages.at(-1)?.content).toBe("saved-1");
+    } finally {
+      liveSessions.remove(config.home, session.project, session.id);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("job session titles", () => {
   it("replaces the first-line placeholder with the model's topic title", async () => {

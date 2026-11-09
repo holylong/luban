@@ -9,6 +9,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -50,6 +52,17 @@ public final class MainActivity extends Activity {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newFixedThreadPool(2);
+    // Mutations outlive pages and Activity destruction. Never automatically retry a POST.
+    private static final ExecutorService mutations = Executors.newSingleThreadExecutor();
+    private static volatile boolean submitting;
+    private boolean background;
+    private JSONObject history = new JSONObject();
+    private String historySession = "";
+    private LinearLayout interactions;
+    private String interactionSignature = "";
+    private TextView resumeButton, liveStatus, liveProgress, liveOutput;
+    private StringBuilder liveBuffer;
+    private long liveSince;
 
     private SharedPreferences prefs;
     private Theme theme;
@@ -110,6 +123,11 @@ public final class MainActivity extends Activity {
         ui = new Ui(this, theme, Theme.scaleOf(prefs));
         email = prefs.getString(PREF_EMAIL, "");
         api = new Api(prefs.getString(PREF_SERVER, DEFAULT_SERVER), prefs.getString(PREF_COOKIE, ""));
+        nodeId = prefs.getString("active_node", "");
+        nodeName = prefs.getString("active_name", "");
+        project = prefs.getString("active_project", "");
+        sessionId = prefs.getString("active_session", "");
+        jobId = prefs.getString("active_job", "");
         buildShell();
         if (api.cookie().isEmpty()) showLogin(""); else confirmSession();
     }
@@ -118,8 +136,54 @@ public final class MainActivity extends Activity {
         pollToken++;
         pageGeneration++;
         main.removeCallbacksAndMessages(null);
-        io.shutdownNow();
+        io.shutdown();
         super.onDestroy();
+    }
+
+    @Override protected void onStop() {
+        background = true;
+        pollToken++;
+        super.onStop();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        observeSubmission();
+        if (!background) return;
+        background = false;
+        if (screen.equals("job") && !jobId.isEmpty()) {
+            openJob(jobId); // Reload authoritative history and replay after a background gap.
+        } else if (prefs.getBoolean("submission_pending", false) || !prefs.getString("submit_notice", "").isEmpty()) {
+            restoreActive();
+        }
+    }
+
+    private void observeSubmission() {
+        if (background || isDestroyed() || isFinishing()) return;
+        boolean waiting = submitting || prefs.getBoolean("submission_pending", false);
+        String active = prefs.getString("active_job", "");
+        if (!screen.equals("login") && !submitting && !active.isEmpty() && !active.equals(jobId)) {
+            restoreActive();
+        }
+        if (waiting) main.postDelayed(this::observeSubmission, 1000);
+    }
+
+    private void saveActive() {
+        prefs.edit().putString("active_node", nodeId).putString("active_name", nodeName)
+                .putString("active_project", project).putString("active_session", sessionId)
+                .putString("active_job", jobId).apply();
+    }
+
+    private void restoreActive() {
+        nodeId = prefs.getString("active_node", nodeId);
+        nodeName = prefs.getString("active_name", nodeName);
+        project = prefs.getString("active_project", project);
+        sessionId = prefs.getString("active_session", sessionId);
+        jobId = prefs.getString("active_job", "");
+        if (!jobId.isEmpty()) openJob(jobId);
+        else if (!sessionId.isEmpty()) openSession(sessionId, "会话", project);
+        else if (!nodeId.isEmpty()) loadSessions();
+        else loadDevices();
     }
 
     @Override public void onBackPressed() {
@@ -196,6 +260,8 @@ public final class MainActivity extends Activity {
             case "devices": showDevices(); break;
             case "sessions": showSessions(); break;
             case "jobs": showJobs(); break;
+            case "job": openJob(jobId); break;
+            case "transcript": openSession(sessionId, "会话", project); break;
             case "settings": showSettings(); break;
             default: showLogin("");
         }
@@ -366,7 +432,7 @@ public final class MainActivity extends Activity {
                         .apply();
                 JSONObject account = reply.optJSONObject("account");
                 if (account != null) email = account.optString("email", user);
-                postResult(this::loadDevices);
+                postResult(this::restoreActive);
             } catch (Exception error) {
                 postResult(() -> showLogin(messageOf(error)));
             }
@@ -379,7 +445,7 @@ public final class MainActivity extends Activity {
                 JSONObject reply = api.me();
                 JSONObject account = reply.optJSONObject("account");
                 if (account != null) email = account.optString("email", email);
-                postResult(this::loadDevices);
+                postResult(this::restoreActive);
             } catch (Api.Failure failure) {
                 postResult(() -> {
                     if (failure.needsLogin()) {
@@ -539,6 +605,7 @@ public final class MainActivity extends Activity {
         beginPage("sessions");
         sessionId = "";
         jobId = "";
+        saveActive();
         buildSessionsChrome();
         header(nodeName.isEmpty() ? "会话" : nodeName, "正在加载会话…", ui.iconButton("⟳", v -> loadSessions()));
         Ui.clear(composerBar);
@@ -678,6 +745,7 @@ public final class MainActivity extends Activity {
         sessionId = id;
         jobId = "";
         if (!projectId.isEmpty()) project = projectId;
+        saveActive();
         header(title, "正在读取交互记录…", null);
         Ui.clear(composerBar);
         empty("正在加载", "读取会话内容。");
@@ -693,6 +761,8 @@ public final class MainActivity extends Activity {
 
     private void showTranscript(JSONObject detail, String title) {
         screen = "transcript";
+        history = detail;
+        historySession = sessionId;
         header(title, Ui.join(" · ", project.isEmpty() ? "当前工作区" : project, "会话记录"),
                 ui.iconButton("←", v -> loadSessions()));
         buildComposer();
@@ -712,10 +782,7 @@ public final class MainActivity extends Activity {
                 }
             }
         }
-        if (shown == 0) {
-            empty("此会话没有可显示的记录", "换一个会话，或直接在下方派活生成新内容。");
-            return;
-        }
+        if (shown == 0) content.addView(ui.note("此会话没有可显示的记录，可在下方继续派活。"));
         setBody(content);
     }
 
@@ -849,11 +916,19 @@ public final class MainActivity extends Activity {
         beginPage("job");
         buildNav();
         jobId = id;
+        saveActive();
         pollToken++;
         final int token = pollToken;
         header("实时执行", nodeName, ui.iconButton("←", v -> { pollToken++; showJobs(); }));
         Ui.clear(composerBar);
         LinearLayout stream = ui.column();
+        if (historySession.equals(sessionId)) appendHistory(stream, history);
+        interactions = ui.column();
+        interactionSignature = "";
+        stream.addView(interactions);
+        resumeButton = ui.outlineButton("原任务继续执行", v -> resumeJob());
+        resumeButton.setVisibility(View.GONE);
+        stream.addView(resumeButton);
         LinearLayout card = ui.card();
         TextView status = ui.text("连接中…", 13.5f, theme.muted, true);
         TextView progress = ui.text("", 12, theme.dim, false);
@@ -865,17 +940,74 @@ public final class MainActivity extends Activity {
         stream.addView(card);
         setBody(stream);
         liveRunning = true;
-        pollJob(token, id, 0, new StringBuilder(), status, progress, output);
+        liveStatus = status;
+        liveProgress = progress;
+        liveOutput = output;
+        liveSince = 0;
+        liveBuffer = new StringBuilder();
+        final String jobNode = nodeId;
+        runIo(() -> {
+            try {
+                JSONObject job = api.job(jobNode, id);
+                String sid = job.optString("session_id", "");
+                String pid = job.optString("project_id", project);
+                JSONObject detail = sid.isEmpty() ? new JSONObject() : api.session(jobNode, pid, sid);
+                postResult(() -> {
+                    if (token != pollToken || background) return;
+                    sessionId = sid;
+                    project = pid;
+                    saveActive();
+                    // Reload history after recreation/reconnection, not just in-memory navigation.
+                    stream.removeAllViews();
+                    String instruction = prefs.getString("instruction:" + id, job.optString("instruction", ""));
+                    JSONArray messages = detail.optJSONArray("messages");
+                    // Replay this job separately: keep history only through its user turn,
+                    // otherwise reconnecting would show durable answers plus their stream twice.
+                    JSONArray baseline = new JSONArray();
+                    int boundary = -1;
+                    if (messages != null) for (int i = 0; i < messages.length(); i++) {
+                        JSONObject message = messages.optJSONObject(i);
+                        if (message != null && "user".equals(message.optString("role"))
+                                && instruction.equals(message.optString("content"))) boundary = i;
+                    }
+                    boolean hasReplay = job.optJSONArray("events") != null && job.optJSONArray("events").length() > 0;
+                    if (messages != null) for (int i = 0; i < messages.length(); i++) {
+                        if (hasReplay && boundary >= 0 && i > boundary) break;
+                        baseline.put(messages.opt(i));
+                    }
+                    try { appendHistory(stream, new JSONObject().put("messages", baseline)); }
+                    catch (JSONException ignored) {}
+                    boolean present = false;
+                    if (messages != null) for (int i = 0; i < messages.length(); i++) {
+                        JSONObject message = messages.optJSONObject(i);
+                        if (message != null && "user".equals(message.optString("role"))
+                                && instruction.equals(message.optString("content"))) present = true;
+                    }
+                    if (!present && !instruction.isEmpty()) {
+                        try { stream.addView(messageView(new JSONObject().put("content", instruction), "user")); }
+                        catch (JSONException ignored) {}
+                    }
+                    stream.addView(interactions);
+                    stream.addView(resumeButton);
+                    stream.addView(card);
+                });
+            } catch (Exception ignored) {
+                // Stream remains available even if historical session loading fails.
+            }
+        });
+        pollJob(token, id, 0, liveBuffer, status, progress, output);
     }
 
     private void pollJob(int token, String id, long since, StringBuilder buffer,
                          TextView status, TextView progress, TextView output) {
-        if (token != pollToken || isDestroyed()) return;
+        if (token != pollToken || isDestroyed() || background) return;
         final String pollingNode = nodeId;
         runIo(() -> {
             try {
                 JSONObject job = api.job(pollingNode, id);
                 JSONObject events = api.stream(pollingNode, id, since);
+                JSONArray approvals = api.approvals(pollingNode);
+                JSONArray questions = api.questions(pollingNode);
                 JSONArray list = events.optJSONArray("events");
                 long next = events.optLong("next", since);
                 StringBuilder delta = new StringBuilder();
@@ -896,12 +1028,15 @@ public final class MainActivity extends Activity {
                 }
                 String statusText = statusLabel(job.optString("status"));
                 int percent = (int) Math.round(job.optDouble("progress", 0));
-                boolean complete = events.optBoolean("complete") || job.optString("status").matches("done|failed|cancelled");
+                boolean complete = events.optBoolean("complete") || job.optString("status").matches("done|failed|cancelled|paused");
                 String result = job.optString("result", "");
                 String errorText = job.optString("error", "");
                 String finishedSession = job.optString("session_id", "");
                 postResult(() -> {
-                    if (token != pollToken) return;
+                    if (token != pollToken || background) return;
+                    liveSince = next;
+                    renderInteractions(id, approvals, questions);
+                    resumeButton.setVisibility(job.optString("status").matches("failed|paused") ? View.VISIBLE : View.GONE);
                     status.setText(statusText);
                     progress.setText(percent + "%  ·  " + relative(job.optLong("created_at")));
                     if (delta.length() > 0) buffer.append(delta);
@@ -909,17 +1044,16 @@ public final class MainActivity extends Activity {
                     if (complete) {
                         liveRunning = false;
                         if (!finishedSession.isEmpty()) sessionId = finishedSession;
-                        if (!result.isEmpty()) {
+                        saveActive();
+                        if (!result.isEmpty() && buffer.indexOf(result) < 0) {
                             output.append("\n\n" + result);
                         }
-                        if (!errorText.isEmpty()) {
-                            TextView fail = ui.text("✗ " + errorText, 13, theme.danger, false);
-                            fail.setPadding(0, ui.dp(8), 0, 0);
-                            ((LinearLayout) output.getParent()).addView(fail);
-                        }
+                        if (!errorText.isEmpty()) output.append("\n✗ " + errorText);
                         buildComposer();
                     } else {
-                        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+                        if (interactions.getChildCount() == 0) scroll.post(() -> {
+                            if (token == pollToken && !background) scroll.fullScroll(View.FOCUS_DOWN);
+                        });
                         main.postDelayed(() -> pollJob(token, id, next, buffer, status, progress, output), 1200);
                     }
                 });
@@ -931,6 +1065,112 @@ public final class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    private void appendHistory(LinearLayout target, JSONObject detail) {
+        JSONArray messages = detail.optJSONArray("messages");
+        if (messages == null) return;
+        for (int i = 0; i < messages.length(); i++) {
+            JSONObject message = messages.optJSONObject(i);
+            if (message == null) continue;
+            View view = messageView(message, message.optString("role"));
+            if (view != null) target.addView(view);
+        }
+    }
+
+    private interface Mutation { void run() throws Exception; }
+
+    private void mutate(Mutation operation, Runnable success) {
+        final int generation = pageGeneration;
+        mutations.execute(() -> {
+            requestPage.set(generation);
+            try {
+                operation.run();
+                postResult(success);
+            } catch (Exception error) {
+                postResult(() -> { interactionSignature = ""; toast(messageOf(error)); buildComposer(); });
+            } finally { requestPage.remove(); }
+        });
+    }
+
+    private void resumeJob() {
+        if (submitting || prefs.getBoolean("submission_pending", false)) {
+            toast("请先核对正在提交的任务"); return;
+        }
+        final String id = jobId, node = nodeId;
+        resumeButton.setEnabled(false);
+        submitting = true;
+        prefs.edit().putBoolean("submission_pending", true).commit();
+        observeSubmission();
+        final Api client = new Api(api.base(), api.cookie());
+        mutate(() -> {
+            try {
+                client.resume(node, id); // Resume the same job; never submit a replacement.
+                prefs.edit().putBoolean("submission_pending", false).remove("submit_notice").commit();
+            } catch (Exception error) {
+                prefs.edit().putString("submit_notice", "继续执行结果未知，请核对原任务：" + id).commit();
+                throw error;
+            } finally { submitting = false; }
+        }, () -> openJob(id));
+    }
+
+    private void renderInteractions(String id, JSONArray approvals, JSONArray questions) {
+        String signature = approvals.toString() + questions.toString();
+        if (signature.equals(interactionSignature)) return;
+        interactionSignature = signature;
+        Ui.clear(interactions);
+        for (int i = 0; i < approvals.length(); i++) {
+            JSONObject item = approvals.optJSONObject(i);
+            if (item == null || !id.equals(item.optString("job_id"))) continue;
+            final String prompt = item.optString("id"), node = nodeId;
+            final Api client = new Api(api.base(), api.cookie());
+            LinearLayout card = ui.card();
+            card.addView(ui.body("等待授权 · " + item.optString("tool") + "\n" + item.optString("description")
+                    + "\n" + item.optString("args"), theme.text));
+            card.addView(ui.outlineButton("允许本次", v -> {
+                card.setVisibility(View.GONE);
+                mutate(() -> client.decide(node, prompt, "once"), () -> interactionSignature = "");
+            }));
+            card.addView(ui.outlineButton("拒绝", v -> {
+                card.setVisibility(View.GONE);
+                mutate(() -> client.decide(node, prompt, "deny"), () -> interactionSignature = "");
+            }));
+            interactions.addView(card);
+        }
+        for (int i = 0; i < questions.length(); i++) {
+            JSONObject item = questions.optJSONObject(i);
+            if (item == null || !id.equals(item.optString("job_id"))) continue;
+            final String prompt = item.optString("id"), node = nodeId;
+            final Api client = new Api(api.base(), api.cookie());
+            LinearLayout card = ui.card();
+            card.addView(ui.body("等待回答 · " + item.optString("question"), theme.text));
+            JSONArray choices = item.optJSONArray("options");
+            if (choices != null) card.addView(ui.note(choices.toString()));
+            EditText answer = new EditText(this);
+            answer.setTextColor(theme.text);
+            String key = "answer:" + prompt;
+            answer.setText(prefs.getString(key, ""));
+            answer.addTextChangedListener(new TextWatcher() {
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    prefs.edit().putString(key, s.toString()).apply();
+                }
+                public void afterTextChanged(Editable value) {}
+            });
+            card.addView(answer);
+            card.addView(ui.outlineButton("提交回答", v -> {
+                String text = answer.getText().toString().trim();
+                if (text.isEmpty() || text.length() > 2000) { toast("回答需为 1–2000 字"); return; }
+                card.setVisibility(View.GONE);
+                mutate(() -> client.answer(node, prompt, text), () -> {
+                    prefs.edit().remove(key).apply();
+                    interactionSignature = "";
+                });
+            }));
+            interactions.addView(card);
+        }
+        // Prompts stay above the stream instead of being scrolled out of view.
+        if (interactions.getChildCount() > 0) scroll.smoothScrollTo(0, interactions.getTop());
     }
 
     private TextView statusPill(String status) {
@@ -982,6 +1222,15 @@ public final class MainActivity extends Activity {
         input.setBackground(null);
         input.setPadding(0, ui.dp(10), 0, ui.dp(10));
         input.setMaxLines(4);
+        final String draftKey = "draft:" + nodeId + ":" + project + ":" + sessionId;
+        input.setText(prefs.getString(draftKey, ""));
+        input.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                prefs.edit().putString(draftKey, s.toString()).apply();
+            }
+            public void afterTextChanged(Editable value) {}
+        });
         box.addView(input, new LinearLayout.LayoutParams(0, -2, 1f));
 
         TextView send = ui.text("↑", 18, theme.onAccent, true);
@@ -1010,6 +1259,23 @@ public final class MainActivity extends Activity {
         projectPill.setOnClickListener(v -> chooseProject());
         options.addView(projectPill, pillParams);
         composerBar.addView(options);
+        String notice = prefs.getString("submit_notice", "");
+        if (prefs.getBoolean("submission_pending", false)) {
+            composerBar.addView(ui.note(submitting ? "正在提交，请勿重复发送。" : "上次提交结果未知。请先查看任务列表，勿重复派活。"));
+        }
+        if (!notice.isEmpty()) composerBar.addView(ui.note(notice));
+        if (prefs.getBoolean("submission_pending", false) || !notice.isEmpty()) {
+            composerBar.addView(ui.outlineButton("查看任务，核对后解锁发送", v -> {
+                if (submitting) { toast("提交仍在进行中"); return; }
+                new AlertDialog.Builder(this).setTitle("先核对原任务")
+                    .setMessage("网络错误不代表服务器未收到。请在任务列表确认，避免重复执行。草稿会保留。")
+                    .setPositiveButton("查看任务", (d, w) -> showJobs())
+                    .setNeutralButton("已核对，解锁", (d, w) -> {
+                        prefs.edit().putBoolean("submission_pending", false).remove("submit_notice").apply();
+                        buildComposer();
+                    }).setNegativeButton("取消", null).show();
+            }));
+        }
     }
 
     private void cycleMode() {
@@ -1034,26 +1300,54 @@ public final class MainActivity extends Activity {
             toast("先选择一台设备");
             return;
         }
-        draft.setText("");
+        if (submitting || prefs.getBoolean("submission_pending", false)) {
+            toast("提交结果尚未核对，请勿重复发送"); return;
+        }
+        if (screen.equals("job") && liveRunning) { toast("原任务仍在执行，请等待或继续原任务"); return; }
         hideKeyboard();
-        final String target = sessionId;
-        final String projectId = project;
+        final String target = sessionId, projectId = project, node = nodeId, name = nodeName;
         final String requestedMode = mode;
+        final String draftKey = "draft:" + node + ":" + projectId + ":" + target;
+        final Api client = new Api(api.base(), api.cookie());
+        final int generation = pageGeneration;
+        saveActive();
+        // Persist the uncertainty marker BEFORE making a request, including process death.
+        if (!prefs.edit().putBoolean("submission_pending", true).remove("submit_notice").commit()) {
+            toast("无法保存提交状态，请重试"); return;
+        }
+        submitting = true;
         header("派活中…", nodeName, null);
-        runIo(() -> {
+        observeSubmission();
+        mutations.execute(() -> {
+            requestPage.set(generation);
             try {
-                JSONObject reply = api.submit(nodeId, instruction, projectId, requestedMode, target);
+                JSONObject reply = client.submit(node, instruction, projectId, requestedMode, target);
                 String id = reply.optString("job_id");
                 String sid = reply.optString("session_id", target);
+                if (id.isEmpty()) throw new IllegalStateException("服务端未返回任务 ID，请核对任务列表");
+                prefs.edit().putString("active_node", node).putString("active_name", name)
+                        .putString("active_project", projectId).putString("active_session", sid)
+                        .putString("active_job", id).putString("instruction:" + id, instruction).putBoolean("submission_pending", false)
+                        .remove("submit_notice").commit();
+                if (prefs.getString(draftKey, "").trim().equals(instruction)) prefs.edit().remove(draftKey).commit();
                 postResult(() -> {
                     sessionId = sid;
+                    // Keep the submitted instruction alongside existing history and streaming output.
+                    try {
+                        JSONArray messages = target.equals(historySession) ? history.optJSONArray("messages") : null;
+                        if (messages == null) messages = new JSONArray();
+                        messages.put(new JSONObject().put("role", "user").put("content", instruction));
+                        history = new JSONObject().put("messages", messages);
+                        historySession = sid;
+                    } catch (JSONException ignored) {}
                     openJob(id);
                 });
             } catch (Exception error) {
-                postResult(() -> {
-                    toast(messageOf(error));
-                    buildComposer();
-                });
+                prefs.edit().putString("submit_notice", "提交结果未知：" + messageOf(error) + "。请先核对任务列表。").commit();
+                postResult(() -> { toast(messageOf(error)); buildComposer(); });
+            } finally {
+                submitting = false;
+                requestPage.remove();
             }
         });
     }

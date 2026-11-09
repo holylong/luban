@@ -3,6 +3,7 @@ import { AgentRunner, initialMessages } from "../agent.js";
 import type { AskUser } from "../question.js";
 import { SessionStore } from "../session-store.js";
 import { sharedHistory } from "../session-history.js";
+import { liveSessions } from "../live-session.js";
 import { summarizeToolArgs } from "../tools.js";
 import type { AgentEvent, LubanConfig, SessionRecord, ToolDefinition } from "../types.js";
 import type { JobStreamEvent, MeshRuntime } from "./runtime.js";
@@ -84,7 +85,7 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
     let session = job.session_id ? await store.load(job.session_id, settings.project, settings.workspace) : undefined;
     if ((job.resume_count || 0) > 0 && !session) throw new Error("Cannot resume: saved task history is missing; inspect the workspace before starting a new task.");
     if (job.continues_session && job.session_id && !session) throw new Error("Cannot continue: the saved conversation is missing; open it from the session list first.");
-    if (job.continues_session && session) {
+    if (job.continues_session && session && !job.resume_count) {
       // A continuation job carries the next user turn; the resumed job (same id)
       // already has its instruction in the transcript and must not duplicate it.
       session.messages.push({ role: "user", content: job.instruction });
@@ -116,9 +117,12 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
       ? { ...settings, permissionMode: "ask", permissions: { ...(config.permissions ?? { allow: [], deny: [] }), allow: [] } }
       : { ...settings, permissionMode: interactive && requested === "agent" ? "ask" : settings.permissionMode };
     const runner = createRunner(runnerConfig);
+    try { liveSessions.start(config.home, session, job.id); }
+    catch (error) { runner.close(); throw error; }
     try {
       await store.save(session);
       const result = await runner.run(session.messages, "agent", signal, event => {
+        if (event.type === "model-call" || event.type === "input") liveSessions.checkpoint(config.home, session);
         // Progress labels belong to the live indicator, not the bounded job log
         // or the event stream's history: once per step they displaced the
         // tool/error lines the log exists to keep.
@@ -127,7 +131,10 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
         if (event.type === "tool-end") onLog(event.ok ? "tool" : "error", `${event.name} ${event.ok ? "done" : "failed"}`);
         if (event.type === "error") onLog("error", event.text);
         const structured = toJobStreamEvent(event);
-        if (structured) onEvent?.(structured);
+        if (structured) {
+          liveSessions.append(config.home, session.project, session.id, structured);
+          onEvent?.(structured);
+        }
       }, async (tool, args) => {
         if (!options.approve) return "always";
         return options.approve(tool, args, job.id);
@@ -137,6 +144,9 @@ export function configureRemoteJobs(mesh: MeshRuntime, config: LubanConfig,
       await store.save(session);
       nameSession(session, settings, store, createRunner, onLog);
       return { ok: result.ok, text: result.text, stopReason: result.stopReason };
-    } finally { runner.close(); }
+    } finally {
+      try { await store.save(session); }
+      finally { liveSessions.finish(config.home, session); runner.close(); }
+    }
   });
 }

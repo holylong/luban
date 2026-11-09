@@ -7,6 +7,7 @@ export interface LiveSessionSnapshot {
   running: boolean;
   events: JobStreamRecord[];
   baseMessageCount: number;
+  jobId?: string;
 }
 
 interface Entry {
@@ -24,18 +25,27 @@ const MAX_INACTIVE_SESSIONS = 64;
 /** Process-local bridge. Every input/output is cloned; homes are isolated. */
 export class LiveSessionRegistry {
   private readonly snapshots = new Map<string, Entry>();
+  private readonly listeners = new Set<(home: string, project: string, id: string) => void>();
+  subscribe(listener: (home: string, project: string, id: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+  private notify(home: string, session: Pick<SessionRecord, "project" | "id">): void {
+    for (const listener of this.listeners) listener(resolve(home), session.project, session.id);
+  }
   private key(home: string, project: string, id: string): string {
     return JSON.stringify([resolve(home), project, id]);
   }
 
-  private replace(home: string, session: SessionRecord, running: boolean): void {
+  private replace(home: string, session: SessionRecord, running: boolean, jobId?: string): void {
     const key = this.key(home, session.project, session.id);
     this.snapshots.delete(key);
     this.snapshots.set(key, {
-      snapshot: { session: structuredClone(session), running, events: [], baseMessageCount: session.messages.length },
+      snapshot: { session: structuredClone(session), running, events: [], baseMessageCount: session.messages.length, ...(jobId ? { jobId } : {}) },
       bytes: 0, sizes: [], sequence: 0,
     });
     this.prune();
+    this.notify(home, session);
   }
 
   /** Bound retained inactive transcripts; never evict an active run. */
@@ -50,6 +60,7 @@ export class LiveSessionRegistry {
   /** Refresh metadata, preserving the replay baseline while running. */
   publish(home: string, session: SessionRecord): void {
     const previous = this.snapshots.get(this.key(home, session.project, session.id));
+    if (previous?.snapshot.jobId) return;
     if (!previous?.snapshot.running) { this.replace(home, session, false); return; }
     // Do not clone the full transcript just to throw it away during a run.
     const messages = previous.snapshot.session.messages;
@@ -57,8 +68,11 @@ export class LiveSessionRegistry {
     previous.snapshot.session.messages = messages;
   }
 
-  start(home: string, session: SessionRecord): void {
-    this.replace(home, session, true);
+  start(home: string, session: SessionRecord, jobId?: string): void {
+    if (this.snapshots.get(this.key(home, session.project, session.id))?.snapshot.running) {
+      throw new Error("Session is already running");
+    }
+    this.replace(home, session, true, jobId);
   }
 
   /**
@@ -74,6 +88,7 @@ export class LiveSessionRegistry {
     entry.snapshot.events = [];
     entry.bytes = 0;
     entry.sizes = [];
+    this.notify(home, session);
   }
 
   /** Bounded replay; timestamps use epoch seconds, sequences count accepted events. */
@@ -106,10 +121,12 @@ export class LiveSessionRegistry {
       events.shift();
       entry.bytes -= entry.sizes.shift()!;
     }
+    this.notify(home, { project, id });
   }
 
   finish(home: string, session: SessionRecord): void {
-    this.replace(home, session, false);
+    const jobId = this.snapshots.get(this.key(home, session.project, session.id))?.snapshot.jobId;
+    this.replace(home, session, false, jobId);
   }
 
   get(home: string, project: string, id: string): LiveSessionSnapshot | undefined {

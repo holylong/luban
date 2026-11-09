@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { Box, Text, useApp, useInput, useStdin, useStdout, measureElement, type DOMElement } from "ink";
 import { globFiles } from "../core/glob.js";
 import { VERSION } from "../version.js";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { AgentInbox } from "../core/inbox.js";
@@ -23,7 +23,7 @@ import { jobPhase, jobPlan } from "../core/mesh/job-stream-view.js";
 import { chatBlocks, jobBlocks } from "./mesh-transcript.js";
 import { SessionStore } from "../core/session-store.js";
 import { sharedHistory } from "../core/session-history.js";
-import { liveSessions } from "../core/live-session.js";
+import { liveSessions, type LiveSessionSnapshot } from "../core/live-session.js";
 import { toJobStreamEvent } from "../core/mesh/agent-runner.js";
 import { exportWorkReport, type ReportPeriod } from "../core/work-report.js";
 import { summarizeToolArgs } from "../core/tools.js";
@@ -1146,8 +1146,29 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // mid-run keeps accepting input for the task that is actually executing.
   const inboxRef = useRef<AgentInbox | null>(null);
 
-  // Replay checkpoints are explicit; unrelated draft/timer renders must not
-  // clone the session transcript. Saves publish lifecycle/metadata changes too.
+  const [remoteSession, setRemoteSession] = useState<LiveSessionSnapshot | null>(null);
+  useEffect(() => {
+    const sync = () => {
+      const current = sessionRef.current;
+      const snapshot = liveSessions.get(config.home, current.project, current.id);
+      if (!snapshot?.jobId || runningRef.current) { setRemoteSession(null); return; }
+      titleAbortRef.current?.abort(new Error("remote session update"));
+      sessionRef.current = snapshot.session;
+      setRemoteSession(snapshot);
+      setMessages(snapshot.session.messages);
+      setExecutionLog(toolHistory(snapshot.session.messages, snapshot.session.edits));
+      setPendingInputs([...(snapshot.session.pendingInputs ?? [])]);
+      setRunOutcome(null);
+      setActivity([]);
+    };
+    sync();
+    return liveSessions.subscribe((home, project, id) => {
+      const current = sessionRef.current;
+      if (home === resolve(config.home) && project === current.project && id === current.id) sync();
+    });
+  }, [config.home, sessionRef.current.id]);
+
+  // A remote owner publishes the authoritative history, including after finish.
   useEffect(() => {
     liveSessions.publish(config.home, sessionRef.current);
   }, [config.home, messages, mode]);
@@ -1182,6 +1203,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
 
   const save = async (nextMessages = sessionRef.current.messages) => {
     const record = sessionRef.current;
+    if (!runningRef.current && liveSessions.get(config.home, record.project, record.id)?.running) return;
     record.messages = nextMessages;
     record.model = runnerRef.current.config.model.id;
     liveSessions.publish(config.home, record);
@@ -1783,6 +1805,11 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     // and silently did nothing. Canonicalize the command token once, here.
     const value = canonicalCommand(resolveCompletion(raw.trim(), commandIndex));
     if (!value) return;
+    const remoteBusy = () => {
+      const record = sessionRef.current;
+      return !runningRef.current && liveSessions.get(config.home, record.project, record.id)?.running;
+    };
+    if (remoteBusy()) { setNotice("当前会话正在远程执行；请等待完成后提交。"); return; }
     if (!running) {
       const previous = sessionRef.current;
       try {
@@ -1809,6 +1836,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         return;
       }
     }
+    if (remoteBusy()) { setNotice("当前会话正在远程执行；请等待完成后提交。"); return; }
     const rememberInput = () => {
       const record = sessionRef.current;
       const history = pushInputHistory(historyFromSession(record), raw);
@@ -2825,6 +2853,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     [showMesh, meshChatBlocks, remoteBlocks, localHistoryBlocks]);
   const tailBlocks = useMemo(() => {
     if (showMesh) return [];
+    if (remoteSession?.running && remoteSession.session.id === sessionRef.current.id) {
+      return jobBlocks({ id: remoteSession.jobId!, source: config.mesh.nodeName, target: config.mesh.nodeName, status: "working", instruction: "" }, remoteSession.events, { expanded: showDetails, width: streamTextWidth, localNode: config.mesh.nodeName }).slice(1);
+    }
     const blocks: TranscriptBlock[] = [];
     if (pendingInputs.length) {
       for (const item of pendingInputs) {
@@ -2837,7 +2868,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     if (draft) blocks.push({ id: "streaming", kind: "assistant", text: draft, lines: estimateLines(draft, streamTextWidth - 4) + 1 });
     if (!running && runOutcome) blocks.push(outcomeNote(runOutcome));
     return blocks;
-  }, [showMesh, streamTextWidth, pendingInputs, running, draft, runOutcome]);
+  }, [showMesh, streamTextWidth, pendingInputs, running, draft, runOutcome, remoteSession, showDetails, config.mesh.nodeName]);
   // The viewport is the pane between the app header and the composer; the
   // scrollbar and the wheel both work in this one line space.
   const scrollTrackHeight = Math.max(1, transcriptSize.height || rows - 12);

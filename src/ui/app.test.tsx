@@ -9,8 +9,53 @@ import { expect, it, vi } from "vitest";
 import { loadConfig } from "../core/config.js";
 import { AgentRunner } from "../core/agent.js";
 import { SessionStore } from "../core/session-store.js";
+import { liveSessions } from "../core/live-session.js";
 import { osc52CopySequence } from "./clipboard.js";
 import { App } from "./app.js";
+
+it("follows the selected remote session without replay duplicates or local submission", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-remote-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const config = { ...loadConfig({ workspace }), home };
+  const store = new SessionStore(home);
+  const session = store.create(config.project, workspace, "agent", config.model.id, [{ role: "user", content: "remote original" }]);
+  await store.save(session);
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 120, rows: 40, isTTY: true });
+  let frame = "";
+  stdout.on("data", data => { frame = stripVTControlCharacters(String(data)); });
+  const run = vi.spyOn(AgentRunner.prototype, "run");
+  const app = render(<App config={config} resume={session.id} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: true, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame).toContain("remote original");
+    liveSessions.start(home, session, "remote-job");
+    liveSessions.append(home, session.project, session.id, { kind: "delta", text: "remote live answer" });
+    await expect.poll(() => frame).toContain("remote live answer");
+    stdin.write("should not run");
+    await expect.poll(() => frame).toContain("should not run");
+    stdin.write("\r");
+    await expect.poll(() => frame).toContain("当前会话正在远程执行");
+    expect(run).not.toHaveBeenCalled();
+    session.messages.push({ role: "assistant", content: "remote live answer" });
+    liveSessions.checkpoint(home, session);
+    liveSessions.append(home, session.project, session.id, { kind: "delta", text: "next remote answer" });
+    await expect.poll(() => frame).toContain("next remote answer");
+    expect(frame.split("remote live answer")).toHaveLength(2);
+    session.messages.push({ role: "assistant", content: "next remote answer" });
+    await store.save(session);
+    liveSessions.finish(home, session);
+    await expect.poll(() => frame).toContain("next remote answer");
+    expect(frame.split("next remote answer")).toHaveLength(2);
+    expect(liveSessions.get(home, session.project, session.id)?.session.messages).toEqual(session.messages);
+  } finally {
+    app.unmount(); app.cleanup(); run.mockRestore();
+    liveSessions.remove(home, session.project, session.id);
+  }
+}, 10000);
 
 it("keeps the composer visible when a terminal reconnects at a smaller size", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-resize-ui-"));

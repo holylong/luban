@@ -86,6 +86,21 @@ describe("MeshRuntime", () => {
     }
   });
 
+  it("resumes failed jobs under the same id and admits only one concurrent retry", async () => {
+    const runtime = new MeshRuntime(config(await temporary("failed-resume"), "local"));
+    runtime.setJobRunner(async () => ({ ok: true, text: "recovered" }));
+    const job = await runtime.store.create({ source: "local", target: "local", instruction: "original", status: "failed", session_id: "saved-history" });
+    await runtime.store.log(job.id, "error", "original failure");
+    const attempts = await Promise.allSettled([runtime.resumeLocalJob(job.id), runtime.resumeLocalJob(job.id)]);
+    expect(attempts.filter(attempt => attempt.status === "fulfilled")).toHaveLength(1);
+    await expect.poll(async () => (await runtime.store.get(job.id))?.status).toBe("done");
+    const final = await runtime.store.get(job.id);
+    expect(final).toMatchObject({ id: job.id, instruction: "original", session_id: "saved-history", resume_count: 1 });
+    expect(final?.logs.some(log => log.msg === "original failure")).toBe(true);
+    await expect(runtime.resumeLocalJob(job.id)).rejects.toThrow("paused or failed");
+    await runtime.stop();
+  });
+
   it("returns paused remote jobs promptly with their summary instead of failure", async () => {
     const alpha = new MeshRuntime(config(await temporary("pause-a"), "alpha"));
     const beta = new MeshRuntime(config(await temporary("pause-b"), "beta"));
