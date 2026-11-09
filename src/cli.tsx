@@ -36,6 +36,7 @@ import { defaultAccountsPath } from "./web/accounts.js";
 import { instanceDeviceId } from "./web/device-id.js";
 import { readDeviceStatus } from "./web/device-status.js";
 import { loginRelayAccount, saveRelayDeviceToken } from "./web/relay-login.js";
+import { readEnvFileValue, relayLaunchSettings } from "./web/relay-launch.js";
 import { installProcessGuard } from "./core/process-guard.js";
 import { generateTlsMaterial, readTlsMaterial } from "./web/tls.js";
 import { sendVerificationEmail, smtpFromEnv } from "./web/mailer.js";
@@ -73,6 +74,7 @@ interface DaemonOptions {
   relayToken?: string;
   relayCa?: string;
   relayDeviceToken?: string;
+  remote?: boolean;
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -114,17 +116,6 @@ function headlessEvent(event: AgentEvent): void {
 function oneLine(value: string, limit = 200): string {
   const flat = value.trim().replaceAll(/\s+/gu, " ");
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
-}
-
-function readEnvFileValue(path: string, key: string): string {
-  if (!existsSync(path)) return "";
-  const prefix = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=(.*)$`, "u");
-  for (const line of readFileSync(path, "utf8").split(/\r?\n/u)) {
-    const match = line.match(prefix);
-    if (!match) continue;
-    return match[1]!.trim().replace(/^(['"])(.*)\1$/u, "$2");
-  }
-  return "";
 }
 
 /**
@@ -225,6 +216,7 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     .option("--relay-token <token>", "relay node token (or LUBAN_RELAY_NODE_TOKEN)")
     .option("--relay-device-token <token>", "account device-enrollment token (or LUBAN_RELAY_DEVICE_TOKEN)")
     .option("--relay-ca <path>", "PEM CA to trust when the relay URL is https with a self-signed certificate")
+    .option("--remote", "use the remote relay settings from ~/.luban/config.json")
     .showHelpAfterError();
   program.parse(argv, { from: "user" });
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -321,44 +313,58 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
       if (web.requiresToken) {
         process.stdout.write(`手机/浏览器控制台 ${url}m/?token=${encodeURIComponent(token!)}\n`);
       }
-      if (options.relay) {
-        const relayUrl = normalizeRelayUrl(options.relay);
-        const relayToken = options.relayToken?.trim() || process.env.LUBAN_RELAY_NODE_TOKEN?.trim();
-        const relayDeviceToken = options.relayDeviceToken?.trim() || process.env.LUBAN_RELAY_DEVICE_TOKEN?.trim();
-        if (!relayToken && !relayDeviceToken) {
-          process.stderr.write("--relay requires --relay-token or --relay-device-token: the relay prints its node token, or generate a device token in the phone settings\n");
-          return 2;
-        }
-        // Node's TLS `ca` option wants the PEM body, not a path: read the file
-        // the operator pointed at, and fail loudly if it is not there rather
-        // than fall back to the system store and reject the self-signed relay.
-        let relayCa: string | undefined;
-        if (options.relayCa) {
-          if (!existsSync(options.relayCa)) {
-            process.stderr.write(`--relay-ca file does not exist: ${options.relayCa}\n`);
-            return 2;
+      const relay = relayLaunchSettings(config, {
+        relay: options.relay,
+        relayToken: options.relayToken,
+        relayDeviceToken: options.relayDeviceToken,
+        relayCa: options.relayCa,
+        remote: options.remote,
+      });
+      if (relay) {
+        const explicit = Boolean(options.relay);
+        if (!relay.relayUrl) {
+          process.stderr.write("手机远控未启动：remote.relay_url 为空。\n");
+          if (explicit) return 2;
+        } else if (!relay.nodeToken && !relay.deviceToken) {
+          process.stderr.write(explicit
+            ? "--relay requires --relay-token or --relay-device-token: the relay prints its node token, or generate a device token in the phone settings\n"
+            : `手机远控未启动：令牌文件 ${config.remote.nodeTokenFile} 中缺少 ${config.remote.nodeTokenEnv} 或 ${config.remote.deviceTokenEnv}。\n`);
+          if (explicit) return 2;
+        } else {
+          // Node's TLS `ca` option wants the PEM body, not a path: read the file
+          // the operator pointed at, and fail loudly if it is not there rather
+          // than fall back to the system store and reject the self-signed relay.
+          let relayCa: string | undefined;
+          if (relay.relayCa) {
+            if (!existsSync(relay.relayCa)) {
+              process.stderr.write(`relay CA file does not exist: ${relay.relayCa}\n`);
+              if (explicit) return 2;
+            } else {
+              relayCa = readFileSync(relay.relayCa, "utf8");
+            }
           }
-          relayCa = readFileSync(options.relayCa, "utf8");
+          if (!relay.relayCa || relayCa) {
+            // The tunnel proxies to the loopback port the server actually bound,
+            // which may differ from --port when 0 was requested.
+            tunnel = new TunnelClient({
+              relayUrl: normalizeRelayUrl(relay.relayUrl),
+              nodeToken: relay.nodeToken,
+              ...(relay.deviceToken ? { deviceToken: relay.deviceToken } : {}),
+              deviceId: instanceDeviceId(config.home, config.workspace),
+              status: () => readDeviceStatus(config, mesh),
+              localPort: web.port,
+              localHost: "127.0.0.1",
+              localToken: token,
+              name: relayNodeName(config.mesh.nodeName, config.workspace),
+              version: VERSION,
+              workspace: config.workspace,
+              projects: mesh.projectMap(),
+              relayCa,
+              log: (message) => process.stderr.write(`relay: ${message}\n`),
+            });
+            await tunnel.start();
+          }
         }
-        // The tunnel proxies to the loopback port the server actually bound,
-        // which may differ from --port when 0 was requested.
-        tunnel = new TunnelClient({
-          relayUrl,
-          nodeToken: relayToken || "",
-          ...(relayDeviceToken ? { deviceToken: relayDeviceToken } : {}),
-          deviceId: instanceDeviceId(config.home, config.workspace),
-          status: () => readDeviceStatus(config, mesh),
-          localPort: web.port,
-          localHost: "127.0.0.1",
-          localToken: token,
-          name: relayNodeName(config.mesh.nodeName, config.workspace),
-          version: VERSION,
-          workspace: config.workspace,
-          projects: mesh.projectMap(),
-          relayCa,
-          log: (message) => process.stderr.write(`relay: ${message}\n`),
-        });
-        await tunnel.start();
       }
       if (exposed) {
         process.stderr.write("warning: Web API is exposed beyond localhost; every request needs the access token\n");

@@ -224,6 +224,8 @@ Linux 安装包按用途命名，选对应架构即可：
 
 双击 `.deb` 安装，或运行 `sudo apt install ./release/luban-cli_<版本>_<架构>.deb` / `sudo apt install ./release/luban-desktop_<版本>_<架构>.deb`。两个安装包可以同时安装。桌面版左侧是项目文件树，中间是带行号和语法高亮的只读代码预览，右侧是 Agent 对话与执行记录。首次启动默认打开家目录；菜单「文件 → 打开项目文件夹」（`Ctrl+O`）可选择项目，之后会记住上次项目。也可以执行 `luban-desktop /path/to/project`。
 
+桌面版启动内置 Web 后端时会自动带上 `--remote`，按 `~/.luban/config.json` 的 `remote` 配置连接中继。因此只要 `remote.enabled` 为 `true`、`remote.relay_url` 和令牌文件可用，手机的设备列表就能看到桌面版，不需要额外启动 `luban web`。桌面版仍以 `--no-mesh` 运行，不会占用或广播局域网 Mesh 端口。
+
 维护者在 Linux 上运行 `npm ci && npm run package:linux`，会在 `release/` 同时生成两种安装包；也可以单独运行 `npm run package:linux:cli` 或 `npm run package:linux:desktop`。源码开发时可先 `npm run build`，再用 `npm run desktop -- /path/to/project` 启动桌面版。桌面图标使用与 Android App 相同的 L 形标识，Web/PWA 图标也保持一致。
 
 ### Windows 便携包（x64）

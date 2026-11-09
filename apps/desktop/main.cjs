@@ -228,7 +228,9 @@ function stopBot() {
 function startBackend(workspace) {
   return new Promise((resolveStart, rejectStart) => {
     const token = randomBytes(32).toString("base64url");
-    const child = spawn(node, [cli, "web", workspace, "--host", "127.0.0.1", "--port", "0", "--no-mesh"], {
+    // The window talks to a loopback-only backend. --remote dials the relay
+    // configured in ~/.luban/config.json so the phone's device list can see it.
+    const child = spawn(node, [cli, "web", workspace, "--host", "127.0.0.1", "--port", "0", "--no-mesh", "--remote"], {
       env: { ...process.env, LUBAN_WEB_TOKEN: token }, stdio: ["ignore", "pipe", "pipe"],
     });
     backend = child;
