@@ -91,6 +91,54 @@ describe("unattended jobs", () => {
 });
 
 describe("job stream and approvals", () => {
+  it("keeps an accepted job running after phone disconnect and replays missed progress", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-disconnect-"));
+    const config = testConfig(root);
+    await mkdir(config.workspace, { recursive: true });
+    const mesh = new MeshRuntime(config);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let signal!: AbortSignal;
+    let runs = 0;
+    mesh.setJobRunner(async (_job, jobSignal, _log, emit) => {
+      runs++;
+      signal = jobSignal;
+      emit?.({ kind: "delta", text: "before disconnect" });
+      await gate;
+      emit?.({ kind: "delta", text: "while phone offline" });
+      return { ok: true, text: "finished offline" };
+    });
+    const web = new LubanWebServer(config, mesh, { port: 0 });
+    await mesh.start();
+    const base = await web.start();
+    const phone = new AbortController();
+    try {
+      const stream = await fetch(`${base}api/events`, { signal: phone.signal });
+      expect(stream.ok).toBe(true);
+      const submitted = await jsonRequest(`${base}api/jobs`, {
+        method: "POST", body: JSON.stringify({ instruction: "continue without phone" }),
+      });
+      const id = submitted.body.job_id;
+      await waitForJob(base, id, "working");
+      await expect.poll(() => signal).toBeDefined();
+      phone.abort();
+      expect(signal.aborted).toBe(false);
+      release();
+      expect((await waitForJob(base, id, "done")).result).toBe("finished offline");
+      const replay = await jsonRequest(`${base}api/jobs/${id}/stream?since=0`);
+      expect(replay.body.complete).toBe(true);
+      expect(replay.body.events.map((record: any) => record.event.text)).toEqual(expect.arrayContaining(["before disconnect", "while phone offline"]));
+      const cursor = replay.body.events[0].seq;
+      const missed = await jsonRequest(`${base}api/jobs/${id}/stream?since=${cursor}`);
+      expect(missed.body.events.every((record: any) => record.seq > cursor)).toBe(true);
+      expect(runs).toBe(1);
+      expect(signal.aborted).toBe(false);
+    } finally {
+      phone.abort(); release();
+      await web.stop(); await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  });
   it("exposes pending model questions and delivers a browser answer", async () => {
     const root = await mkdtemp(join(tmpdir(), "luban-web-question-"));
     const config = testConfig(root);

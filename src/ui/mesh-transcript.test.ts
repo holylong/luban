@@ -76,6 +76,11 @@ describe("remote job blocks", () => {
     expect(outbound[0]!.text).toContain("📤 已交给 beta");
   });
 
+  it("names phone and web tasks submitted through this node", () => {
+    const local = jobBlocks(job({ source: "alpha", target: "alpha", instruction: "fix the build" }), [], options);
+    expect(local[0]!.text).toBe("📱 手机/网页任务 fix the build · job-1");
+  });
+
   it("reports the outcome and the model round trips", () => {
     const done = jobBlocks(job({ status: "done", result: "all good" }), records([
       { kind: "model-call", index: 1 },

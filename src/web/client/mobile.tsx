@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setNodeScope } from "./api";
-import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, SessionDetail, SessionSummary, ToolRun } from "./types";
+import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, ReasoningEffort, SessionDetail, SessionSummary, ToolRun } from "./types";
 import { MobileSessionHistory } from "./mobile-session";
 import { mobileProject, mobileProjects } from "./mobile-project";
 import {
@@ -69,6 +69,8 @@ interface Toast { id: number; text: string; error?: boolean }
 const MODE_LABELS: Record<TaskMode, string> = { edits: "可改文件", agent: "可执行", read: "只读" };
 const JOB_KEY = "luban.mobile.job";
 const NODE_KEY = "luban.mobile.node";
+const DRAFT_KEY = "luban.mobile.draft";
+const PENDING_KEY = "luban.mobile.submission-pending";
 
 function initialNodeScope(): string | undefined {
   const linkedNode = new URLSearchParams(window.location.search).get("node") || undefined;
@@ -299,7 +301,11 @@ export function MobileApp(): React.ReactElement {
   const [project, setProject] = useState("");
   const [mode, setMode] = useState<TaskMode>("edits");
   const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [modelBusy, setModelBusy] = useState(false);
+  const [draft, setDraft] = useState(() => localStorage.getItem(DRAFT_KEY) || "");
+  const [submissionPending, setSubmissionPending] = useState(() => Boolean(localStorage.getItem(PENDING_KEY)));
+  const submittingRef = useRef(false);
+  useEffect(() => { localStorage.setItem(DRAFT_KEY, draft); }, [draft]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [openTools, setOpenTools] = useState<Record<string, boolean>>({});
   const [clock, setClock] = useState(() => Date.now() / 1000);
@@ -323,7 +329,6 @@ export function MobileApp(): React.ReactElement {
     saveAppearance(mode);
     setLook(appearanceOf(mode, false, systemDark()));
   }, [look.locked]);
-
   // Ask the relay whether it has accounts. A plain `luban web` answers 404
   // here and keeps the legacy token/LAN behaviour; a relay answers 401 until
   // the phone signs in.
@@ -403,6 +408,21 @@ export function MobileApp(): React.ReactElement {
     }
   }, []);
 
+  // Model choice lives on the computer: switching here applies to the next
+  // task, and every refresh replaces the catalog so a model added on the
+  // desktop appears without reinstalling the app.
+  const switchModel = useCallback(async (id: string, effort?: ReasoningEffort | null) => {
+    if (modelBusy) return;
+    setModelBusy(true);
+    try {
+      await api.setModel(id, effort);
+      await refresh();
+      notify(`模型已切换为 ${id}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), true);
+    } finally { setModelBusy(false); }
+  }, [modelBusy, refresh, notify]);
+
   const refreshSessions = useCallback(async () => {
     if (!ready || !node) return;
     const requestNode = localStorage.getItem(NODE_KEY);
@@ -478,7 +498,7 @@ export function MobileApp(): React.ReactElement {
       await refreshRelayNodes();
       await refresh();
       const id = selectedRef.current;
-      if (id) await loadJob(id).catch(() => { localStorage.removeItem(JOB_KEY); setSelectedId(undefined); });
+      if (id) await loadJob(id).catch(() => undefined); // Offline is not a deleted task.
       await refreshApprovals();
     })();
   }, [ready, refreshRelayNodes, refresh, loadJob, refreshApprovals]);
@@ -499,13 +519,25 @@ export function MobileApp(): React.ReactElement {
   // a phone that was asleep, changed networks, or lost a frame.
   useEffect(() => {
     if (!ready) return;
-    const timer = setInterval(() => {
+    const sync = (): void => {
       void refresh();
       void refreshApprovals();
+      const id = selectedRef.current;
+      if (id) void loadJob(id).catch(() => undefined);
       if (relayMode) void refreshRelayNodes();
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [ready, refresh, refreshApprovals, refreshRelayNodes, relayMode]);
+    };
+    const visible = (): void => { if (!document.hidden) sync(); };
+    const timer = setInterval(sync, 4000);
+    window.addEventListener("online", sync);
+    window.addEventListener("pageshow", sync);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("online", sync);
+      window.removeEventListener("pageshow", sync);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [ready, refresh, refreshApprovals, refreshRelayNodes, relayMode, loadJob]);
 
   // Session detail is not a mesh job. Poll it independently, including after
   // sleep/reconnect; cancel stale responses when switching sessions or nodes.
@@ -541,9 +573,7 @@ export function MobileApp(): React.ReactElement {
       source.onopen = () => {
         setLive(true);
         const id = selectedRef.current;
-        if (id) void api.jobStream(id, events.at(-1)?.seq ?? 0).then(reply => {
-          if (!stopped && selectedRef.current === id) setEvents(current => mergeEvents(current, reply.events));
-        }).catch(() => undefined);
+        if (!stopped && id) void loadJob(id).catch(() => undefined);
       };
       source.onerror = () => setLive(false);
       source.addEventListener("job-event", message => {
@@ -578,7 +608,7 @@ export function MobileApp(): React.ReactElement {
     };
     connect();
     return () => { stopped = true; source?.close(); setLive(false); };
-    // Reconnecting depends only on the selected node; `events` is read at connect.
+    // Reconnection reloads authoritative detail, never a captured event cursor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, scope, loadJob, notify]);
 
@@ -631,18 +661,29 @@ export function MobileApp(): React.ReactElement {
   }, [loadJob, notify]);
 
   const submit = useCallback(async () => {
+    if (submittingRef.current || localStorage.getItem(PENDING_KEY)) {
+      notify("上次提交结果未知，请先核对任务列表，勿重复派活", true);
+      return;
+    }
     const instruction = draft.trim();
     if (!instruction) return;
     if (continueSession && (!sessionDetail || sessionError || sessionDetail.live?.running)) {
       notify("请等待会话同步和电脑当前执行结束后再接续", true);
       return;
     }
+    localStorage.setItem(PENDING_KEY, JSON.stringify({ instruction, node: scope, project }));
+    submittingRef.current = true;
+    setSubmissionPending(true);
     setBusy(true);
     try {
       const reply = await api.submit({
         instruction, project_id: project, mode, interaction: "on",
         ...(continueSession ? { session_id: continueSession.id } : {}),
       });
+      localStorage.setItem(JOB_KEY, reply.job_id);
+      localStorage.removeItem(PENDING_KEY);
+      localStorage.removeItem(DRAFT_KEY);
+      setSubmissionPending(false);
       setDraft("");
       setContinueSession(undefined);
       await refresh();
@@ -650,8 +691,8 @@ export function MobileApp(): React.ReactElement {
       if (!reply.interactive) notify("服务器未启用交互审批：本任务按自动放行执行");
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), true);
-    } finally { setBusy(false); }
-  }, [draft, project, mode, continueSession, sessionDetail, sessionError, refresh, selectJob, notify]);
+    } finally { submittingRef.current = false; setBusy(false); }
+  }, [draft, project, mode, scope, continueSession, sessionDetail, sessionError, refresh, selectJob, notify]);
 
   const cancel = useCallback(async () => {
     if (!selectedId) return;
@@ -735,6 +776,9 @@ export function MobileApp(): React.ReactElement {
   const nodeLabel = node ? `${node.name}${node.model ? ` · ${node.model}` : ""}` : connectionError ? "未连接" : "连接中";
   const activeJobs = jobs.filter(item => ACTIVE_STATUS.has(item.status)).length;
   const account = auth.state === "account" ? auth.account : undefined;
+  const modelCatalog = node?.models ?? [];
+  const activeModel = modelCatalog.find(item => item.id === node?.model_id);
+  const effortChoices: Array<ReasoningEffort | null> = [null, ...(activeModel?.reasoning_efforts ?? [])];
 
   if (auth.state === "loading") {
     return <div className="m-app"><div className="m-empty"><h2>正在连接…</h2><p>检查这台手机与中继的登录状态。</p></div></div>;
@@ -1016,6 +1060,40 @@ export function MobileApp(): React.ReactElement {
                 <dt>实时流</dt><dd>{live ? "已连接" : "断开"}</dd>
               </dl>
             </div>
+            <div className="m-card">
+              <h3>模型</h3>
+              <p className="m-note">切换的是电脑端下一任务使用的模型；电脑端新增或切换模型后，这里会自动同步。</p>
+              {modelCatalog.length === 0
+                ? <p className="m-note" style={{ marginBottom: 0 }}>电脑端还没有报告可用模型，请确认 luban 正在运行。</p>
+                : <div className="m-model-list" role="listbox" aria-label="模型">
+                  {modelCatalog.map(item => (
+                    <button key={item.id} type="button" role="option" aria-selected={item.id === node?.model_id}
+                      className={`m-model ${item.id === node?.model_id ? "active" : ""}`}
+                      disabled={modelBusy || item.id === node?.model_id}
+                      onClick={() => void switchModel(item.id)}>
+                      <span className="m-model-main">
+                        <strong>{item.name}</strong>
+                        <span>{item.provider}{item.reasoning_effort ? ` · ${item.reasoning_effort}` : ""}</span>
+                      </span>
+                      {item.id === node?.model_id && <span className="m-chip done">当前</span>}
+                    </button>
+                  ))}
+                </div>}
+              {(activeModel?.reasoning_efforts?.length ?? 0) > 0 && (
+                <>
+                  <p className="m-note" style={{ margin: "12px 0 6px" }}>推理强度</p>
+                  <div className="m-choices" role="group" aria-label="推理强度">
+                    {effortChoices.map(level => (
+                      <button key={level ?? "default"} type="button" disabled={modelBusy}
+                        className={`m-choice ${(node?.reasoning_effort ?? null) === level ? "active" : ""}`}
+                        aria-pressed={(node?.reasoning_effort ?? null) === level}
+                        onClick={() => void switchModel(activeModel?.id ?? "", level)}>{level ?? "默认"}</button>
+                    ))}
+                  </div>
+                </>
+              )}
+              {modelBusy && <p className="m-note" style={{ marginBottom: 0 }}>正在切换模型…</p>}
+            </div>
             {relayMode && (
               <div className="m-card">
                 <h3>{account ? "账户实例" : "中继节点"}</h3>
@@ -1050,6 +1128,14 @@ export function MobileApp(): React.ReactElement {
       </main>
 
       <div className="m-compose" hidden={tab !== "live"}>
+        {submissionPending && !busy && <p className="m-note" role="alert">
+          上次提交结果未知，电脑可能已在执行。请先查看任务列表，不会自动重新派活。
+          <button className="m-btn" onClick={() => {
+            if (!window.confirm("已核对任务列表，确认允许再次提交？重复指令可能产生重复任务。")) return;
+            localStorage.removeItem(PENDING_KEY);
+            setSubmissionPending(false);
+          }}>已核对，解除提交保护</button>
+        </p>}
         <div className="m-compose-box">
           <textarea
             ref={composerRef}
@@ -1062,7 +1148,7 @@ export function MobileApp(): React.ReactElement {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
             }}
           />
-          <button className="m-send" disabled={busy || !draft.trim() || !node || Boolean(continueSession && (!sessionDetail || sessionError || sessionDetail.live?.running))} onClick={() => void submit()} aria-label="发送">↑</button>
+          <button className="m-send" disabled={busy || submissionPending || !draft.trim() || !node || Boolean(continueSession && (!sessionDetail || sessionError || sessionDetail.live?.running))} onClick={() => void submit()} aria-label="发送">↑</button>
         </div>
         <details className="m-compose-options">
           <summary>派活选项 <span>{continueSession ? "接续会话" : "新会话"} · {project || "当前工作区"} · {MODE_LABELS[mode]}</span></summary>
@@ -1092,6 +1178,11 @@ export function MobileApp(): React.ReactElement {
           <select value={project} onChange={event => { setProject(event.target.value); setContinueSession(undefined); setSessionDetail(undefined); }} aria-label="项目">
             {Object.keys(mobileProjects(node)).length === 0 && <option value="">电脑当前工作区</option>}
             {Object.entries(mobileProjects(node)).map(([name, path]) => <option key={name} value={name}>{name} · {path}</option>)}
+          </select>
+          <select value={node?.model_id ?? ""} aria-label="模型"
+            onChange={event => { const id = event.target.value; if (id && id !== node?.model_id) void switchModel(id); }}>
+            {modelCatalog.length === 0 && <option value="">模型</option>}
+            {modelCatalog.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
           </select>
           <select value={mode} onChange={event => setMode(event.target.value as TaskMode)} aria-label="权限">
             {(Object.keys(MODE_LABELS) as TaskMode[]).map(key => <option key={key} value={key}>{MODE_LABELS[key]}</option>)}

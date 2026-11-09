@@ -1117,6 +1117,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const [meshRows, setMeshRows] = useState<Array<{ job: MeshJob; lastLog: string }>>([]);
   const [, setMeshRevision] = useState(0);
   const announcedMeshJobs = useRef(new Set<string>());
+  // Jobs submitted through this node's web/phone API are not inbound mesh
+  // traffic, but the terminal is where their progress is actually watched.
+  const announcedLocalJobs = useRef(new Set<string>());
   const lastJobLogUpdateRef = useRef(0);
   // Every remote job's structured stream, kept in arrival order. The terminal
   // renders the same tool rows, edit records and notes for these as for a local
@@ -2316,6 +2319,16 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         if (events.length && !meshStreamsRef.current.has(job.id)) meshStreamsRef.current.set(job.id, events);
       }
       setMeshStreamRevision((revision) => revision + 1);
+      // A phone may have dispatched work while this terminal was closed. The
+      // accepted job is still running, so show its live stream instead of a
+      // blank local conversation.
+      const activeLocal = jobs.find((job) => job.source === config.mesh.nodeName
+        && job.target === config.mesh.nodeName && ACTIVE_JOB_STATUS.has(job.status));
+      if (activeLocal && !runningRef.current) {
+        announcedLocalJobs.current.add(activeLocal.id);
+        focusJob(activeLocal.id);
+        setShowMesh(true);
+      }
     });
     const off = mesh.onEvent((event) => {
       if (event.type === "job-log") {
@@ -2364,6 +2377,27 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
           return [{ job: event.job, lastLog }, ...current.filter((row) => row.job.id !== event.job.id)].slice(0, 30);
         });
         meshStatusRef.current.set(event.job.id, event.job.status);
+        if (event.job.source === config.mesh.nodeName && event.job.target === config.mesh.nodeName) {
+          if (ACTIVE_JOB_STATUS.has(event.job.status)) {
+            if (!announcedLocalJobs.current.has(event.job.id)) {
+              announcedLocalJobs.current.add(event.job.id);
+              setNotice(`📱 手机/网页派发任务已开始 · ${oneLine(event.job.instruction)} · /jobs ${event.job.id}`);
+              // Do not displace an active local turn; otherwise switch to the
+              // job stream so tool calls, edit records and phase are visible.
+              if (!runningRef.current) {
+                focusJob(event.job.id);
+                setShowMesh(true);
+              }
+            }
+          } else {
+            announcedLocalJobs.current.delete(event.job.id);
+            if (event.job.status === "done") setNotice(`✅ 手机/网页任务完成 · ${oneLine(event.job.result) || "无输出"}`);
+            else if (event.job.status === "paused") setNotice(`⏸ 手机/网页任务暂停 · ${oneLine(event.job.result)}`);
+            else if (event.job.status === "failed") setNotice(`❌ 手机/网页任务失败 · ${oneLine(event.job.error)}`);
+            else setNotice("⊘ 手机/网页任务已取消");
+          }
+          return;
+        }
         if (event.job.source === config.mesh.nodeName) {
           setNotice(`Mesh job ${event.job.id}: ${event.job.status}`);
           if (ACTIVE_JOB_STATUS.has(event.job.status)) {
@@ -2829,6 +2863,11 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const focusedJob = focusedJobId ? meshRows.find((row) => row.job.id === focusedJobId)?.job : undefined;
   const focusedRecords = focusedJobId ? meshStreamsRef.current.get(focusedJobId) : undefined;
   const focusedActive = Boolean(focusedJob && ACTIVE_JOB_STATUS.has(focusedJob.status));
+  const localPhoneJob = meshRows.find(({ job }) => job.source === config.mesh.nodeName
+    && job.target === config.mesh.nodeName && ACTIVE_JOB_STATUS.has(job.status))?.job;
+  const localPhoneRecords = localPhoneJob ? meshStreamsRef.current.get(localPhoneJob.id) : undefined;
+  const localPhonePhase = useMemo(() => localPhoneJob && localPhoneRecords?.length
+    ? jobPhase(localPhoneRecords) : null, [localPhoneJob?.id, localPhoneRecords, meshStreamRevision]);
   const remoteBlocks = useMemo(() => {
     if (!focusedJob) return [];
     return jobBlocks(focusedJob, focusedRecords ?? [], {
@@ -2948,6 +2987,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         <Text color={showMesh ? theme.accent : theme.muted} wrap="truncate-end">
           {showMesh ? "Mesh | /mesh: Local" : "Local | /mesh: Mesh"}
           {mesh ? ` | ${meshActiveCount} active, ${meshChats.length} messages` : ""}
+          {!showMesh && localPhoneJob ? ` | 📱 手机任务 ${oneLine(localPhonePhase?.detail || localPhoneJob.status, 50)}` : ""}
           {!showMesh && meshChats[0] ? ` | ${meshChats[0].from}: ${oneLine(meshChats[0].text, 60)}` : ""}
         </Text>
       </Box>

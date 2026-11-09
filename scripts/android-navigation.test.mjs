@@ -26,6 +26,12 @@ test('prompts are rendered and background polling is client-only', () => {
   assert.match(source, /onStop\(\)[\s\S]*?background = true/);
   assert.doesNotMatch(source.slice(source.indexOf('onStop()'), source.indexOf('private void saveActive')), /\.cancel\(/);
 });
+test('foreground recovery reloads history and reports offline without cancelling work', () => {
+  const resume = source.slice(source.indexOf('onResume()'), source.indexOf('private void observeSubmission'));
+  assert.match(resume, /openJob\(jobId\)/);
+  assert.ok(resume.indexOf('background = false') < resume.indexOf('observeSubmission()'));
+  assert.match(method('pollJob'), /电脑端任务不会因此取消/);
+});
 test('navigation is restored and never hidden by sessions', () => {
   assert.match(method('buildNav'), /setVisibility\(View.VISIBLE\)/);
   assert.doesNotMatch(source, /navBar.setVisibility\(View.GONE\)/);

@@ -857,8 +857,8 @@ export class LubanRelayServer {
       entry.settled = true;
       if (entry.headTimer) clearTimeout(entry.headTimer);
       this.inFlight.delete(id);
-      // The phone navigated away or stopped the request: drop the work instead
-      // of letting a long agent step keep running for nobody.
+      // Close only this HTTP proxy request. Accepted mesh jobs are owned by
+      // the computer and keep running after the phone disconnects.
       this.deliver(node, { type: "abort", id });
     });
 

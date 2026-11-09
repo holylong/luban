@@ -65,9 +65,14 @@ export function jobBlocks(job: RemoteJobView, records: JobStreamRecord[], option
   const { expanded, width, localNode } = options;
   const inbound = job.source !== localNode;
   const peer = inbound ? job.source : job.target;
+  // A job submitted through this node's own web/phone API has no peer: saying
+  // the node handed work to itself hides where it came from.
+  const localApi = !inbound && job.target === localNode;
   const blocks: TranscriptBlock[] = [note(
     `remote-${job.id}-head`,
-    `${inbound ? "📥 来自" : "📤 已交给"} ${peer} · ${oneLine(job.instruction, 120)}`,
+    localApi
+      ? `📱 手机/网页任务 ${oneLine(job.instruction, 120)} · ${job.id}`
+      : `${inbound ? "📥 来自" : "📤 已交给"} ${peer} · ${oneLine(job.instruction, 120)}`,
     "accent",
   )];
 

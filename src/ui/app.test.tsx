@@ -8,6 +8,7 @@ import { render } from "ink";
 import { expect, it, vi } from "vitest";
 import { loadConfig } from "../core/config.js";
 import { AgentRunner } from "../core/agent.js";
+import { MeshRuntime } from "../core/mesh/runtime.js";
 import { SessionStore } from "../core/session-store.js";
 import { liveSessions } from "../core/live-session.js";
 import { osc52CopySequence } from "./clipboard.js";
@@ -54,6 +55,45 @@ it("follows the selected remote session without replay duplicates or local submi
   } finally {
     app.unmount(); app.cleanup(); run.mockRestore();
     liveSessions.remove(home, session.project, session.id);
+  }
+}, 10000);
+
+it("opens a phone-dispatched job's live stream in the console", async () => {
+  const home = await mkdtemp(join(tmpdir(), "luban-phone-job-ui-"));
+  const workspace = join(home, "workspace");
+  await mkdir(workspace);
+  const oldHome = process.env.LUBAN_HOME;
+  process.env.LUBAN_HOME = home;
+  const config = loadConfig({ workspace });
+  process.env.LUBAN_HOME = oldHome;
+  const mesh = new MeshRuntime(config);
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  mesh.setJobRunner(async (_job, _signal, _log, emit) => {
+    emit?.({ kind: "delta", text: "phone live output" });
+    await gate;
+    return { ok: true, text: "phone final answer" };
+  });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdout = Object.assign(new PassThrough(), { columns: 120, rows: 40, isTTY: true });
+  let frame = "";
+  stdout.on("data", data => { frame = stripVTControlCharacters(String(data)); });
+  const app = render(<App config={config} mesh={mesh} />, {
+    stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: true, patchConsole: false, exitOnCtrlC: false,
+  });
+  try {
+    await expect.poll(() => frame).toContain("Local |");
+    await mesh.submitLocalJob({ instruction: "phone dispatched work" });
+    await expect.poll(() => frame).toContain("手机/网页任务 phone dispatched work");
+    await expect.poll(() => frame).toContain("phone live output");
+    release();
+    await expect.poll(() => frame).toContain("phone final answer");
+    await expect.poll(() => frame).toContain("手机/网页任务完成");
+  } finally {
+    release();
+    app.unmount(); app.cleanup();
+    await mesh.stop();
   }
 }, 10000);
 

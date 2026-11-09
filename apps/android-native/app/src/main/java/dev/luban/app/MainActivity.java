@@ -148,9 +148,10 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        observeSubmission();
-        if (!background) return;
+        boolean wasBackground = background;
         background = false;
+        observeSubmission();
+        if (!wasBackground) return;
         if (screen.equals("job") && !jobId.isEmpty()) {
             openJob(jobId); // Reload authoritative history and replay after a background gap.
         } else if (prefs.getBoolean("submission_pending", false) || !prefs.getString("submit_notice", "").isEmpty()) {
@@ -1059,8 +1060,9 @@ public final class MainActivity extends Activity {
                 });
             } catch (Exception error) {
                 postResult(() -> {
-                    if (token != pollToken) return;
-                    status.setText("轮询失败：" + messageOf(error));
+                    if (token != pollToken || background) return;
+                    status.setText("连接中断，正在重连；电脑端任务不会因此取消");
+                    progress.setText(messageOf(error));
                     main.postDelayed(() -> pollJob(token, id, since, buffer, status, progress, output), 2500);
                 });
             }
