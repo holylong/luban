@@ -38,6 +38,11 @@ async function petApi(path, body) {
   return result;
 }
 ipcMain.handle('luban:petOpen', event => { if (!trustedPet(event)) throw new Error('Untrusted pet'); showMain(); });
+ipcMain.handle('luban:petHide', event => { if (!trustedPet(event)) throw new Error('Untrusted pet'); hidePet(); return { ok: true }; });
+// The workbench talks about the overlay, not from it, so the main window checks
+// the ordinary renderer trust instead of the pet's own document identity.
+ipcMain.handle('luban:petVisible', event => { if (!trustedSender(event)) throw new Error('Untrusted renderer'); return petVisible(); });
+ipcMain.handle('luban:petToggle', event => { if (!trustedSender(event)) throw new Error('Untrusted renderer'); return togglePet(); });
 ipcMain.handle('luban:petSubmit', async (event, input) => {
   if (!trustedPet(event) || petSubmitting) throw new Error('桌宠正在处理提交');
   petSubmitting = true;
@@ -70,15 +75,51 @@ ipcMain.handle('luban:botStatus', event => {
   if (!trustedPet(event)) throw new Error('Untrusted pet');
   return botSnapshot(botHome(), { owned: Boolean(botChild), error: botError });
 });
+function petVisible() {
+  return Boolean(pet && !pet.isDestroyed() && pet.isVisible());
+}
+// The overlay is always on top by design, so the only honest way to stop it
+// covering other apps is hiding it. Remembering the choice means a user who hid
+// it does not have to hide it again after every restart.
+function petPreference() {
+  try { return JSON.parse(readFileSync(join(app.getPath("userData"), "pet.json"), "utf8")).visible !== false; }
+  catch { return true; }
+}
+function rememberPet(visible) {
+  try { writeFileSync(join(app.getPath("userData"), "pet.json"), JSON.stringify({ visible })); }
+  catch { /* A preference is a convenience, never a startup dependency. */ }
+}
+function announcePet() {
+  const visible = petVisible();
+  rememberPet(visible);
+  if (tray && !tray.isDestroyed()) tray.setContextMenu(Menu.buildFromTemplate(trayTemplate()));
+  if (!window || window.isDestroyed() || !trustedOrigin) return;
+  try {
+    if (new URL(window.webContents.getURL()).origin === trustedOrigin) window.webContents.send('luban:petVisibility', visible);
+  } catch { /* No document during navigation. */ }
+}
 function createPet() {
-  if (pet && !pet.isDestroyed()) { pet.show(); return; }
+  if (pet && !pet.isDestroyed()) { pet.show(); pet.focus(); announcePet(); return; }
   const area = screen.getPrimaryDisplay().workArea;
   pet = new BrowserWindow({ width: 330, height: 480, x: area.x + area.width - 350, y: area.y + area.height - 500, frame: false, transparent: true, alwaysOnTop: true, resizable: false, skipTaskbar: true, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, preload: join(__dirname, 'pet-preload.cjs') } });
   pet.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   pet.webContents.on('will-navigate', event => event.preventDefault());
   pet.webContents.on('will-redirect', event => event.preventDefault());
-  pet.on('closed', () => { pet = undefined; });
+  pet.on('closed', () => { pet = undefined; announcePet(); });
+  pet.on('show', () => announcePet());
+  pet.on('hide', () => announcePet());
   void pet.loadFile(join(__dirname, 'pet.html'));
+  announcePet();
+}
+function hidePet() {
+  if (pet && !pet.isDestroyed()) pet.hide();
+  announcePet();
+}
+/** One switch for the workbench button, the tray item and the View menu. */
+function togglePet() {
+  if (petVisible()) hidePet();
+  else createPet();
+  return petVisible();
 }
 // The window hides itself instead of closing and the pet has no frame, so the
 // tray is the dependable place to reopen luban and to quit it for good.
@@ -101,20 +142,23 @@ function quitApp() {
   if (dirty) showMain();
   app.quit();
 }
+function trayTemplate() {
+  return [
+    { label: "打开主界面", click: showMain },
+    { label: petVisible() ? "隐藏桌宠" : "显示桌宠", click: togglePet },
+    { type: "separator" },
+    { label: "打开项目文件夹…", click: async () => { const path = await chooseWorkspace(); if (path) await openWorkspace(path); } },
+    { type: "separator" },
+    { label: "退出 luban", click: quitApp },
+  ];
+}
 function createTray() {
   if (tray && !tray.isDestroyed()) return tray;
   // A desktop environment without a status bar must not stop luban from opening.
   try { tray = new Tray(trayImage()); }
   catch { tray = undefined; return undefined; }
   tray.setToolTip(trayTooltip());
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "打开主界面", click: showMain },
-    { label: "显示桌宠", click: createPet },
-    { type: "separator" },
-    { label: "打开项目文件夹…", click: async () => { const path = await chooseWorkspace(); if (path) await openWorkspace(path); } },
-    { type: "separator" },
-    { label: "退出 luban", click: quitApp },
-  ]));
+  tray.setContextMenu(Menu.buildFromTemplate(trayTemplate()));
   // A single click is what Windows users try first; macOS opens the menu itself.
   tray.on("click", showMain);
   tray.on("double-click", showMain);
@@ -385,7 +429,7 @@ app.whenReady().then(async () => {
     .filter(value => value !== resolve(app.getAppPath()) && existsSync(value) && statSync(value).isDirectory())
     .at(-1);
   await openWorkspace(argument || savedWorkspace() || homedir());
-  if (backendAccess) { startBot(); createPet(); }
+  if (backendAccess) { startBot(); if (petPreference()) createPet(); }
 }).catch(error => { dialog.showErrorBox("luban Desktop", String(error)); app.quit(); });
 // before-quit may be canceled by a dirty window; keep its backend alive.
 app.on('before-quit', event => {

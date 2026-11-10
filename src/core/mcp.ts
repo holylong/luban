@@ -208,13 +208,18 @@ export class McpManager {
     }
   }
 
-  async discoverNativeTools(signal: AbortSignal): Promise<{ tools: ToolDefinition[]; errors: string[] }> {
+  async discoverNativeTools(signal: AbortSignal): Promise<{ tools: ToolDefinition[]; errors: string[]; notices: string[] }> {
     const tools: ToolDefinition[] = [];
     const errors: string[] = [];
+    const notices: string[] = [];
     // Lazy mode keeps schemas out of every turn: only a dispatcher is registered
     // and concrete schemas are fetched through mcp_search_tools / mcp_call.
-    if (this.config.mcpLazy) return { tools, errors };
-    const maxTools = Math.max(4, Math.min(256, this.config.mcpMaxTools ?? 64));
+    if (this.config.mcpLazy) return { tools, errors, notices };
+    const maxTools = Math.max(4, Math.min(256, this.config.mcpMaxTools ?? 128));
+    // Hitting the schema budget is a policy decision, not a failure: the extra
+    // tools stay reachable through mcp_search_tools / mcp_call. Counting them
+    // keeps the notice to one line instead of one per skipped tool per server.
+    let skipped = 0;
     const servers = Object.entries(this.config.mcpServers ?? {}).filter(([, settings]) => settings.enabled && settings.trusted);
     await Promise.all(servers.map(async ([serverName]) => {
       try {
@@ -222,12 +227,9 @@ export class McpManager {
         const result = await session.request("tools/list", {}, signal) as JsonObject;
         const listed = Array.isArray(result?.tools) ? result.tools as JsonObject[] : [];
         for (const item of listed) {
-          if (tools.length >= maxTools) {
-            errors.push(`MCP schema budget reached (${maxTools}); remaining tools available via mcp_search_tools/mcp_call`);
-            break;
-          }
           const remoteName = String(item.name || "");
           if (!remoteName) continue;
+          if (tools.length >= maxTools) { skipped += 1; continue; }
           let nativeName = `mcp_${safeToolPart(serverName)}_${safeToolPart(remoteName)}`.slice(0, 64);
           let suffix = 2;
           while (this.nativeNames.has(nativeName) && this.nativeNames.get(nativeName)?.tool !== remoteName) {
@@ -247,7 +249,10 @@ export class McpManager {
         errors.push(`${serverName}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }));
-    return { tools: tools.slice(0, maxTools), errors };
+    if (skipped > 0) {
+      notices.push(`MCP 工具已注册 ${tools.length} 个，另有 ${skipped} 个超出 schema 预算（${maxTools}），可用 mcp_search_tools / mcp_call 按需调用`);
+    }
+    return { tools: tools.slice(0, maxTools), errors, notices };
   }
 
   async call(serverName: string, toolName: string, args: JsonObject, signal: AbortSignal): Promise<string> {

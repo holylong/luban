@@ -266,6 +266,10 @@ export interface TitleSuggestion {
 }
 
 export class AgentRunner {
+  /** Job-backed runs create a runner per instruction, so discovery notices are
+   *  deduplicated here: a truncated schema budget is worth saying once, not on
+   *  every submission. */
+  private static readonly announcedMcpNotices = new Set<string>();
   readonly tools: Map<string, ToolDefinition>;
   private readonly client: ModelClient;
   private readonly mcp: McpManager;
@@ -540,6 +544,11 @@ export class AgentRunner {
       const discovered = await this.mcp.discoverNativeTools(signal);
       for (const tool of discovered.tools) this.tools.set(tool.name, tool);
       if (discovered.tools.length) onEvent({ type: "status", text: `Connected ${discovered.tools.length} MCP tools` });
+      for (const notice of discovered.notices) {
+        if (AgentRunner.announcedMcpNotices.has(notice)) continue;
+        AgentRunner.announcedMcpNotices.add(notice);
+        onEvent({ type: "status", text: notice });
+      }
       if (discovered.errors.length) onEvent({ type: "error", text: `MCP startup: ${discovered.errors.join("; ")}` });
     }
     const available = mode === "ask" ? new Map([...this.tools].filter(([, tool]) => tool.risk === "read")) : this.tools;

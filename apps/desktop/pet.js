@@ -8,6 +8,8 @@ let lastDoneId;
 let soulWas;
 const say = text => { el('bubble').textContent = text; };
 el('face').onclick = el('open').onclick = () => window.petBridge.open().catch(error => say(error.message));
+// The overlay hides instead of closing; the main window and tray can bring it back.
+el('hide').onclick = () => window.petBridge.hide().catch(error => say(error.message));
 el('clear').onclick = () => { paths = []; el('files').textContent = ''; };
 for (const name of ['dragenter', 'dragover']) document.addEventListener(name, event => { event.preventDefault(); el('pet').classList.add('dragging'); });
 document.addEventListener('dragleave', () => el('pet').classList.remove('dragging'));

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { documentPreviewKind, mediaEntrySource, mediaKind, mediaSource } from "./desktop-media";
 import { DesktopMediaView } from "./desktop-media-view";
 import { DesktopDocumentView } from "./desktop-document-view";
-import type { DiagramPreview, SlidesPreview } from "./desktop-preview";
+import type { DiagramPreview, SheetPreview, SlidesPreview, WordPreview } from "./desktop-preview";
 
 describe("desktop media preview", () => {
   it("classifies audio, video, image and PDF paths", () => {
@@ -22,6 +22,10 @@ describe("desktop media preview", () => {
     expect(documentPreviewKind("flow.drawio")).toBe("diagram");
     expect(documentPreviewKind("flow.drawio.svg")).toBe("diagram");
     expect(documentPreviewKind("flow.drawio.png")).toBe("diagram");
+    expect(documentPreviewKind("预算.xlsx")).toBe("sheet");
+    expect(documentPreviewKind("预算.XLS")).toBe("sheet");
+    expect(documentPreviewKind("说明.docx")).toBe("word");
+    expect(documentPreviewKind("说明.DOC")).toBe("word");
     expect(mediaKind("flow.drawio.png")).toBe("image"); // the editor checks parsed previews first
     expect(documentPreviewKind("report.pdf")).toBeNull();
     expect(documentPreviewKind("src/app.ts")).toBeNull();
@@ -118,5 +122,57 @@ describe("desktop parsed previews", () => {
     expect(markup).toContain("幻灯片预览");
     const loading = renderToStaticMarkup(<DesktopDocumentView path="slow.pptx" onClose={() => {}} />);
     expect(loading).toContain("正在解析…");
+  });
+});
+
+describe("office document previews", () => {
+  const sheet: SheetPreview = {
+    kind: "sheet",
+    path: "预算.xlsx",
+    sheets: [
+      { name: "预算", columns: 2, rows: [{ index: 1, cells: [{ text: "名称" }, { text: "金额" }] }, { index: 2, cells: [{ text: "房租" }, { text: "1200", numeric: true }] }] },
+      { name: "汇总", columns: 1, rows: [{ index: 1, cells: [{ text: "合计" }] }], truncatedRows: 3 },
+    ],
+  };
+
+  it("renders a grid with column labels and row numbers", () => {
+    const markup = renderToStaticMarkup(<DesktopDocumentView path="预算.xlsx" kind="sheet" model={sheet} onClose={() => {}} />);
+    expect(markup).toContain("表格预览");
+    expect(markup).toContain("<th>A</th>");
+    expect(markup).toContain("<th>B</th>");
+    expect(markup).toContain("房租");
+    expect(markup).toContain('class="num"');
+    expect(markup).toContain("关闭预览");
+  });
+
+  it("switches worksheets and reports what the preview hid", () => {
+    const last = { ...sheet, sheets: [sheet.sheets[1]!] };
+    const markup = renderToStaticMarkup(<DesktopDocumentView path="预算.xlsx" kind="sheet" model={last} />);
+    expect(markup).toContain("另有 3 行未显示");
+    expect(markup).not.toContain("desktop-sheet-tabs");
+  });
+
+  it("renders headings, lists and tables for a document", () => {
+    const word: WordPreview = {
+      kind: "word",
+      path: "说明.docx",
+      blocks: [
+        { type: "heading", level: 1, text: "总览" },
+        { type: "paragraph", text: "第一段" },
+        { type: "list", ordered: true, items: ["一", "二"] },
+        { type: "table", rows: [["A", "B"]] },
+      ],
+    };
+    const markup = renderToStaticMarkup(<DesktopDocumentView path="说明.docx" kind="word" model={word} />);
+    expect(markup).toContain("文档预览");
+    expect(markup).toContain("<h1>总览</h1>");
+    expect(markup).toContain("<ol><li>一</li><li>二</li></ol>");
+    expect(markup).toContain("<td>A</td>");
+  });
+
+  it("reports a parse failure instead of an empty stage", () => {
+    const markup = renderToStaticMarkup(<DesktopDocumentView path="旧表.xls" kind="sheet" error="不是有效的 XLS 文件" />);
+    expect(markup).toContain("表格预览");
+    expect(markup).toContain("不是有效的 XLS 文件");
   });
 });

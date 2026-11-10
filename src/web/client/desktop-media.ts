@@ -15,15 +15,17 @@ export function mediaKind(path: string): MediaKind | null {
   return KINDS[extension] ?? null;
 }
 
-export type DocumentPreviewKind = "slides" | "diagram";
+export type DocumentPreviewKind = "slides" | "diagram" | "sheet" | "word";
 
 const DOCUMENTS: Record<string, DocumentPreviewKind> = {
   pptx: "slides", pptm: "slides", ppsx: "slides",
   drawio: "diagram", dio: "diagram",
+  xlsx: "sheet", xlsm: "sheet", xltx: "sheet", xls: "sheet",
+  docx: "word", docm: "word", doc: "word",
 };
 
-/** Slide decks and draw.io diagrams are parsed by the desktop main process and
- * rendered as read-only previews instead of text. */
+/** Office documents and draw.io diagrams are parsed by the desktop main process
+ * and rendered as read-only previews instead of text. */
 export function documentPreviewKind(path: string): DocumentPreviewKind | null {
   const lower = path.toLowerCase();
   if (lower.endsWith(".drawio.svg") || lower.endsWith(".drawio.png") || lower.endsWith(".drawio.xml")) return "diagram";

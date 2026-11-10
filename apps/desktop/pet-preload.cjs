@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('petBridge', Object.freeze({
   open: () => ipcRenderer.invoke('luban:petOpen'),
+  hide: () => ipcRenderer.invoke('luban:petHide'),
   submit: input => ipcRenderer.invoke('luban:petSubmit', input),
   status: () => ipcRenderer.invoke('luban:petStatus'),
   botStatus: () => ipcRenderer.invoke('luban:botStatus'),

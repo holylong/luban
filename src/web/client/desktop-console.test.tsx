@@ -21,6 +21,8 @@ it("offers an enabled, labeled command input with the desktop bridge", () => {
   const html = renderToStaticMarkup(<DesktopConsole store={store} />);
   expect(html).toContain('for="desktop-command"');
   expect(html).toContain("按 Enter 运行");
+  // The console top edge is a drag handle, not just a border.
+  expect(html).toContain('aria-label="调整控制台高度"');
   expect(html).not.toMatch(/<input[^>]*disabled/);
   expect(html).not.toContain("未检测到桌面连接");
 });

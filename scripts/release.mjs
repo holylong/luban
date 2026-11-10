@@ -33,6 +33,21 @@ Install dependencies with npm ci first. No git changes, tags, or uploads are per
 
 /** @param {string[]} args @param {string} host @param {string} arch @param {string} version
  * @returns {{help: true} | ReleasePlan} */
+/**
+ * Version scheme: MAJOR.MINOR.PATCH where PATCH counts 1-20 per minor and then
+ * rolls the minor over. See docs/release.md; a release must never ship 2.2.0 or
+ * 2.2.21.
+ */
+export function versionProblem(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(version));
+  if (!match) return `version ${version} must look like MAJOR.MINOR.PATCH`;
+  const [, major, minor, patch] = match.map(Number);
+  if (major < 1) return `version ${version}: major must start at 1`;
+  if (patch < 1 || patch > 20) return `version ${version}: patch must be 1-20, then the minor increases (for example 2.2.20 -> 2.3.1)`;
+  if (minor < 0) return `version ${version}: minor must be 0 or greater`;
+  return null;
+}
+
 export function releasePlan(args, host = process.platform, arch = process.arch, version = "0.0.0") {
   let platform = "auto";
   let kind = "all";
@@ -139,6 +154,8 @@ async function main() {
   const plan = releasePlan(process.argv.slice(2), process.platform, process.arch, pkg.version);
   if ("help" in plan) { console.log(help); return; }
   if (lock.version !== pkg.version || lock.packages[""].version !== pkg.version) throw new Error("package.json and package-lock.json versions must match");
+  const versionError = versionProblem(pkg.version);
+  if (versionError) throw new Error(versionError);
   console.log(`Release ${pkg.version}: ${plan.platform}/${plan.arch} (${plan.kind})`);
   console.log([...plan.artifacts, plan.checksums].map(name => `  release/${name}`).join("\n"));
   if (plan.dryRun) return;

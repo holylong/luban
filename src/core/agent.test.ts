@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRunner, initialMessages } from "./agent.js";
 import { SessionStore } from "./session-store.js";
-import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
+import type { AgentEvent, ChatMessage, LubanConfig, ToolCall } from "./types.js";
 
 function config(workspace: string): LubanConfig {
   const model = { id: "test/model", provider: "test", model: "model", name: "model", baseUrl: "", apiKey: "" };
@@ -93,6 +93,44 @@ describe("AgentRunner", () => {
       expect(bodies).toHaveLength(4);
       expect(executions).toEqual([1, 2]);
     } finally { runner.close(); }
+  });
+
+  it("reports a truncated MCP schema budget once as a status, never as a startup error", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-mcp-notice-"));
+    const manyServer = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.id === undefined) return;
+  let result = {};
+  if (m.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "many", version: "1" } };
+  if (m.method === "tools/list") result = { tools: Array.from({ length: 8 }, (_, index) => ({ name: "tool" + index, inputSchema: { type: "object" } })) };
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }) + "\n");
+});
+`;
+    const settings = config(workspace);
+    settings.mcpMaxTools = 4;
+    settings.mcpServers = { many: { command: process.execPath, args: ["-e", manyServer], env: {}, enabled: true, trusted: true } };
+    const client = { async complete() { return { content: "done", toolCalls: [], usage: { input: 1, output: 1 } }; } };
+    const collect = async (): Promise<AgentEvent[]> => {
+      const events: AgentEvent[] = [];
+      const runner = new AgentRunner(settings, client as never);
+      try {
+        await runner.run([...initialMessages(workspace), { role: "user", content: "hi" }], "agent",
+          new AbortController().signal, event => events.push(event), async () => "once");
+      } finally { runner.close(); }
+      return events;
+    };
+    const first = await collect();
+    expect(first.filter(event => event.type === "error")).toEqual([]);
+    const statuses = first.flatMap(event => event.type === "status" ? [event.text] : []);
+    const budget = statuses.filter(text => text.includes("schema 预算"));
+    expect(budget).toHaveLength(1);
+    expect(budget[0]).toContain("mcp_search_tools");
+    // A second job runs on a fresh runner; the same notice must not repeat.
+    const second = await collect();
+    expect(second.flatMap(event => event.type === "status" ? [event.text] : []).some(text => text.includes("schema 预算"))).toBe(false);
   });
 
   it("retains Go's configured retry budget and stable routing after a tool already ran", async () => {

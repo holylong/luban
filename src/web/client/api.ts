@@ -29,7 +29,9 @@ function scoped(path: string): string {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const requestScope = nodeScope;
-  const response = await fetch(scoped(path), init);
+  // Every endpoint here reports live state (jobs, files, sessions); a cached
+  // reply would make the file tree and job list lag behind disk.
+  const response = await fetch(scoped(path), { ...init, cache: init?.cache ?? "no-store" });
   const text = await response.text();
   if (requestScope !== nodeScope) throw new ApiError(409, "设备已切换，忽略旧设备响应");
   let body: unknown;

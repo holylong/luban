@@ -2,6 +2,17 @@
 
 版本：2.0.13 起 Windows 默认恢复 ZIP，不再强制构建 SEA EXE 或依赖 7-Zip。
 
+## 版本号规则
+
+版本号固定为 `MAJOR.MINOR.PATCH`，每个交付递增一次 PATCH，不跳号、不用 0：
+
+- PATCH 从 1 数到 20：`2.2.1`、`2.2.2` …… `2.2.20`。
+- 下一个交付如果会超过 20，就把 MINOR 加 1、PATCH 回到 1：`2.2.20` 的下一版是 `2.3.1`，不是 `2.2.21`，也不是 `2.3.0`。
+- MAJOR 只在用户明确要求时变化，新 MAJOR 的第一个版本是 `3.0.1`；MINOR 同理不单独跳号。
+- 每个交付都要改版本：`npm version patch --no-git-tag-version`（或手工同步 package.json 与 package-lock.json），再到 CHANGELOG.md 顶部加一节。
+- `npm run release` 启动时用 `versionProblem()` 校验，`2.2.0`、`2.2.21`、`v2.2.3` 这类版本会直接报错退出；`npm run test:release` 覆盖了这些用例。
+- 规则从 `2.2.3` 开始生效；CHANGELOG 里更早的 `2.2.0` 等版本是历史记录，不回改。
+
 ## 快速开始
 
 先运行 `npm ci --include=dev`（即使 NODE_ENV=production 也安装构建工具），然后运行：

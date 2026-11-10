@@ -802,7 +802,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     },
     toolOutputRetentionDays: Math.max(1, Math.min(90, integer(toolOutputRaw.retention_days ?? toolOutputRaw.retentionDays, 7))),
     toolOutputMaxBytes: Math.max(1024 * 1024, integer(toolOutputRaw.max_bytes ?? toolOutputRaw.maxBytes, 500 * 1024 * 1024)),
-    mcpMaxTools: Math.max(4, Math.min(256, integer(mcpRaw.max_tools ?? mcpRaw.maxTools, 64))),
+    mcpMaxTools: Math.max(4, Math.min(256, integer(mcpRaw.max_tools ?? mcpRaw.maxTools, 128))),
     mcpLazy: mcpRaw.lazy === true || mcpRaw.lazy === "true",
     history: {
       enabled: historyRaw.enabled === true || historyRaw.enabled === "true" || process.env.LUBAN_HISTORY === "1",

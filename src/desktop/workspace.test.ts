@@ -160,3 +160,26 @@ describe("desktop workspace terminal", () => {
     service.stopTerminal(started.id);
   });
 });
+
+describe("desktop office previews", () => {
+  const { zipOf, wordDocOf } = createRequire(import.meta.url)("../../scripts/test-fixtures.cjs");
+  it("routes spreadsheet and document files to their parsers", () => {
+    writeFileSync(join(root, "预算.xlsx"), zipOf({
+      "xl/workbook.xml": `<workbook xmlns:r="r"><sheets><sheet name="预算" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      "xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+      "xl/worksheets/sheet1.xml": `<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>房租</t></is></c></row></sheetData></worksheet>`,
+    }));
+    writeFileSync(join(root, "说明.doc"), wordDocOf("第一段\r第二段"));
+    const sheet = service.readPreview("预算.xlsx");
+    expect(sheet).toMatchObject({ kind: "sheet", path: "预算.xlsx" });
+    expect(sheet.sheets[0].rows[0].cells[0]).toEqual({ text: "房租" });
+    const word = service.readPreview("说明.doc");
+    expect(word.kind).toBe("word");
+    expect(word.blocks).toEqual([{ type: "paragraph", text: "第一段" }, { type: "paragraph", text: "第二段" }]);
+  });
+
+  it("reports why a document cannot be previewed", () => {
+    writeFileSync(join(root, "broken.xls"), "not a workbook");
+    expect(() => service.readPreview("broken.xls")).toThrow(/复合文档/);
+  });
+});

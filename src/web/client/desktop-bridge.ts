@@ -14,6 +14,11 @@ export interface DesktopBridge {
   openPath?(path: string): Promise<{ ok: boolean }>;
   /** Desktop mode only: pick a new project folder and restart the local backend there. */
   openWorkspace?(): Promise<{ canceled?: boolean; path?: string }>;
+  /** Whether the floating Creator window is on screen; absent on older builds. */
+  petVisible?(): Promise<boolean>;
+  /** Show or hide the floating Creator window; resolves with the new state. */
+  togglePet?(): Promise<boolean>;
+  onPetVisibility?(listener: (visible: boolean) => void): () => void;
   runCommand(command: string): Promise<{ id: string }>;
   stopCommand(id: string): Promise<void>;
   startTerminal(input: { cols: number; rows: number }): Promise<TerminalStart>;

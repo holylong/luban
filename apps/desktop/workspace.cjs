@@ -4,7 +4,8 @@ const { createHash, randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { TextDecoder } = require("node:util");
 const { openZip } = require("./zip.cjs");
-const { readPptx } = require("./office.cjs");
+const { readPptx, readXlsx, readDocx } = require("./office.cjs");
+const { readDoc, readXls } = require("./office-legacy.cjs");
 const { readDrawio, readDrawioPng } = require("./drawio.cjs");
 
 // The editor holds the whole file in the renderer, so it stays bounded — but
@@ -154,8 +155,8 @@ function createWorkspace(root, emit = () => {}, options = {}) {
     if (!type) throw new Error("Not a media file");
     return { path: value, file: target, size: stat.size, type };
   }
-  /** Which parsed preview a path needs: slide decks and draw.io diagrams are
-   *  binary or XML, so the text editor cannot show them. */
+  /** Which parsed preview a path needs: office documents and draw.io diagrams
+   *  are binary or XML, so the text editor cannot show them. */
   function previewKind(value) {
     const lower = String(value).toLowerCase();
     if (lower.endsWith(".drawio.png")) return "diagram-png";
@@ -163,6 +164,8 @@ function createWorkspace(root, emit = () => {}, options = {}) {
     const extension = path.extname(lower);
     if (extension === ".drawio" || extension === ".dio") return "diagram";
     if (extension === ".pptx" || extension === ".pptm" || extension === ".ppsx") return "slides";
+    if (extension === ".docx" || extension === ".docm" || extension === ".doc") return "word";
+    if (extension === ".xlsx" || extension === ".xlsm" || extension === ".xltx" || extension === ".xls") return "sheet";
     return undefined;
   }
   function readPreview(value) {
@@ -173,7 +176,10 @@ function createWorkspace(root, emit = () => {}, options = {}) {
     if (!stat.isFile()) throw new Error("Not a file");
     if (stat.size > MAX_PREVIEW_BYTES) throw new Error(`File exceeds ${MAX_PREVIEW_MB} MB preview limit`);
     const buffer = fs.readFileSync(target);
+    const extension = path.extname(String(value).toLowerCase());
     if (kind === "slides") return { ...readPptx(buffer), path: value };
+    if (kind === "word") return { ...(extension === ".doc" ? readDoc(buffer) : readDocx(buffer)), path: value };
+    if (kind === "sheet") return { ...(extension === ".xls" ? readXls(buffer) : readXlsx(buffer)), path: value };
     if (kind === "diagram-png") return { ...readDrawioPng(buffer), path: value };
     return { ...readDrawio(buffer.toString("utf8")), path: value };
   }

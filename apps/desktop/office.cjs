@@ -336,4 +336,275 @@ function readPptx(buffer) {
   return { kind: "slides", width: Math.round(width * 100) / 100, height: Math.round(height * 100) / 100, slides };
 }
 
-module.exports = { readPptx };
+
+// ---------------------------------------------------------------------------
+// Spreadsheets and word processing documents.
+//
+// Elements are matched by local name: exporters disagree about prefixes (WPS
+// writes XLSX parts with a default namespace, Word writes w:p), and a preview
+// only needs element names, attributes and text.
+
+const MAX_SHEET_ROWS = 400;
+const MAX_SHEET_COLUMNS = 50;
+const MAX_SHEETS = 20;
+const MAX_WORD_BLOCKS = 4000;
+const DATE_FORMAT_IDS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 50, 51, 52, 53, 54, 55, 56, 57, 58]);
+
+const local = name => String(name ?? "").split(":").pop();
+const byLocal = (node, name) => node?.children.find(item => local(item.name) === name);
+const allLocal = (node, name) => node?.children.filter(item => local(item.name) === name) ?? [];
+
+function findAllLocal(node, name, found = []) {
+  if (!node) return found;
+  for (const item of node.children) {
+    if (local(item.name) === name) found.push(item);
+    findAllLocal(item, name, found);
+  }
+  return found;
+}
+
+function attr(node, name) {
+  if (!node) return undefined;
+  if (node.attrs[name] !== undefined) return node.attrs[name];
+  for (const [key, value] of Object.entries(node.attrs)) if (local(key) === name) return value;
+  return undefined;
+}
+
+/** "AB12" -> 27, the zero-based column index of a cell reference. */
+function columnOfRef(ref) {
+  let column = 0;
+  for (const character of String(ref ?? "")) {
+    const code = character.charCodeAt(0);
+    if (code < 65 || code > 90) break;
+    column = column * 26 + (code - 64);
+  }
+  return Math.max(0, column - 1);
+}
+
+const prettyNumber = value => {
+  if (!Number.isFinite(value)) return "";
+  if (Number.isInteger(value)) return String(value);
+  return String(Number(value.toPrecision(12)));
+};
+
+/** Excel stores dates as days since an epoch; the workbook picks which one. */
+function excelDate(value, date1904) {
+  if (!Number.isFinite(value) || value < 0) return undefined;
+  if (value < 1) {
+    const minutes = Math.round(value * 24 * 60);
+    return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  }
+  const base = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30);
+  const date = new Date(base + Math.floor(value) * 86400000);
+  const pad = input => String(input).padStart(2, "0");
+  const day = `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+  const minutes = Math.round((value % 1) * 24 * 60);
+  return minutes ? `${day} ${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}` : day;
+}
+
+function sharedStringsOf(zip) {
+  const text = zip.text("xl/sharedStrings.xml");
+  if (!text) return [];
+  return findAllLocal(parseXml(text), "si").map(node => findAllLocal(node, "t").map(item => item.text).join(""));
+}
+
+/** Cell-style indexes whose number format renders a date. */
+function dateStyleIndexes(zip) {
+  const indexes = new Set();
+  const text = zip.text("xl/styles.xml");
+  if (!text) return indexes;
+  const doc = parseXml(text);
+  const formats = new Set(DATE_FORMAT_IDS);
+  for (const format of findAllLocal(doc, "numFmt")) {
+    const id = Number(attr(format, "numFmtId"));
+    const code = String(attr(format, "formatCode") ?? "")
+      .replace(/"[^"]*"/g, "").replace(/\\./g, "").replace(/\[[^\]]*\]/g, "").toLowerCase();
+    if (/[ymdhs]/.test(code) && Number.isFinite(id)) formats.add(id);
+  }
+  const styles = allLocal(findAllLocal(doc, "cellXfs")[0], "xf");
+  styles.forEach((style, index) => { if (formats.has(Number(attr(style, "numFmtId")))) indexes.add(index); });
+  return indexes;
+}
+
+function sheetCell(node, shared, dateStyles, date1904) {
+  const type = attr(node, "t");
+  const style = Number(attr(node, "s"));
+  const raw = byLocal(node, "v")?.text ?? "";
+  if (type === "s") {
+    const text = shared[Number(raw)] ?? "";
+    return text ? { text } : null;
+  }
+  if (type === "inlineStr") {
+    const text = findAllLocal(byLocal(node, "is") ?? node, "t").map(item => item.text).join("");
+    return text ? { text } : null;
+  }
+  if (type === "str" || type === "d") return raw ? { text: raw } : null;
+  if (type === "b") return { text: raw === "1" ? "TRUE" : "FALSE" };
+  if (type === "e") return raw ? { text: raw } : null;
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return { text: raw };
+  const date = dateStyles.has(style) ? excelDate(value, date1904) : undefined;
+  return date ? { text: date } : { text: prettyNumber(value), numeric: true };
+}
+
+function sheetRowsOf(xml, shared, dateStyles, date1904) {
+  const doc = parseXml(xml);
+  const data = findAllLocal(doc, "sheetData")[0];
+  const rows = [];
+  let columns = 0;
+  let truncatedRows = 0;
+  let truncatedColumns = 0;
+  let expected = 1;
+  for (const rowNode of allLocal(data, "row")) {
+    const index = Number(attr(rowNode, "r")) || expected;
+    expected = index + 1;
+    const cells = [];
+    let filled = false;
+    for (const cellNode of allLocal(rowNode, "c")) {
+      const column = columnOfRef(attr(cellNode, "r")) ;
+      const cell = sheetCell(cellNode, shared, dateStyles, date1904);
+      if (column >= MAX_SHEET_COLUMNS) { if (cell) truncatedColumns += 1; continue; }
+      while (cells.length < column) cells.push(null);
+      cells[column] = cell;
+      if (cell) filled = true;
+    }
+    while (cells.length && !cells[cells.length - 1]) cells.pop();
+    if (!filled && !cells.length) continue;
+    columns = Math.max(columns, cells.length);
+    if (rows.length >= MAX_SHEET_ROWS) { truncatedRows += 1; continue; }
+    rows.push({ index, cells });
+  }
+  const trim = input => input ? input : undefined;
+  return { name: "", columns, rows, truncatedRows: trim(truncatedRows), truncatedColumns: trim(truncatedColumns) };
+}
+
+/** Read a .xlsx package into a grid model for the desktop renderer. */
+function readXlsx(buffer) {
+  const zip = openZip(buffer);
+  const workbookXml = zip.text("xl/workbook.xml");
+  if (!workbookXml) throw new Error("不是有效的 XLSX 文件");
+  const workbook = parseXml(workbookXml);
+  const date1904 = /^(1|true)$/i.test(String(attr(findAllLocal(workbook, "workbookPr")[0], "date1904") ?? ""));
+  const rels = relsOf(zip, "xl/workbook.xml");
+  const shared = sharedStringsOf(zip);
+  const dateStyles = dateStyleIndexes(zip);
+  const nodes = findAllLocal(workbook, "sheet").slice(0, MAX_SHEETS);
+  if (!nodes.length) throw new Error("工作簿中没有工作表");
+  const sheets = nodes.map((node, position) => {
+    const rel = rels.get(attr(node, "r:id") ?? attr(node, "id"));
+    const path = rel && !rel.external && zip.has(rel.target) ? rel.target : `xl/worksheets/sheet${position + 1}.xml`;
+    const name = attr(node, "name") || `Sheet${position + 1}`;
+    const xml = zip.text(path);
+    return { ...(xml ? sheetRowsOf(xml, shared, dateStyles, date1904) : { columns: 0, rows: [], truncatedRows: undefined, truncatedColumns: undefined }), name };
+  });
+  return { kind: "sheet", sheets };
+}
+
+/** Word style id -> display name, so headings are recognised by their name. */
+function wordStyleNames(zip) {
+  const names = new Map();
+  const text = zip.text("word/styles.xml");
+  if (!text) return names;
+  for (const style of findAllLocal(parseXml(text), "style")) {
+    const id = attr(style, "styleId");
+    if (id) names.set(id, attr(byLocal(style, "name"), "val") || id);
+  }
+  return names;
+}
+
+/** numId -> bullet or ordered, from the numbering definitions. */
+function wordNumbering(zip) {
+  const numbers = new Map();
+  const text = zip.text("word/numbering.xml");
+  if (!text) return numbers;
+  const doc = parseXml(text);
+  const abstracts = new Map();
+  for (const abstract of findAllLocal(doc, "abstractNum")) {
+    const format = attr(byLocal(findAllLocal(abstract, "lvl")[0], "numFmt"), "val") || "bullet";
+    abstracts.set(attr(abstract, "abstractNumId"), /decimal|letter|roman|ordinal|cardinal/i.test(format) ? "ordered" : "bullet");
+  }
+  for (const number of findAllLocal(doc, "num")) {
+    const abstractId = attr(byLocal(number, "abstractNumId"), "val");
+    numbers.set(attr(number, "numId"), abstracts.get(abstractId) ?? "bullet");
+  }
+  return numbers;
+}
+
+function wordText(node) {
+  let text = "";
+  for (const item of node.children) {
+    const name = local(item.name);
+    if (name === "t") text += item.text;
+    else if (name === "tab") text += "\t";
+    else if (name === "br" || name === "cr") text += "\n";
+    else if (name === "delText" || name === "instrText" || name === "rPr" || name === "pPr") continue;
+    else if (item.children.length) text += wordText(item);
+  }
+  return text;
+}
+
+function wordParagraph(node, styles, numbering) {
+  const properties = byLocal(node, "pPr");
+  const styleId = attr(byLocal(properties, "pStyle"), "val");
+  const styleName = styleId ? styles.get(styleId) ?? styleId : "";
+  const heading = /(?:heading|标题)\s*([1-6])/i.exec(styleName) ?? /^([1-6])$/.exec(styleName);
+  const title = /^title$|^标题$/i.test(styleName);
+  const numPr = byLocal(properties, "numPr");
+  const ordered = numPr ? (numbering.get(attr(byLocal(numPr, "numId"), "val") ?? "") ?? "bullet") !== "bullet" : undefined;
+  return {
+    text: wordText(node).replace(/[ \t]+\n/g, "\n").trim(),
+    level: heading ? Number(heading[1]) : title ? 1 : undefined,
+    list: Boolean(numPr),
+    ordered,
+  };
+}
+
+function wordTable(node, styles, numbering) {
+  return allLocal(node, "tr").map(row => allLocal(row, "tc").map(cell =>
+    allLocal(cell, "p").map(paragraph => wordParagraph(paragraph, styles, numbering).text).filter(Boolean).join("\n")));
+}
+
+/** Body children in document order: paragraphs, heading runs, lists and tables. */
+function wordBlocks(node, styles, numbering) {
+  const blocks = [];
+  let list;
+  const flush = () => { if (list) { blocks.push(list); list = undefined; } };
+  for (const item of node?.children ?? []) {
+    const name = local(item.name);
+    if (name === "p") {
+      const paragraph = wordParagraph(item, styles, numbering);
+      if (!paragraph.text) { flush(); continue; }
+      if (paragraph.list) {
+        if (!list || list.ordered !== paragraph.ordered) { flush(); list = { type: "list", ordered: paragraph.ordered, items: [] }; }
+        list.items.push(paragraph.text);
+        continue;
+      }
+      flush();
+      blocks.push(paragraph.level ? { type: "heading", level: paragraph.level, text: paragraph.text } : { type: "paragraph", text: paragraph.text });
+      continue;
+    }
+    if (name === "tbl") { flush(); blocks.push({ type: "table", rows: wordTable(item, styles, numbering) }); continue; }
+    if (name === "sdt" || name === "sdtContent" || name === "customXml" || name === "body") {
+      flush();
+      blocks.push(...wordBlocks(item, styles, numbering));
+      continue;
+    }
+  }
+  flush();
+  return blocks.slice(0, MAX_WORD_BLOCKS);
+}
+
+/** Read a .docx package into a block model for the desktop renderer. */
+function readDocx(buffer) {
+  const zip = openZip(buffer);
+  const xml = zip.text("word/document.xml");
+  if (!xml) throw new Error("不是有效的 DOCX 文件");
+  const body = findAllLocal(parseXml(xml), "body")[0];
+  if (!body) throw new Error("DOCX 中没有正文");
+  const blocks = wordBlocks(body, wordStyleNames(zip), wordNumbering(zip));
+  if (!blocks.length) throw new Error("文档没有可显示的文本");
+  return { kind: "word", blocks };
+}
+
+module.exports = { readPptx, readXlsx, readDocx };

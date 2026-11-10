@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer, Toasts, TopBar } from "./app";
 import { api } from "./api";
 import { Approvals, Questions } from "./inspector";
@@ -13,6 +13,9 @@ import { conversationEntries, historyBeforeRun } from "./desktop-conversation";
 import { DesktopChanges, currentDesktopEdit } from "./desktop-changes";
 
 import { DesktopThemePicker } from "./desktop-theme-picker";
+import { clampAgent, clampConsole, clampExplorer, fitLayout, loadLayout, saveLayout, type DesktopLayout } from "./desktop-layout";
+import { PaneSplitter } from "./desktop-panes";
+import { reloadPaths, sameTree } from "./desktop-tree";
 
 type ExplorerTab = "files" | "sessions";
 
@@ -61,29 +64,60 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState<string>();
   const [error, setError] = useState("");
-  const load = useCallback(async (path: string) => {
-    if (!store.project) return;
-    setLoading(path);
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const polling = useRef(false);
+
+  // One listing per folder is cached for rendering, so every reload has to name
+  // the folders it refreshes: refreshing only the root kept stale subfolders on
+  // screen, which is why a new file needed an app restart to appear.
+  const load = useCallback(async (paths: string[], quiet = false): Promise<void> => {
+    if (!store.project || !paths.length) return;
+    if (!quiet) setLoading(paths[0]);
     try {
-      const result = await api.workspace(store.project, path);
-      setFolders(current => ({ ...current, [path]: result.tree }));
-      setError("");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally { setLoading(undefined); }
+      const results = await Promise.allSettled(paths.map(async path => [path, (await api.workspace(store.project, path)).tree] as const));
+      const trees = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+      if (trees.length) setFolders(current => {
+        let next: Record<string, FileEntry[]> | undefined;
+        for (const [path, tree] of trees) {
+          if (sameTree((next ?? current)[path], tree)) continue;
+          next = { ...(next ?? current), [path]: tree };
+        }
+        return next ?? current;
+      });
+      const failed = results.find(result => result.status === "rejected");
+      if (failed) { if (!quiet) setError(failed.status === "rejected" ? failed.reason instanceof Error ? failed.reason.message : String(failed.reason) : ""); }
+      else setError("");
+    } finally { if (!quiet) setLoading(undefined); }
   }, [store.project]);
 
   useEffect(() => {
     setFolders({});
     setExpanded({});
-    if (store.project) void load("");
+    expandedRef.current = {};
+    if (store.project) void load([""]);
+  }, [store.project, load]);
+
+  // The folder can change on disk while luban runs (a build writes dist/, a
+  // formatter adds a file). Poll the root and every expanded folder so the tree
+  // stays live without an fs watcher in the sandboxed renderer.
+  useEffect(() => {
+    if (!store.project || typeof window === "undefined") return;
+    const tick = (): void => {
+      if (polling.current || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+      polling.current = true;
+      void load(reloadPaths(expandedRef.current), true).finally(() => { polling.current = false; });
+    };
+    const timer = window.setInterval(tick, 2500);
+    return () => window.clearInterval(timer);
   }, [store.project, load]);
 
   const toggle = (entry: FileEntry): void => {
     if (entry.type === "file") { void store.openFile(entry.path); return; }
     const next = !expanded[entry.path];
     setExpanded(current => ({ ...current, [entry.path]: next }));
-    if (next && !folders[entry.path]) void load(entry.path);
+    // Re-read on every expand: an expanded folder is where a new file lands.
+    if (next) void load([entry.path]);
   };
 
   const draw = (entries: FileEntry[], depth = 0): React.ReactNode => entries.map(entry => (
@@ -112,7 +146,10 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
         <button className={tab === "sessions" ? "active" : ""} onClick={() => { setTab("sessions"); store.setSideTab("sessions"); }}>会话</button>
       </div>
       {tab === "files" && <>
-        <div className="desktop-section"><span>EXPLORER</span><button title="刷新文件树" onClick={() => void load("")}>↻</button></div>
+        <div className="desktop-section">
+          <span>EXPLORER</span>
+          <button title="刷新文件树（含已展开的目录）" aria-label="刷新文件树" onClick={() => void load(reloadPaths(expandedRef.current))}>↻</button>
+        </div>
         <div className="desktop-explorer-scroll">
           {error && <div className="desktop-error">{error}</div>}
           {loading === "" && !folders[""] ? <div className="desktop-muted">读取项目文件…</div> : null}
@@ -196,8 +233,41 @@ export function DesktopCodeArea({ store, timeline }: { store: WorkbenchStore; ti
   </div>;
 }
 
+const viewportWidth = (): number => typeof window === "undefined" ? 1440 : window.innerWidth;
+const viewportHeight = (): number => typeof window === "undefined" ? 900 : window.innerHeight;
+
+/**
+ * The Creator window is a floating always-on-top overlay: handy while working,
+ * in the way in every other moment. This is the visible switch that hides and
+ * restores it; the tray and View menu mirror the same state.
+ */
+export function PetToggle(): React.ReactElement | null {
+  const bridge = typeof window === "undefined" ? undefined : window.lubanDesktop;
+  const [visible, setVisible] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (!bridge?.petVisible) return;
+    void bridge.petVisible().then(setVisible).catch(() => setVisible(undefined));
+    return bridge.onPetVisibility?.(setVisible);
+  }, [bridge]);
+  if (!bridge?.togglePet) return null;
+  return <button
+    className={`desktop-pet-toggle${visible ? " on" : ""}`}
+    aria-pressed={visible === true}
+    title={visible ? "隐藏造物主悬浮窗（也可从托盘菜单恢复）" : "显示造物主悬浮窗"}
+    onClick={() => void bridge.togglePet!().then(setVisible).catch(() => setVisible(undefined))}
+  >{visible ? "◍ 造物主 · 显示中" : "◌ 造物主 · 已隐藏"}</button>;
+}
+
 export function DesktopApp(): React.ReactElement {
   const store = useWorkbench();
+  const [layout, setLayout] = useState<DesktopLayout>(() => loadLayout(viewportWidth()));
+  useEffect(() => { saveLayout(layout); }, [layout]);
+  useEffect(() => {
+    const fit = (): void => setLayout(current => fitLayout(current, viewportWidth()));
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
+  const resize = (key: keyof DesktopLayout, value: number): void => setLayout(current => ({ ...current, [key]: value }));
   useEffect(() => window.lubanDesktop?.onPetJob?.(id => store.selectJob(id)), [store.selectJob]);
   const timeline = useMemo(() => buildTimeline(store.job, store.events), [store.job, store.events]);
   useEffect(() => {
@@ -207,17 +277,27 @@ export function DesktopApp(): React.ReactElement {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [store]);
+  // Dragging writes pixel widths; the CSS variables keep the three columns and
+  // the split handles in one grid so the borders line up.
+  const paneStyle = {
+    "--explorer-width": `${layout.explorer}px`,
+    "--agent-width": `${layout.agent}px`,
+  } as unknown as React.CSSProperties;
 
-  return <div className="desktop-app">
+  return <div className="desktop-app" style={paneStyle}>
     <Explorer store={store} />
+    <PaneSplitter orientation="vertical" label="调整文件树宽度"
+      onDelta={delta => resize("explorer", clampExplorer(layout.explorer + delta, viewportWidth(), layout.agent))} />
     <main className="desktop-editor">
       <DesktopCodeArea store={store} timeline={timeline} />
-      <DesktopConsole store={store} />
+      <DesktopConsole store={store} height={layout.console} onHeight={value => resize("console", clampConsole(value, viewportHeight()))} />
     </main>
+    <PaneSplitter orientation="vertical" label="调整 Agent 栏宽度"
+      onDelta={delta => resize("agent", clampAgent(layout.agent - delta, viewportWidth(), layout.explorer))} />
     <aside className="desktop-agent">
       <AgentPanel store={store} timeline={timeline} />
     </aside>
-    <footer className="desktop-status"><span className={`dot ${store.connected ? "online" : "offline"}`} />{store.connected ? "本地 Agent 已连接" : "正在连接本地 Agent"}<span>{store.project || store.node?.workspace || ""}</span><span>{store.file ? `${store.file.lines ?? 0} 行 · ${store.file.language}` : ""}</span></footer>
+    <footer className="desktop-status"><span className={`dot ${store.connected ? "online" : "offline"}`} />{store.connected ? "本地 Agent 已连接" : "正在连接本地 Agent"}<PetToggle /><span>{store.project || store.node?.workspace || ""}</span><span>{store.file ? `${store.file.lines ?? 0} 行 · ${store.file.language}` : ""}</span></footer>
     <Toasts store={store} />
   </div>;
 }

@@ -21,6 +21,21 @@ rl.on("line", (line) => {
 });
 `;
 
+const manyToolsServer = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.id === undefined) return;
+  let result = {};
+  if (m.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "many", version: "1" } };
+  if (m.method === "tools/list") {
+    result = { tools: Array.from({ length: 10 }, (_, index) => ({ name: "tool" + index, inputSchema: { type: "object" } })) };
+  }
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }) + "\n");
+});
+`;
+
 describe("MCP stdio bridge", () => {
   it("discovers and invokes tools using the MCP lifecycle", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-mcp-"));
@@ -51,6 +66,52 @@ describe("MCP stdio bridge", () => {
       await expect(discovered.tools[0]!.execute({ text: "second" }, signal)).resolves.toContain('"call": 2');
     } finally {
       manager.close();
+    }
+  });
+
+  it("reports an exhausted schema budget as a notice instead of a startup error", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-mcp-budget-"));
+    const config = {
+      workspace,
+      mcpMaxTools: 4,
+      mcpServers: { many: { command: process.execPath, args: ["-e", manyToolsServer], env: {}, enabled: true, trusted: true } },
+    } as LubanConfig;
+    const manager = new McpManager(config);
+    try {
+      const discovered = await manager.discoverNativeTools(new AbortController().signal);
+      expect(discovered.errors).toEqual([]);
+      expect(discovered.tools).toHaveLength(4);
+      expect(new Set(discovered.tools.map(tool => tool.name)).size).toBe(4);
+      // One line, not one per skipped tool, and it names the fallback path.
+      expect(discovered.notices).toHaveLength(1);
+      expect(discovered.notices[0]).toContain("6");
+      expect(discovered.notices[0]).toContain("mcp_search_tools");
+    } finally {
+      manager.close();
+    }
+  });
+
+  it("keeps server failures as errors and stays silent below the budget", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "luban-mcp-quiet-"));
+    const config = {
+      workspace,
+      mcpServers: { fake: { command: process.execPath, args: ["-e", fakeServer], env: {}, enabled: true, trusted: true } },
+    } as LubanConfig;
+    const manager = new McpManager(config);
+    try {
+      const discovered = await manager.discoverNativeTools(new AbortController().signal);
+      expect(discovered.notices).toEqual([]);
+      expect(discovered.errors).toEqual([]);
+    } finally {
+      manager.close();
+    }
+    const broken = { workspace, mcpServers: { bad: { command: process.execPath, args: ["-e", "process.exit(0)"], env: {}, enabled: true, trusted: true } } } as LubanConfig;
+    const failed = new McpManager(broken);
+    try {
+      const discovered = await failed.discoverNativeTools(new AbortController().signal);
+      expect(discovered.errors.length).toBeGreaterThan(0);
+    } finally {
+      failed.close();
     }
   });
 

@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProjectSwitcher } from "./desktop";
+import { PetToggle, ProjectSwitcher } from "./desktop";
 import type { WorkbenchStore } from "./store";
 
 function store(overrides: Partial<WorkbenchStore> = {}): WorkbenchStore {
@@ -49,5 +49,20 @@ describe("desktop project switcher", () => {
 
     expect(html).toContain('<select id="desktop-project"');
     expect(html).not.toContain("打开文件夹");
+  });
+});
+
+describe("desktop Creator overlay switch", () => {
+  it("offers a hide control while the overlay is on screen", () => {
+    vi.stubGlobal("window", { lubanDesktop: { togglePet: vi.fn().mockResolvedValue(false), petVisible: vi.fn() } });
+    const html = renderToStaticMarkup(<PetToggle />);
+    expect(html).toContain("造物主");
+    expect(html).toContain('aria-pressed="false"');
+    expect(html).toContain("显示造物主悬浮窗");
+  });
+
+  it("stays out of the browser workbench, which has no overlay", () => {
+    vi.stubGlobal("window", {});
+    expect(renderToStaticMarkup(<PetToggle />)).toBe("");
   });
 });

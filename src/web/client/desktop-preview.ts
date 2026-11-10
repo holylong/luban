@@ -73,7 +73,27 @@ export interface DiagramPage {
 
 export interface DiagramPreview { kind: "diagram"; path: string; pages: DiagramPage[] }
 
-export type DocumentPreview = SlidesPreview | DiagramPreview;
+export interface SheetCell { text: string; numeric?: boolean }
+export interface SheetRow { index: number; cells: (SheetCell | null)[] }
+export interface SheetPage {
+  name: string;
+  columns: number;
+  rows: SheetRow[];
+  /** Rows and columns the backend hid to keep the preview bounded. */
+  truncatedRows?: number;
+  truncatedColumns?: number;
+}
+export interface SheetPreview { kind: "sheet"; path: string; sheets: SheetPage[] }
+
+export type WordBlock =
+  | { type: "heading"; level: number; text: string }
+  | { type: "paragraph"; text: string }
+  | { type: "list"; ordered?: boolean; items: string[] }
+  | { type: "table"; rows: string[][] };
+
+export interface WordPreview { kind: "word"; path: string; blocks: WordBlock[] }
+
+export type DocumentPreview = SlidesPreview | DiagramPreview | SheetPreview | WordPreview;
 
 /** Total text height of a label, used to centre wrapped lines in its shape. */
 export function labelAnchor(node: DiagramNode): { x: number; top: number; lineHeight: number } {

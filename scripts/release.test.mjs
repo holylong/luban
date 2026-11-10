@@ -3,8 +3,16 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { artifactSignature, releasePlan, resolveArtifacts, writeChecksums } from "./release.mjs";
+import { artifactSignature, releasePlan, resolveArtifacts, versionProblem, writeChecksums } from "./release.mjs";
 import { releaseEnvironment } from "./lib/release-network.mjs";
+
+test("version scheme counts patches 1-20 and rolls the minor over", () => {
+  assert.equal(versionProblem("2.2.3"), null);
+  assert.equal(versionProblem("2.3.1"), null);
+  assert.match(versionProblem("2.2.0"), /patch must be 1-20/);
+  assert.match(versionProblem("2.2.21"), /patch must be 1-20/);
+  assert.match(versionProblem("v2.2.3"), /MAJOR\.MINOR\.PATCH/);
+});
 
 test("domestic Electron mirror defaults preserve explicit overrides", () => {
   assert.equal(releaseEnvironment({}).ELECTRON_MIRROR, "https://npmmirror.com/mirrors/electron/");

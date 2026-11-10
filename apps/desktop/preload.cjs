@@ -22,6 +22,14 @@ contextBridge.exposeInMainWorld("lubanDesktop", Object.freeze({
   openPath: path => ipcRenderer.invoke("luban:openPath", path),
   // Opens the folder picker in the main process, which owns workspace switching.
   openWorkspace: () => ipcRenderer.invoke("luban:openWorkspace"),
+  // The Creator window floats on top, so the workbench owns a switch for it.
+  petVisible: () => ipcRenderer.invoke("luban:petVisible"),
+  togglePet: () => ipcRenderer.invoke("luban:petToggle"),
+  onPetVisibility: listener => {
+    const handler = (_event, visible) => listener(visible === true);
+    ipcRenderer.on("luban:petVisibility", handler);
+    return () => ipcRenderer.removeListener("luban:petVisibility", handler);
+  },
   runCommand: command => ipcRenderer.invoke("luban:runCommand", command),
   stopCommand: id => ipcRenderer.invoke("luban:stopCommand", id),
   startTerminal: input => ipcRenderer.invoke("luban:startTerminal", input),

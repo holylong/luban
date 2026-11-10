@@ -91,4 +91,143 @@ function pptxOf({ title = "季度回顾", body = "第一点\n第二点", store =
   }, { store });
 }
 
-module.exports = { zipOf, pptxOf };
+
+const SECTOR = 512;
+const END_OF_CHAIN = 0xfffffffe;
+const FREE_SECTOR = 0xffffffff;
+
+/**
+ * Build a minimal Compound File Binary image holding the given streams.
+ * Streams are padded past the 4096-byte mini-stream cutoff so the fixture stays
+ * inside one FAT sector instead of reimplementing the mini filesystem.
+ */
+function compoundOf(streams) {
+  const items = Object.entries(streams).map(([name, value]) => ({
+    name, data: Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8"),
+  }));
+  const padded = items.map(item => item.data.length >= 4096 ? item.data : Buffer.concat([item.data, Buffer.alloc(4096 - item.data.length)]));
+  const streamSectors = padded.map(data => Math.ceil(data.length / SECTOR));
+  const directorySectors = Math.ceil((items.length + 1) / 4);
+  const dataSectors = streamSectors.reduce((total, count) => total + count, 0);
+  const totalSectors = 1 + directorySectors + dataSectors;
+  if (totalSectors > 128) throw new Error("fixture too large for one FAT sector");
+
+  const image = Buffer.alloc((totalSectors + 1) * SECTOR);
+  image.writeUInt32LE(0xe011cfd0, 0);
+  image.writeUInt32LE(0xe11ab1a1, 4);
+  image.writeUInt16LE(0x003e, 0x18);
+  image.writeUInt16LE(3, 0x1a);
+  image.writeUInt16LE(0xfffe, 0x1c);
+  image.writeUInt16LE(9, 0x1e);
+  image.writeUInt16LE(6, 0x20);
+  image.writeUInt32LE(1, 0x2c);
+  image.writeUInt32LE(1, 0x30);
+  image.writeUInt32LE(4096, 0x38);
+  image.writeUInt32LE(END_OF_CHAIN, 0x3c);
+  image.writeUInt32LE(0, 0x40);
+  image.writeUInt32LE(END_OF_CHAIN, 0x44);
+  image.writeUInt32LE(0, 0x48);
+  for (let index = 0; index < 109; index++) image.writeUInt32LE(index === 0 ? 0 : FREE_SECTOR, 0x4c + index * 4);
+
+  const fat = Buffer.alloc(SECTOR, 0xff);
+  const fatWrite = (sector, value) => fat.writeUInt32LE(value, sector * 4);
+  fatWrite(0, 0xfffffffd);
+  for (let index = 0; index < directorySectors; index++) fatWrite(1 + index, index === directorySectors - 1 ? END_OF_CHAIN : 2 + index);
+  let sector = 1 + directorySectors;
+  for (const count of streamSectors) {
+    for (let index = 0; index < count; index++) fatWrite(sector + index, index === count - 1 ? END_OF_CHAIN : sector + index + 1);
+    sector += count;
+  }
+  fat.copy(image, SECTOR);
+
+  const directory = Buffer.alloc(directorySectors * SECTOR);
+  const entry = (index, { name, type, start, size, child, right }) => {
+    const base = index * 128;
+    const nameBytes = Buffer.from(name, "utf16le").subarray(0, 62);
+    nameBytes.copy(directory, base);
+    directory.writeUInt16LE(nameBytes.length + 2, base + 0x40);
+    directory.writeUInt8(type, base + 0x42);
+    directory.writeUInt8(1, base + 0x43);
+    directory.writeUInt32LE(FREE_SECTOR, base + 0x44);
+    directory.writeUInt32LE(right ?? FREE_SECTOR, base + 0x48);
+    directory.writeUInt32LE(child ?? FREE_SECTOR, base + 0x4c);
+    directory.writeUInt32LE(start, base + 0x74);
+    directory.writeUInt32LE(size, base + 0x78);
+  };
+  entry(0, { name: "Root Entry", type: 5, start: END_OF_CHAIN, size: 0, child: 1 });
+  padded.forEach((data, index) => entry(index + 1, {
+    name: items[index].name, type: 2, start: (1 + directorySectors) + streamSectors.slice(0, index).reduce((total, count) => total + count, 0),
+    size: data.length, right: index + 2 <= items.length ? index + 2 : FREE_SECTOR,
+  }));
+  directory.copy(image, (1 + 1) * SECTOR);
+
+  let offset = (2 + directorySectors) * SECTOR;
+  for (const data of padded) { data.copy(image, offset); offset += data.length; }
+  return image;
+}
+
+/** A Word 97 document whose single text piece holds the given text. */
+function wordDocOf(text) {
+  const encoded = Buffer.from(text, "utf16le");
+  const word = Buffer.alloc(0x800 + encoded.length);
+  word.writeUInt16LE(0xa5ec, 0);
+  word.writeUInt16LE(0x00c1, 2);
+  word.writeUInt16LE(0, 0x0a);
+  word.writeUInt32LE(text.length, 0x4c);
+  encoded.copy(word, 0x800);
+  const clx = Buffer.alloc(5 + 8 + 8);
+  clx.writeUInt8(0x02, 0);
+  clx.writeUInt32LE(16, 1);
+  clx.writeUInt32LE(0, 5);
+  clx.writeUInt32LE(text.length, 9);
+  clx.writeUInt32LE(0x800, 5 + 8 + 2);
+  word.writeUInt32LE(0, 0x1a2);
+  word.writeUInt32LE(clx.length, 0x1a6);
+  return compoundOf({ WordDocument: word, "0Table": clx });
+}
+
+/** A BIFF8 workbook with one sheet, one shared string and one number. */
+function xlsOf() {
+  const record = (type, data) => {
+    const head = Buffer.alloc(4);
+    head.writeUInt16LE(type, 0);
+    head.writeUInt16LE(data.length, 2);
+    return Buffer.concat([head, data]);
+  };
+  const bof = type => {
+    const data = Buffer.alloc(16);
+    data.writeUInt16LE(0x0600, 0);
+    data.writeUInt16LE(type, 2);
+    return record(0x0809, data);
+  };
+  const boundsheet = (offset, name) => {
+    const chars = Buffer.from(name, "utf8");
+    const data = Buffer.alloc(8 + chars.length);
+    data.writeUInt32LE(offset, 0);
+    data.writeUInt16LE(0, 4);
+    data.writeUInt8(chars.length, 6);
+    data.writeUInt8(0, 7);
+    chars.copy(data, 8);
+    return record(0x0085, data);
+  };
+  const sst = Buffer.alloc(8 + 3 + 5 * 2);
+  sst.writeUInt32LE(1, 0);
+  sst.writeUInt32LE(1, 4);
+  sst.writeUInt16LE(5, 8);
+  sst.writeUInt8(1, 10);
+  Buffer.from("Hello", "utf16le").copy(sst, 11);
+  const label = Buffer.alloc(10);
+  label.writeUInt16LE(0, 0);
+  label.writeUInt16LE(0, 2);
+  label.writeUInt32LE(0, 6);
+  const number = Buffer.alloc(14);
+  number.writeUInt16LE(0, 0);
+  number.writeUInt16LE(1, 2);
+  number.writeDoubleLE(42.5, 6);
+  const globals = Buffer.concat([bof(0x0005), boundsheet(0, "Data"), record(0x00fc, sst), record(0x000a, Buffer.alloc(0))]);
+  globals.writeUInt32LE(globals.length, 24);
+  const sheet = Buffer.concat([bof(0x0010), record(0x00fd, label), record(0x0203, number), record(0x000a, Buffer.alloc(0))]);
+  return compoundOf({ Workbook: Buffer.concat([globals, sheet]) });
+}
+
+module.exports = { zipOf, pptxOf, compoundOf, wordDocOf, xlsOf };
