@@ -1,6 +1,7 @@
 import type { LubanConfig } from "../core/types.js";
 import type { MeshRuntime } from "../core/mesh/runtime.js";
 import type { MeshJob } from "../core/mesh/job-store.js";
+import { liveSessions } from "../core/live-session.js";
 
 /**
  * Compact status the node pushes with every relay poll.
@@ -20,10 +21,25 @@ export interface RelayJobSummary {
   session_id?: string;
 }
 
+/**
+ * A session the terminal is running right now.
+ *
+ * Desktop workbench turns are mesh jobs, so they already travel in `jobs`. A
+ * TUI session runs in-process and never becomes a job, which used to leave the
+ * phone showing "空闲" for a laptop that was visibly busy.
+ */
+export interface RelaySessionSummary {
+  id: string;
+  project: string;
+  title: string;
+  updated_at: number;
+}
+
 export interface RelayDeviceStatus {
   updated_at: number;
   model?: string;
   jobs: RelayJobSummary[];
+  sessions: RelaySessionSummary[];
 }
 
 const MAX_JOBS = 8;
@@ -46,8 +62,27 @@ export function summarizeJob(job: MeshJob): RelayJobSummary {
   };
 }
 
+/** Runs claimed by the terminal, which the job list cannot show. */
+function terminalSessions(config: LubanConfig): RelaySessionSummary[] {
+  if (!config.home) return [];
+  return liveSessions.runningSummary(config.home)
+    // Job-backed runs are mesh jobs: reporting them twice duplicates the card.
+    .filter(run => !run.jobId)
+    .slice(0, MAX_JOBS)
+    .map(run => {
+      const seconds = Date.parse(run.updatedAt) / 1000;
+      return {
+        id: run.id,
+        project: run.project,
+        title: clip(run.title || run.id),
+        updated_at: Number.isFinite(seconds) ? Math.round(seconds) : Math.round(Date.now() / 1000),
+      };
+    });
+}
+
 export async function readDeviceStatus(config: LubanConfig, mesh?: MeshRuntime): Promise<RelayDeviceStatus> {
-  if (!mesh) return { updated_at: Date.now() / 1000, model: config.model.model, jobs: [] };
+  const sessions = terminalSessions(config);
+  if (!mesh) return { updated_at: Date.now() / 1000, model: config.model.model, jobs: [], sessions };
   // Instances share one job directory, so an unfiltered list shows every card on
   // the phone the same recent task: ten devices then look like ten copies of one
   // instruction. A device reports the work addressed to it (or claimed by it).
@@ -60,5 +95,6 @@ export async function readDeviceStatus(config: LubanConfig, mesh?: MeshRuntime):
     updated_at: Date.now() / 1000,
     model: config.model.model,
     jobs: jobs.map(summarizeJob),
+    sessions,
   };
 }

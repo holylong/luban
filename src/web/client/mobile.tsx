@@ -1,3 +1,5 @@
+import type { RelayDeviceStatus } from "./mobile-device";
+import { MobileDeviceCard } from "./mobile-device-card";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setNodeScope } from "./api";
 import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, ReasoningEffort, SessionDetail, SessionSummary, ToolRun } from "./types";
@@ -28,16 +30,6 @@ import {
 type Tab = "live" | "devices" | "jobs" | "approvals" | "settings";
 type TaskMode = "edits" | "agent" | "read";
 
-interface RelayJob {
-  id: string;
-  title: string;
-  instruction: string;
-  status: string;
-  progress: number;
-  updated_at: number;
-  session_id?: string;
-}
-
 interface RelayNode {
   id: string;
   device_id?: string;
@@ -49,7 +41,7 @@ interface RelayNode {
   online: boolean;
   last_seen: number;
   connected_at: number;
-  status?: { updated_at: number; model?: string; jobs: RelayJob[] };
+  status?: RelayDeviceStatus;
 }
 
 interface AccountView {
@@ -1000,40 +992,12 @@ export function MobileApp(): React.ReactElement {
               {relayMode && relayNodes.length === 0 && (
                 <div className="m-empty"><h2>还没有 luban 实例</h2><p>在「设置 → 添加电脑」生成设备令牌，然后在电脑上启动 luban web 并接入中继。</p></div>
               )}
-              {relayNodes.map(device => {
-                const deviceJobs = device.status?.jobs ?? [];
-                const active = deviceJobs.filter(item => ACTIVE_STATUS.has(item.status));
-                const latest = active[0] ?? deviceJobs[0];
-                return (
-                  <div className={`m-card m-device ${device.id === scope ? "active" : ""}`} key={device.id}>
-                    <div className="m-device-row">
-                      <span className={`m-dot ${device.online ? "online" : "offline"}`} />
-                      <strong>{device.name}</strong>
-                      <span className={`m-chip ${device.online ? "done" : "failed"}`}>{device.online ? "在线" : "离线"}</span>
-                      {active.length > 1 && <span className="m-chip working">{active.length} 个进行中</span>}
-                    </div>
-                    <div className="m-device-path">{device.workspace || "未报告工作区"}{device.status?.model ? ` · ${device.status.model}` : ""}</div>
-                    {latest ? (
-                      <>
-                        <div className="m-device-job">
-                          <span className={`m-chip ${latest.status}`}>{STATUS_LABELS[latest.status as keyof typeof STATUS_LABELS] ?? latest.status}</span>
-                          <span>{latest.title || latest.instruction || latest.id}</span>
-                        </div>
-                        <div className="m-note" style={{ marginTop: 5 }}>
-                          {ACTIVE_STATUS.has(latest.status) ? `进度 ${Math.round(latest.progress)}%` : "最近任务"}
-                          {latest.updated_at ? ` · ${relativeTime(latest.updated_at)}前更新` : ""}
-                          {deviceJobs.length > 1 ? ` · 共 ${deviceJobs.length} 条记录` : ""}
-                        </div>
-                      </>
-                    ) : <div className="m-note">{device.online ? "空闲，等待派活" : "离线"}</div>}
-                    <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
-                      <button className="m-btn primary" disabled={!device.online} onClick={() => openDevice(device.id)}>打开并派活</button>
-                      <button className="m-btn" onClick={() => { chooseNode(device.id); setTab("jobs"); }}>查看任务</button>
-                      {!device.online && <button className="m-btn" onClick={() => void removeDevice(device.id)}>移除</button>}
-                    </div>
-                  </div>
-                );
-              })}
+              {relayNodes.map(device => (
+                <MobileDeviceCard key={device.id} device={device} current={device.id === scope}
+                  onOpen={() => openDevice(device.id)}
+                  onJobs={() => { chooseNode(device.id); setTab("jobs"); }}
+                  onRemove={() => void removeDevice(device.id)} />
+              ))}
             </>
           )}
 

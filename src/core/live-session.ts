@@ -2,6 +2,15 @@ import { resolve } from "node:path";
 import type { SessionRecord } from "./types.js";
 import type { JobStreamEvent, JobStreamRecord } from "./mesh/runtime.js";
 
+export interface LiveSessionRun {
+  id: string;
+  project: string;
+  title: string;
+  updatedAt: string;
+  /** Set when the run is a mesh job the phone already sees in its job list. */
+  jobId?: string;
+}
+
 export interface LiveSessionSnapshot {
   session: SessionRecord;
   running: boolean;
@@ -137,6 +146,30 @@ export class LiveSessionRegistry {
   list(home: string, project: string): LiveSessionSnapshot[] {
     const prefix = JSON.stringify([resolve(home), project]).slice(0, -1) + ",";
     return [...this.snapshots].filter(([key]) => key.startsWith(prefix)).map(([, entry]) => structuredClone(entry.snapshot));
+  }
+
+  /**
+   * Light projection of every run under one home, for status reporting.
+   *
+   * `list()` clones the whole transcript and replay window; the relay asks for a
+   * status snapshot on every poll, so this hands back only what a device card
+   * shows. `jobId` tells the caller the run is already visible as a mesh job.
+   */
+  runningSummary(home: string): LiveSessionRun[] {
+    const prefix = JSON.stringify([resolve(home)]).slice(0, -1) + ",";
+    const runs: LiveSessionRun[] = [];
+    for (const [key, entry] of this.snapshots) {
+      if (!key.startsWith(prefix) || !entry.snapshot.running) continue;
+      const session = entry.snapshot.session;
+      runs.push({
+        id: session.id,
+        project: session.project,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        ...(entry.snapshot.jobId ? { jobId: entry.snapshot.jobId } : {}),
+      });
+    }
+    return runs;
   }
 
   remove(home: string, project: string, id: string): void {
