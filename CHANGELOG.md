@@ -1,3 +1,8 @@
+## 2.2.5 — 2026-11-10
+
+- 桌面文件树按格式显示不同的彩色 SVG 图标：代码、图片、PDF、Word、Excel/CSV、幻灯片、draw.io、音视频、压缩包、配置、Markdown、文本和数据库；文件夹区分展开与收起，未知格式保留通用文件图标。
+- 识别大小写后缀、draw.io 复合后缀、`.env`/`.gitignore` 等配置文件和 Dockerfile/Makefile；图标内置，无需联网或额外读取文件内容。
+
 ## 2.2.4 — 2026-11-10
 
 - 安装后的应用名统一成 `luban`：macOS 包名从 `luban Desktop.app` 改为 `luban.app`，`CFBundleName`/`CFBundleDisplayName`、DMG 卷名、Windows 版本信息与快捷方式、Linux 应用菜单、托盘提示、菜单栏应用名都只显示 `luban`。

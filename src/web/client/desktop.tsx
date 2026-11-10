@@ -16,6 +16,7 @@ import { DesktopThemePicker } from "./desktop-theme-picker";
 import { clampAgent, clampConsole, clampExplorer, fitLayout, loadLayout, saveLayout, type DesktopLayout } from "./desktop-layout";
 import { PaneSplitter } from "./desktop-panes";
 import { reloadPaths, sameTree } from "./desktop-tree";
+import { DesktopFileIcon } from "./desktop-file-icon";
 
 type ExplorerTab = "files" | "sessions";
 
@@ -129,7 +130,7 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
         title={entry.path}
       >
         <span className="desktop-chevron">{entry.type === "dir" ? expanded[entry.path] ? "⌄" : "›" : ""}</span>
-        <span className="desktop-file-icon">{entry.type === "dir" ? "▣" : "▤"}</span>
+        <DesktopFileIcon path={entry.name} directory={entry.type === "dir"} expanded={Boolean(expanded[entry.path])} />
         <span className="desktop-file-name">{entry.name}</span>
       </button>
       {entry.type === "dir" && expanded[entry.path] && folders[entry.path] ? draw(folders[entry.path], depth + 1) : null}
