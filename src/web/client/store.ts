@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api";
+import { nextFollowableLocalJob } from "./desktop-conversation";
 import type {
   ApprovalView, DiffPayload, FileContent, FileEntry, InboxMessage, JobStreamRecord, MeshJob,
   NodeInfo, PeerView, QuestionView, SessionDetail, SessionSummary,
@@ -108,6 +109,7 @@ export function useWorkbench(): WorkbenchStore {
   const toastId = useRef(0);
   const selectedRef = useRef<string | undefined>(undefined);
   selectedRef.current = selectedId;
+  const followedLocalJobs = useRef(new Set<string>());
   // Mirrors `queued` so callbacks always read the freshest list.
   const queueRef = useRef<string[]>([]);
   const setQueue = useCallback((next: string[]) => {
@@ -186,6 +188,31 @@ export function useWorkbench(): WorkbenchStore {
     catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
   }, [project, notify]);
 
+  /**
+   * Open a run that arrived from the phone or another browser. Selecting the
+   * job is not enough: the right column reads the saved session for history, so
+   * the session pointer must follow the job too or a later round would sit next
+   * to the wrong conversation.
+   */
+  const followJob = useCallback((next: MeshJob) => {
+    selectJob(next.id);
+    if (!next.session_id) {
+      setSession(undefined);
+      setActiveSessionId(undefined);
+      return;
+    }
+    setActiveSessionId(next.session_id);
+    const sessionProject = next.project_id || project;
+    if (!sessionProject) return;
+    void api.session(next.session_id, sessionProject)
+      .then(detail => {
+        if (selectedRef.current !== next.id) return;
+        setSession(detail);
+        void refreshSessions();
+      })
+      .catch(() => undefined);
+  }, [project, refreshSessions, selectJob]);
+
   const browse = useCallback(async (sub: string) => {
     if (!project) return;
     try {
@@ -235,6 +262,9 @@ export function useWorkbench(): WorkbenchStore {
         instruction, project_id: project, mode, interaction: "on",
         ...(activeSessionId ? { session_id: activeSessionId } : {}),
       });
+      // This window opens its own submission explicitly; do not let the
+      // follow effect mistake it for a phone run and clear the session pointer.
+      followedLocalJobs.current.add(reply.job_id);
       if (!reply.interactive) notify("服务器未启用交互审批：本任务按自动放行执行");
       await refreshOverview();
       selectJob(reply.job_id);
@@ -324,6 +354,17 @@ export function useWorkbench(): WorkbenchStore {
   useEffect(() => { void refreshOverview(); }, [refreshOverview]);
   useEffect(() => { if (project) void browse(""); }, [project, browse]);
   useEffect(() => { if (project && sideTab === "sessions") void refreshSessions(); }, [project, sideTab, refreshSessions]);
+
+  // A phone or another browser can start a run in the conversation this window
+  // has open. Follow that local run once, unless the operator is already busy
+  // with one in this window.
+  useEffect(() => {
+    if (!project) return;
+    const next = nextFollowableLocalJob(jobs, node?.name, job, followedLocalJobs.current, project);
+    if (!next) return;
+    followedLocalJobs.current.add(next.id);
+    followJob(next);
+  }, [jobs, node?.name, job?.id, job?.status, project, followJob]);
 
   // Periodic reconciliation: the stream carries the live detail, polling is the
   // safety net for missed frames and for peers/jobs that changed elsewhere.

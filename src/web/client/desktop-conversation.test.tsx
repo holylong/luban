@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { conversationEntries, historyBeforeRun } from "./desktop-conversation";
+import { conversationEntries, historyBeforeRun, nextFollowableLocalJob } from "./desktop-conversation";
 import { DesktopChanges, collectDesktopEdits } from "./desktop-changes";
 import { DesktopSessionHistory } from "./desktop";
 import { Transcript } from "./transcript";
@@ -21,6 +21,17 @@ describe("desktop continuous conversations", () => {
     const entries = conversationEntries([{ id: "s1", title: "conversation" } as SessionSummary], [job, { ...job, id: "round1", created_at: 99 }, { ...job, id: "other", session_id: "other", project_id: "other" }], "p");
     expect(entries).toHaveLength(1);
     expect(entries[0].job?.id).toBe("round2");
+  });
+  it("follows the newest local phone run only while this window is idle", () => {
+    const local = (id: string, status: MeshJob["status"], created: number): MeshJob =>
+      ({ ...job, id, source: "pc", target: "pc", status, created_at: created });
+    const newer = local("phone-new", "working", 200);
+    const older = local("phone-old", "queued", 150);
+    const remote = { ...local("remote", "working", 300), source: "other" };
+    const otherProject = { ...local("other-project", "working", 400), project_id: "other" };
+    expect(nextFollowableLocalJob([remote, otherProject, older, newer], "pc", { ...job, status: "done" }, new Set(), "p")?.id).toBe("phone-new");
+    expect(nextFollowableLocalJob([newer], "pc", { ...job, status: "working" }, new Set(), "p")).toBeUndefined();
+    expect(nextFollowableLocalJob([newer], "pc", { ...job, status: "done" }, new Set(["phone-new"]), "p")).toBeUndefined();
   });
   it("keeps earlier messages and current execution in one scrollable thread without duplicating current turn", () => {
     const history = historyBeforeRun(session, job);
