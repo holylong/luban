@@ -266,7 +266,7 @@ async function packageVariant(kind) {
     cpSync(electronSource, join(payload, "electron"), { recursive: true });
     await rcedit(join(payload, "electron", "electron.exe"), {
       icon: join(payload, "luban.ico"),
-      "version-string": { ProductName: "luban Desktop", FileDescription: "luban Desktop" },
+      "version-string": { ProductName: "luban", FileDescription: "luban desktop workspace" },
       "product-version": version,
     });
     cpSync(join(root, "apps", "desktop"), join(payload, "desktop"), { recursive: true });

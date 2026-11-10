@@ -151,7 +151,7 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
 
 ### 桌面工作台
 
-`npm run desktop -- /path/to/project` 启动源码版，安装包里的 luban Desktop 直接打开；菜单「文件 → 打开项目文件夹」切换工作区。
+`npm run desktop -- /path/to/project` 启动源码版，安装包里的 luban 直接打开；菜单「文件 → 打开项目文件夹」切换工作区。
 
 **文件与编辑**
 
@@ -222,7 +222,7 @@ Linux 安装包按用途命名，选对应架构即可：
 | 文件名 | 安装后入口 | 内容 |
 | --- | --- | --- |
 | `luban-cli_<版本>_<架构>.deb` | `luban` 或 `luban-cli` | 终端 Agent，内置 Node.js |
-| `luban-desktop_<版本>_<架构>.deb` | 应用菜单中的 luban Desktop，或 `luban-desktop` | 图形工作台，内置 Node.js 和 Electron |
+| `luban-desktop_<版本>_<架构>.deb` | 应用菜单中的 luban，或 `luban-desktop` | 图形工作台，内置 Node.js 和 Electron |
 
 双击 `.deb` 安装，或运行 `sudo apt install ./release/luban-cli_<版本>_<架构>.deb` / `sudo apt install ./release/luban-desktop_<版本>_<架构>.deb`。两个安装包可以同时安装。桌面版左侧是项目文件树，中间是带行号和语法高亮的只读代码预览，右侧是 Agent 对话与执行记录。首次启动默认打开家目录；菜单「文件 → 打开项目文件夹」（`Ctrl+O`）可选择项目，之后会记住上次项目。也可以执行 `luban-desktop /path/to/project`。
 
@@ -248,12 +248,12 @@ macOS 包同样是自带 Node.js 的 zip，按 CPU 架构下载后解压即可�
 | 文件名 | 入口 | 内容 |
 | --- | --- | --- |
 | `luban-cli-<版本>-mac-<arch>.zip` | `./luban` | 终端 Agent，内置 Node.js |
-| `luban-desktop-<版本>-mac-<arch>.dmg` | 拖入「应用程序」后打开 `luban Desktop.app` | 自包含图形工作台：Electron、Node.js 与 CLI 都在 App 内 |
-| `luban-desktop-<版本>-mac-<arch>.zip` | 解压后打开 `luban Desktop.app`，或 `./luband` | 同上，另含 `./luban`、`./luband` 便捷脚本；仅在 dmg 创建失败时作为回退产物 |
+| `luban-desktop-<版本>-mac-<arch>.dmg` | 拖入「应用程序」后打开 `luban.app` | 自包含图形工作台：Electron、Node.js 与 CLI 都在 App 内 |
+| `luban-desktop-<版本>-mac-<arch>.zip` | 解压后打开 `luban.app`，或 `./luband` | 同上，另含 `./luban`、`./luband` 便捷脚本；仅在 dmg 创建失败时作为回退产物 |
 
 `<arch>` 为 `x64` 或 `arm64`（Apple Silicon 用 `arm64`）。安装包为 ad-hoc 签名，从浏览器下载后首次打开若被 Gatekeeper 拦截，执行 `xattr -dr com.apple.quarantine .` 即可。
 
-维护者在 macOS 上运行 `npm ci && node node_modules/electron/install.js && npm run package:macos`，会在 `release/` 生成 CLI zip 和桌面 dmg 安装镜像（`hdiutil` 失败时改为桌面 zip）；也可单独运行 `npm run package:macos:cli` 或 `npm run package:macos:desktop`。桌面 App 是自包含的：`Contents/Resources/app` 放 Electron 入口，`Contents/Resources/luban` 是内置 CLI 运行时，`Contents/Resources/node` 是 Node.js 可执行文件，入口脚本把这两条路径通过 `LUBAN_NODE_BIN`、`LUBAN_CLI` 传给桌面主进程，因此从 Finder 双击、拖入「应用程序」或移动位置都能启动。dmg 卷内只有 `luban Desktop.app` 和指向 `/Applications` 的别名，直接拖拽即可安装。
+维护者在 macOS 上运行 `npm ci && node node_modules/electron/install.js && npm run package:macos`，会在 `release/` 生成 CLI zip 和桌面 dmg 安装镜像（`hdiutil` 失败时改为桌面 zip）；也可单独运行 `npm run package:macos:cli` 或 `npm run package:macos:desktop`。桌面 App 是自包含的：`Contents/Resources/app` 放 Electron 入口，`Contents/Resources/luban` 是内置 CLI 运行时，`Contents/Resources/node` 是 Node.js 可执行文件，入口脚本把这两条路径通过 `LUBAN_NODE_BIN`、`LUBAN_CLI` 传给桌面主进程，因此从 Finder 双击、拖入「应用程序」或移动位置都能启动。dmg 卷内只有 `luban.app` 和指向 `/Applications` 的别名，直接拖拽即可安装。
 
 ### 从源码安装
 

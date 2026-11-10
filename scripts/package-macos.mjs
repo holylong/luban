@@ -17,7 +17,7 @@ const selection = process.argv[2] || "all";
 if (process.platform !== "darwin" || !architecture) throw new Error("package:macos requires macOS x64 or arm64");
 if (!["all", "cli", "desktop"].includes(selection)) throw new Error("choose all, cli, or desktop");
 
-const APP_NAME = "luban Desktop";
+const APP_NAME = "luban";
 
 function run(label, command, args, cwd = root, capture = false) {
   process.stdout.write(`\n> ${label}\n`);
@@ -64,7 +64,10 @@ function copyRuntime(payload, kind) {
 }
 
 function makeIcon(resources) {
-  const source = join(root, "assets", "luban-512.png");
+  // luban-app-1024.png is the pre-rounded, transparent-margin icon macOS expects;
+  // the square luban-512.png stays for tray, window and web use.
+  const rounded = join(root, "assets", "luban-app-1024.png");
+  const source = existsSync(rounded) ? rounded : join(root, "assets", "luban-512.png");
   if (!existsSync(source)) return false;
   const work = mkdtempSync(join(tmpdir(), "luban-icns-"));
   const iconset = join(work, "AppIcon.iconset");
@@ -126,7 +129,7 @@ function buildApp(payload) {
   cpSync(join(root, "apps", "desktop"), join(appDir, "desktop"), { recursive: true });
   writeFileSync(join(appDir, "package.json"), `${JSON.stringify({ name: "luban-desktop", private: true, main: "main.cjs" }, null, 2)}\n`);
   writeFileSync(join(appDir, "main.cjs"), [
-    "// Electron entry point: hand the bundled Node runtime and CLI to luban Desktop.",
+    "// Electron entry point: hand the bundled Node runtime and CLI to luban.",
     'const { app } = require("electron");',
     'const { join, resolve } = require("node:path");',
     "// <bundle>/Contents/Resources/app -> <bundle>/Contents/Resources",
@@ -147,7 +150,7 @@ function writeReadme(payload, kind) {
     "",
     kind === "cli"
       ? "Run ./luban from this folder, or add this folder to PATH."
-      : "Drag \"luban Desktop.app\" to /Applications (it also runs in place), or start it with ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
+      : "Drag \"luban.app\" to /Applications (it also runs in place), or start it with ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
     ...(kind === "desktop" ? [`The app carries its own Node.js runtime and CLI, so moving "${APP_NAME}.app" elsewhere keeps working.`] : []),
     "Node.js is bundled; no local Node.js installation is required.",
     "Configuration is read from ~/.luban/config.json.",
@@ -220,7 +223,7 @@ function packageVariant(kind) {
   // created the same folder is zipped instead. A CLI folder is always a zip.
   if (kind === "desktop") {
     const volume = stageDmg(payload, stageRoot);
-    if (dmgPackage(volume, output, folder, `luban Desktop ${version}`)) return;
+    if (dmgPackage(volume, output, folder, `luban ${version}`)) return;
     movePath(join(volume, `${APP_NAME}.app`), join(payload, `${APP_NAME}.app`));
     rmSync(volume, { recursive: true, force: true });
   }

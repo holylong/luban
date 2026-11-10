@@ -134,7 +134,7 @@ function trayImage() {
   return image.resize({ width: size, height: size });
 }
 function trayTooltip() {
-  return `luban Desktop${currentWorkspace ? ` · ${basename(currentWorkspace)}` : ""}`;
+  return `luban${currentWorkspace ? ` · ${basename(currentWorkspace)}` : ""}`;
 }
 function quitApp() {
   // The tray may be the only visible surface; surface the window first so an
@@ -406,7 +406,7 @@ async function openWorkspace(workspace) {
   } finally { opening = false; approvedUnload = false; }
 }
 app.whenReady().then(async () => {
-  app.setName("luban Desktop");
+  app.setName("luban");
   // Create the tray before the workspace opens so an unopenable project still
   // has a visible way out (退出 luban) instead of an invisible process.
   createTray();
@@ -430,7 +430,7 @@ app.whenReady().then(async () => {
     .at(-1);
   await openWorkspace(argument || savedWorkspace() || homedir());
   if (backendAccess) { startBot(); if (petPreference()) createPet(); }
-}).catch(error => { dialog.showErrorBox("luban Desktop", String(error)); app.quit(); });
+}).catch(error => { dialog.showErrorBox("luban", String(error)); app.quit(); });
 // before-quit may be canceled by a dirty window; keep its backend alive.
 app.on('before-quit', event => {
   quitting = true;

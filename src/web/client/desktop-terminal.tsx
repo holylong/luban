@@ -85,7 +85,7 @@ export function DesktopTerminal(): React.ReactElement {
   return <div className="desktop-terminal-panel">
     <div className="desktop-terminal-bar">
       <span className={`dot ${bridge ? "working" : ""}`} />
-      <span className="desktop-terminal-status">{bridge ? status : "终端需要 luban Desktop 桌面连接"}</span>
+      <span className="desktop-terminal-status">{bridge ? status : "终端需要 luban 桌面版连接"}</span>
       <span className="spacer" />
       <button onClick={() => setGeneration(value => value + 1)} disabled={!bridge}>重启终端</button>
     </div>

@@ -2,11 +2,11 @@
 # Open the luban desktop workspace from a terminal, reusing the runtime that
 # lives inside the self-contained app bundle.
 root=$(cd "$(dirname "$0")" && pwd)
-resources="$root/luban Desktop.app/Contents/Resources"
+resources="$root/luban.app/Contents/Resources"
 if [ ! -x "$resources/node" ]; then
-  echo "luban Desktop.app is missing from $root" >&2
+  echo "luban.app is missing from $root" >&2
   exit 1
 fi
 export LUBAN_NODE_BIN="$resources/node"
 export LUBAN_CLI="$resources/luban/dist/cli.js"
-exec "$root/luban Desktop.app/Contents/MacOS/Electron" "$@"
+exec "$root/luban.app/Contents/MacOS/Electron" "$@"

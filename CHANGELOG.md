@@ -1,3 +1,9 @@
+## 2.2.4 — 2026-11-10
+
+- 安装后的应用名统一成 `luban`：macOS 包名从 `luban Desktop.app` 改为 `luban.app`，`CFBundleName`/`CFBundleDisplayName`、DMG 卷名、Windows 版本信息与快捷方式、Linux 应用菜单、托盘提示、菜单栏应用名都只显示 `luban`。
+- macOS 应用图标换成圆角版本：`assets/luban-app-1024.png` 按 macOS 图标栅格留边、圆角裁切后生成 `AppIcon.icns`，安装后不再是一个方角深色方块；`assets/luban-512.png` 仍是直角图，继续用于托盘、窗口和 Web UI。
+- 桌面上「终端/控制台需要桌面连接」的提示改称 `luban 桌面版`，与新的应用名一致。
+
 ## 2.2.3 — 2026-11-10
 
 - 桌面工作台可以预览表格和文档了：`.xlsx`/`.xls` 显示带行号、列标和工作表标签的只读网格，`.docx`/`.doc` 按标题、段落、列表、表格的顺序排成只读文章；超过 400 行、50 列的表格会提示还有多少内容没有显示。

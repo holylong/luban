@@ -27,7 +27,7 @@ luban 在你的项目里读代码、改文件、跑命令、验证结果，把�
 
 | 平台 | 安装包 | 启动 |
 | --- | --- | --- |
-| macOS x64 / arm64 | `luban-cli-<版本>-mac-<arch>.zip`<br>`luban-desktop-<版本>-mac-<arch>.dmg`（构建机无法生成镜像时为同名 `.zip`） | `./luban`<br>把 `luban Desktop.app` 拖入「应用程序」 |
+| macOS x64 / arm64 | `luban-cli-<版本>-mac-<arch>.zip`<br>`luban-desktop-<版本>-mac-<arch>.dmg`（构建机无法生成镜像时为同名 `.zip`） | `./luban`<br>把 `luban.app` 拖入「应用程序」 |
 | Windows x64 | `luban-cli-<版本>-win-x64.zip`<br>`luban-desktop-<版本>-win-x64.zip` | `luban.cmd`<br>`luban-desktop.cmd` |
 | Linux x64 / arm64 | `luban-cli_<版本>_<arch>.deb`<br>`luban-desktop_<版本>_<arch>.deb` | `luban`<br>`luban-desktop` |
 
@@ -64,7 +64,7 @@ macOS 登录后自动启动与权限边界见 [Bot 使用指南](bot.md)。
 
 ## 桌面工作台
 
-安装版用 `luban` 启动 CLI、`luband` 启动 Desktop（Windows/macOS 便携包需将解压目录加入 PATH）。源码版运行 `npm run desktop -- /path/to/project`，或直接打开安装包里的 luban Desktop；切换工作区用左侧「打开文件夹…」或菜单「文件 → 打开项目文件夹」（`Ctrl/⌘ O`），桌面端会重启本地服务并打开新目录。
+安装版用 `luban` 启动 CLI、`luband` 启动 Desktop（Windows/macOS 便携包需将解压目录加入 PATH）。源码版运行 `npm run desktop -- /path/to/project`，或直接打开安装包里的 luban；切换工作区用左侧「打开文件夹…」或菜单「文件 → 打开项目文件夹」（`Ctrl/⌘ O`），桌面端会重启本地服务并打开新目录。
 
 - **桌宠**：启动桌面 App 自动出现，同时拉起 bot worker；头顶「造物主」状态灯可展开任务与运行状态面板，bot 任务完成后气泡播报结果。点机器人打开主界面；拖入文本/代码文件并确认“喂给 luban”，处理时动画、完成后气泡返回结果。关闭主窗口会隐藏并保留桌宠，文件菜单可退出。
 - **编辑器**：文件树 + 多标签编辑、语法着色、`⌘P` 快速打开、`⌘S` 保存，保存前校验磁盘版本并拦截冲突。

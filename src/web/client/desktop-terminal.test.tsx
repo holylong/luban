@@ -13,7 +13,7 @@ it("maps the workbench CSS variables onto the terminal palette", () => {
 it("explains that a real terminal needs the desktop bridge", () => {
   vi.stubGlobal("window", {});
   const html = renderToStaticMarkup(<DesktopTerminal />);
-  expect(html).toContain("终端需要 luban Desktop 桌面连接");
+  expect(html).toContain("终端需要 luban 桌面版连接");
   expect(html).toMatch(/<button[^>]*disabled=""[^>]*>重启终端/);
   expect(html).toContain('class="desktop-terminal"');
 });

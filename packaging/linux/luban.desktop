@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=luban Desktop
+Name=luban
 GenericName=AI coding workspace
 Comment=Browse project files and work with luban Agent
 Exec=/usr/bin/luban-desktop %F
