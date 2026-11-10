@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,36 @@ beforeEach(() => {
   service = createWorkspace(root);
 });
 afterEach(() => { service.dispose(); rmSync(root, { recursive: true, force: true }); });
+describe("desktop workspace file actions", () => {
+  it("creates an empty file and a folder inside the workspace", () => {
+    mkdirSync(join(root, "src"));
+    expect(service.createEntry({ path: "src/new.ts", kind: "file" })).toEqual({ path: "src/new.ts", kind: "file" });
+    expect(readFileSync(join(root, "src/new.ts"), "utf8")).toBe("");
+    expect(service.createEntry({ path: "docs", kind: "dir" })).toEqual({ path: "docs", kind: "dir" });
+    expect(statSync(join(root, "docs")).isDirectory()).toBe(true);
+  });
+  it("refuses names that already exist, escape the workspace or are reserved", () => {
+    writeFileSync(join(root, "taken.txt"), "x");
+    expect(() => service.createEntry({ path: "taken.txt", kind: "file" })).toThrow(/already exists/);
+    expect(() => service.createEntry({ path: "../escape.txt", kind: "file" })).toThrow(/Invalid workspace path/);
+    expect(() => service.createEntry({ path: "node_modules", kind: "dir" })).toThrow(/Invalid workspace path/);
+    expect(() => service.createEntry({ path: "missing/deep.txt", kind: "file" })).toThrow();
+  });
+  it("renames in place and keeps the contents", () => {
+    writeFileSync(join(root, "old.md"), "# 标题");
+    expect(service.renameEntry({ from: "old.md", to: "new.md" })).toEqual({ from: "old.md", to: "new.md" });
+    expect(readFileSync(join(root, "new.md"), "utf8")).toBe("# 标题");
+    expect(existsSync(join(root, "old.md"))).toBe(false);
+  });
+  it("refuses a rename onto an existing name or into another folder", () => {
+    writeFileSync(join(root, "a.txt"), "a");
+    writeFileSync(join(root, "b.txt"), "b");
+    mkdirSync(join(root, "sub"));
+    expect(() => service.renameEntry({ from: "a.txt", to: "b.txt" })).toThrow(/already exists/);
+    expect(() => service.renameEntry({ from: "a.txt", to: "sub/a.txt" })).toThrow(/same folder/);
+  });
+});
+
 const waitFor = async (predicate: () => boolean, timeout = 5000) => {
   const deadline = Date.now() + timeout;
   while (!predicate()) {

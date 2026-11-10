@@ -123,8 +123,13 @@ function createElectron() {
     app, BrowserWindow, Tray, Menu, ipcMain, dialog, protocol,
     screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }) },
     nativeImage: { createFromPath: () => ({ resize: () => ({}) }) },
-    shell: { openPath: async () => "" },
-    __smoke: { windows, registered, protocol, run: () => readyCallback?.() },
+    shell: {
+      openPath: async () => "",
+      showItemInFolder(target) { electron.__smoke.revealed.push(target); },
+      trashItem: async target => { electron.__smoke.trashed.push(target); },
+    },
+    clipboard: { writeText(text) { electron.__smoke.clipboard = text; } },
+    __smoke: { windows, registered, protocol, revealed: [], trashed: [], clipboard: "", run: () => readyCallback?.() },
   };
 }
 
@@ -250,6 +255,32 @@ const portOf = win => new URL(win.loads[0]).port;
   if (!(await filesOf(first)).includes("c.txt")) fail("switched window cannot see its new folder");
   if (!(await filesOf(second)).includes("b.txt")) fail("other window followed the switch");
   console.log("window 1 after switch:", first.title);
+
+  // Right-click file actions: create, rename, copy path, reveal, trash.
+  const createEntry = smoke.registered.get("luban:createEntry");
+  const renameEntry = smoke.registered.get("luban:renameEntry");
+  const copyPath = smoke.registered.get("luban:copyPath");
+  const revealPath = smoke.registered.get("luban:revealPath");
+  const trashEntry = smoke.registered.get("luban:trashEntry");
+  if (!createEntry || !renameEntry || !copyPath || !revealPath || !trashEntry) fail("file action handlers missing");
+  await createEntry(eventFor(first), { path: "notes.md", kind: "file" });
+  if (!(await filesOf(first)).includes("notes.md")) fail("新建文件 did not reach the workspace");
+  await renameEntry(eventFor(first), { from: "notes.md", to: "readme.md" });
+  const renamed = await filesOf(first);
+  if (!renamed.includes("readme.md") || renamed.includes("notes.md")) fail(`重命名 did not rename: ${renamed.join(",")}`);
+  const copied = await copyPath(eventFor(first), "readme.md");
+  if (!copied.path?.endsWith("readme.md")) fail(`复制路径 returned ${JSON.stringify(copied)}`);
+  if (!smoke.clipboard.endsWith("readme.md")) fail(`clipboard holds ${JSON.stringify(smoke.clipboard)}`);
+  await revealPath(eventFor(first), "readme.md");
+  if (!smoke.revealed.at(-1)?.endsWith("readme.md")) fail("在访达中显示 got the wrong path");
+  const trashed = await trashEntry(eventFor(first), "readme.md");
+  if (!trashed.ok) fail("移到废纸篓 was refused");
+  if (!smoke.trashed.at(-1)?.endsWith("readme.md")) fail("trash got the wrong path");
+  let escaped = false;
+  try { await createEntry(eventFor(first), { path: "../escape.md", kind: "file" }); }
+  catch { escaped = true; }
+  if (!escaped) fail("a path outside the workspace was created");
+  console.log("文件菜单: 新建/重命名/复制路径/显示/废纸篓 ok");
 
   // A sender that is not a trusted window is rejected.
   let rejected = false;

@@ -1,32 +1,39 @@
 import React, { useRef } from "react";
 
-/**
- * A drag handle between two panes. It reports incremental pointer deltas and
- * lets the caller clamp, so a drag can never collapse the code column; arrow
- * keys move the same edge for keyboard users.
+/** A draggable divider between two panes.
+ *
+ *  The drag reports an absolute size — "the pane was 420px when the drag
+ *  started, the pointer moved 40px" — instead of an incremental delta. React
+ *  batches pointer events, so a delta applied to the previous render's value
+ *  silently dropped every move but the last one: the handle looked stuck.
  */
-export function PaneSplitter({ orientation, label, onDelta }: {
+export function PaneSplitter({ orientation, label, value, sign = 1, onResize }: {
   orientation: "vertical" | "horizontal";
   label: string;
-  onDelta(delta: number): void;
+  /** Pane size in px at the moment the drag starts. */
+  value: number;
+  /** +1 when the pane sits before the handle, -1 when it sits after it. */
+  sign?: number;
+  onResize(next: number): void;
 }): React.ReactElement {
-  const dragging = useRef<number | undefined>(undefined);
+  const drag = useRef<{ pointer: number; value: number } | undefined>(undefined);
+  const position = (event: React.PointerEvent<HTMLDivElement>): number =>
+    orientation === "vertical" ? event.clientX : event.clientY;
   const start = (event: React.PointerEvent<HTMLDivElement>): void => {
     event.preventDefault();
-    dragging.current = orientation === "vertical" ? event.clientX : event.clientY;
+    drag.current = { pointer: position(event), value };
     event.currentTarget.setPointerCapture(event.pointerId);
     document.body.classList.add("desktop-dragging-pane");
   };
   const move = (event: React.PointerEvent<HTMLDivElement>): void => {
-    if (dragging.current === undefined) return;
-    const position = orientation === "vertical" ? event.clientX : event.clientY;
-    const delta = position - dragging.current;
+    const state = drag.current;
+    if (!state) return;
+    const delta = position(event) - state.pointer;
     if (!delta) return;
-    dragging.current = position;
-    onDelta(delta);
+    onResize(state.value + delta * sign);
   };
   const finish = (event: React.PointerEvent<HTMLDivElement>): void => {
-    dragging.current = undefined;
+    drag.current = undefined;
     document.body.classList.remove("desktop-dragging-pane");
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
@@ -34,13 +41,14 @@ export function PaneSplitter({ orientation, label, onDelta }: {
     const [back, forward] = orientation === "vertical" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
     if (event.key !== back && event.key !== forward) return;
     event.preventDefault();
-    onDelta(event.key === back ? -24 : 24);
+    onResize(value + (event.key === forward ? 24 : -24) * sign);
   };
   return <div
     className={`desktop-splitter ${orientation}`}
     role="separator"
     aria-orientation={orientation}
     aria-label={label}
+    aria-valuenow={Math.round(value)}
     title={`${label}（拖动或用方向键）`}
     tabIndex={0}
     onPointerDown={start}

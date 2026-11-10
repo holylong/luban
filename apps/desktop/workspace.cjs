@@ -203,6 +203,37 @@ function createWorkspace(root, emit = () => {}, options = {}) {
   function absolutePath(value) {
     return checkedPath(value);
   }
+  /** A path that may not exist yet: the parent must be inside the workspace and
+   *  the new name must survive the same checks as an existing entry. */
+  function resolveNew(value) {
+    assertActive();
+    if (typeof value !== "string" || !value || value.includes("\0") || value.includes("\\") || path.isAbsolute(value) || /^[a-z]:/i.test(value)) throw new Error("Invalid workspace path");
+    const parts = value.split("/");
+    const name = parts.pop();
+    if (!name || name === "." || name === ".." || EXCLUDED.has(name)) throw new Error("Invalid workspace path");
+    const parent = parts.length ? checkedPath(parts.join("/")) : root;
+    if (!fs.lstatSync(parent).isDirectory()) throw new Error("Parent is not a directory");
+    return path.join(parent, name);
+  }
+  /** Create one empty file or folder; the tree refreshes from its poll. */
+  function createEntry(input = {}) {
+    const target = resolveNew(input.path);
+    const kind = input.kind === "dir" ? "dir" : "file";
+    if (fs.existsSync(target)) throw new Error("A file or folder with that name already exists");
+    if (kind === "dir") fs.mkdirSync(target);
+    else fs.writeFileSync(target, "", { flag: "wx" });
+    return { path: input.path, kind };
+  }
+  /** Rename in place. Moving between folders would leave the editor pointing at
+   *  a path that no longer exists, so a cross-folder request is refused. */
+  function renameEntry(input = {}) {
+    const source = checkedPath(input.from);
+    const target = resolveNew(input.to);
+    if (path.dirname(target) !== path.dirname(source)) throw new Error("Rename must stay in the same folder");
+    if (fs.existsSync(target)) throw new Error("A file or folder with that name already exists");
+    fs.renameSync(source, target);
+    return { from: input.from, to: input.to };
+  }
   function kill(child, signal) {
     if (!child.pid) return;
     try {
@@ -429,7 +460,7 @@ finally:
     disposed = true;
   }
   return {
-    readFile, saveFile, mediaFile, listFiles, readPreview, archiveEntry, absolutePath, runCommand, stopCommand,
+    readFile, saveFile, mediaFile, listFiles, readPreview, archiveEntry, absolutePath, createEntry, renameEntry, runCommand, stopCommand,
     startTerminal, writeTerminal, resizeTerminal, stopTerminal, dispose,
   };
 }

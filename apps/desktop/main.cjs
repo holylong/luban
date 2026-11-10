@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, Menu, nativeImage, ipcMain, protocol, screen, shell, Tray } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, ipcMain, protocol, screen, shell, Tray } = require("electron");
 const { preparePetTask } = require("./pet-task.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
@@ -261,7 +261,7 @@ const { basename, dirname, join, resolve } = require("node:path");
 const cli = process.env.LUBAN_CLI || resolve(__dirname, "../../dist/cli.js");
 const node = process.env.LUBAN_NODE_BIN || "node";
 
-for (const method of ["readFile", "saveFile", "listFiles", "readPreview", "runCommand", "stopCommand", "startTerminal", "writeTerminal", "resizeTerminal", "stopTerminal"]) {
+for (const method of ["readFile", "saveFile", "listFiles", "readPreview", "createEntry", "renameEntry", "runCommand", "stopCommand", "startTerminal", "writeTerminal", "resizeTerminal", "stopTerminal"]) {
   ipcMain.handle(`luban:${method}`, (event, input) => {
     const session = trustedSession(event);
     if (!session || !session.workspaceService || session.opening) throw new Error("Untrusted or inactive workspace");
@@ -275,6 +275,34 @@ ipcMain.handle("luban:openPath", async (event, value) => {
   if (!session || !session.workspaceService || session.opening) throw new Error("Untrusted or inactive workspace");
   const error = await shell.openPath(session.workspaceService.absolutePath(value));
   if (error) throw new Error(error);
+  return { ok: true };
+});
+// File-tree actions from the renderer. Each one resolves the path through the
+// workspace service first, so a crafted IPC message cannot reach outside it.
+ipcMain.handle("luban:revealPath", (event, value) => {
+  const session = trustedSession(event);
+  if (!session || !session.workspaceService || session.opening) throw new Error("Untrusted or inactive workspace");
+  shell.showItemInFolder(session.workspaceService.absolutePath(value));
+  return { ok: true };
+});
+ipcMain.handle("luban:copyPath", (event, value) => {
+  const session = trustedSession(event);
+  if (!session || !session.workspaceService || session.opening) throw new Error("Untrusted or inactive workspace");
+  const absolute = session.workspaceService.absolutePath(value);
+  clipboard.writeText(absolute);
+  return { ok: true, path: absolute };
+});
+ipcMain.handle("luban:trashEntry", async (event, value) => {
+  const session = trustedSession(event);
+  if (!session || !session.workspaceService || session.opening) throw new Error("Untrusted or inactive workspace");
+  const absolute = session.workspaceService.absolutePath(value);
+  const win = session.window;
+  const answer = dialog.showMessageBoxSync(win && !win.isDestroyed() ? win : undefined, {
+    type: "warning", title: "移到废纸篓", message: `把「${value}」移到废纸篓？`,
+    buttons: ["取消", "移到废纸篓"], defaultId: 0, cancelId: 0, noLink: true,
+  });
+  if (answer !== 1) return { ok: false, canceled: true };
+  await shell.trashItem(absolute);
   return { ok: true };
 });
 ipcMain.on("luban:setDirty", (event, value) => {

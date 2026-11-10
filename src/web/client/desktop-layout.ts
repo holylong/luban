@@ -18,7 +18,7 @@ export const DEFAULT_EXPLORER_WIDTH = 250;
 export const MIN_EXPLORER_WIDTH = 170;
 export const MAX_EXPLORER_WIDTH = 520;
 export const DEFAULT_AGENT_RATIO = 0.33;
-export const MIN_AGENT_WIDTH = 300;
+export const MIN_AGENT_WIDTH = 240;
 export const MIN_CONSOLE_HEIGHT = 160;
 export const DEFAULT_CONSOLE_HEIGHT = 240;
 /** Opening the terminal grows a short console so more than a few rows show. */

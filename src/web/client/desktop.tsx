@@ -17,6 +17,8 @@ import { clampAgent, clampConsole, clampExplorer, fitLayout, loadLayout, saveLay
 import { PaneSplitter } from "./desktop-panes";
 import { reloadPaths, sameTree } from "./desktop-tree";
 import { DesktopFileIcon } from "./desktop-file-icon";
+import { FileMenu, joinPath, nameProblem, parentPath, type FileMenuAction, type FileMenuTarget } from "./desktop-file-menu";
+import { desktopErrorText } from "./desktop-bridge";
 import { DesktopCodexQuota } from "./desktop-codex-quota";
 
 type ExplorerTab = "files" | "sessions";
@@ -76,6 +78,10 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState<string>();
   const [error, setError] = useState("");
+  // Right-click menu, and the inline row that names a new or renamed entry.
+  const [menu, setMenu] = useState<{ x: number; y: number; target?: FileMenuTarget } | undefined>();
+  const [edit, setEdit] = useState<{ mode: "new-file" | "new-folder" | "rename"; dir: string; path?: string; value: string } | undefined>();
+  const bridge = typeof window === "undefined" ? undefined : window.lubanDesktop;
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
   const polling = useRef(false);
@@ -124,6 +130,81 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
     return () => window.clearInterval(timer);
   }, [store.project, load]);
 
+  const refreshAfter = (dir: string): void => {
+    void load([...new Set([dir, ...reloadPaths(expandedRef.current)])]);
+  };
+
+  const commitEdit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (!edit) return;
+    const problem = nameProblem(edit.value);
+    if (problem) { store.notify(problem, true); return; }
+    const name = edit.value.trim();
+    try {
+      if (edit.mode === "rename" && edit.path) {
+        await bridge?.renameEntry?.({ from: edit.path, to: joinPath(edit.dir, name) });
+        store.notify(`已重命名：${name}`);
+      } else {
+        await bridge?.createEntry?.({ path: joinPath(edit.dir, name), kind: edit.mode === "new-folder" ? "dir" : "file" });
+        store.notify(`${edit.mode === "new-folder" ? "已新建文件夹" : "已新建文件"}：${name}`);
+      }
+      const dir = edit.dir;
+      setEdit(undefined);
+      refreshAfter(dir);
+    } catch (cause) { store.notify(desktopErrorText(cause, name), true); }
+  };
+
+  const runMenu = async (action: FileMenuAction, target?: FileMenuTarget): Promise<void> => {
+    const path = target?.path ?? "";
+    try {
+      if (action === "open") {
+        if (!target) return;
+        toggle({ path: target.path, name: target.path.split("/").pop() ?? target.path, type: target.type });
+        return;
+      }
+      if (action === "reveal") { await bridge?.revealPath?.(path); return; }
+      if (action === "copy") {
+        const result = await bridge?.copyPath?.(path);
+        store.notify(result?.path ? `已复制路径：${result.path}` : "已复制路径");
+        return;
+      }
+      if (action === "new-file" || action === "new-folder") {
+        const dir = target ? (target.type === "dir" ? target.path : parentPath(target.path)) : "";
+        if (dir) {
+          setExpanded(current => ({ ...current, [dir]: true }));
+          void load([dir]);
+        }
+        setEdit({ mode: action, dir, value: "" });
+        return;
+      }
+      if (action === "rename" && target) {
+        setEdit({ mode: "rename", dir: parentPath(target.path), path: target.path, value: target.path.split("/").pop() ?? "" });
+        return;
+      }
+      if (action === "trash" && target) {
+        const result = await bridge?.trashEntry?.(target.path);
+        if (result?.ok) {
+          store.notify(`已移到废纸篓：${target.path}`);
+          refreshAfter(parentPath(target.path));
+        }
+        return;
+      }
+    } catch (cause) { store.notify(desktopErrorText(cause, path), true); }
+  };
+
+  const nameRow = (depth: number): React.ReactElement => (
+    <form className="desktop-file-edit" style={{ paddingLeft: 12 + depth * 16 }} onSubmit={event => void commitEdit(event)}>
+      <input
+        autoFocus
+        aria-label="文件名"
+        value={edit?.value ?? ""}
+        placeholder={edit?.mode === "new-folder" ? "文件夹名" : edit?.mode === "rename" ? "新名字" : "文件名"}
+        onChange={event => setEdit(current => current ? { ...current, value: event.target.value } : current)}
+        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setEdit(undefined); } }}
+      />
+    </form>
+  );
+
   const toggle = (entry: FileEntry): void => {
     if (entry.type === "file") { void store.openFile(entry.path); return; }
     const next = !expanded[entry.path];
@@ -132,21 +213,34 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
     if (next) void load([entry.path]);
   };
 
-  const draw = (entries: FileEntry[], depth = 0): React.ReactNode => entries.map(entry => (
-    <React.Fragment key={entry.path}>
-      <button
-        className={`desktop-file${store.file?.path === entry.path ? " active" : ""}`}
-        style={{ paddingLeft: 12 + depth * 16 }}
-        onClick={() => toggle(entry)}
-        title={entry.path}
-      >
-        <span className="desktop-chevron">{entry.type === "dir" ? expanded[entry.path] ? "⌄" : "›" : ""}</span>
-        <DesktopFileIcon path={entry.name} directory={entry.type === "dir"} expanded={Boolean(expanded[entry.path])} />
-        <span className="desktop-file-name">{entry.name}</span>
-      </button>
-      {entry.type === "dir" && expanded[entry.path] && folders[entry.path] ? draw(folders[entry.path], depth + 1) : null}
-    </React.Fragment>
-  ));
+  const draw = (entries: FileEntry[], depth = 0): React.ReactNode => entries.map(entry => {
+    const renaming = edit?.mode === "rename" && edit.path === entry.path;
+    const creatingHere = edit && edit.mode !== "rename" && edit.dir === entry.path;
+    return (
+      <React.Fragment key={entry.path}>
+        {renaming ? nameRow(depth) : (
+          <button
+            className={`desktop-file${store.file?.path === entry.path ? " active" : ""}`}
+            style={{ paddingLeft: 12 + depth * 16 }}
+            onClick={() => toggle(entry)}
+            onContextMenu={event => {
+              event.preventDefault();
+              setMenu({ x: event.clientX, y: event.clientY, target: { path: entry.path, type: entry.type } });
+            }}
+            title={entry.path}
+          >
+            <span className="desktop-chevron">{entry.type === "dir" ? expanded[entry.path] ? "⌄" : "›" : ""}</span>
+            <DesktopFileIcon path={entry.name} directory={entry.type === "dir"} expanded={Boolean(expanded[entry.path])} />
+            <span className="desktop-file-name">{entry.name}</span>
+          </button>
+        )}
+        {entry.type === "dir" && expanded[entry.path] ? <>
+          {creatingHere ? nameRow(depth + 1) : null}
+          {folders[entry.path] ? draw(folders[entry.path], depth + 1) : null}
+        </> : null}
+      </React.Fragment>
+    );
+  });
 
   return (
     <aside className="desktop-explorer">
@@ -162,10 +256,18 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
           <span>EXPLORER</span>
           <button title="刷新文件树（含已展开的目录）" aria-label="刷新文件树" onClick={() => void load(reloadPaths(expandedRef.current))}>↻</button>
         </div>
-        <div className="desktop-explorer-scroll">
+        <div
+          className="desktop-explorer-scroll"
+          onContextMenu={event => {
+            if ((event.target as HTMLElement).closest(".desktop-file, .desktop-file-edit")) return;
+            event.preventDefault();
+            setMenu({ x: event.clientX, y: event.clientY });
+          }}
+        >
           {error && <div className="desktop-error">{error}</div>}
           {loading === "" && !folders[""] ? <div className="desktop-muted">读取项目文件…</div> : null}
           {folders[""]?.length === 0 && <div className="desktop-muted">项目文件夹为空</div>}
+          {edit && edit.mode !== "rename" && edit.dir === "" ? nameRow(0) : null}
           {draw(folders[""] ?? [])}
         </div>
       </>}
@@ -176,6 +278,14 @@ function Explorer({ store }: { store: WorkbenchStore }): React.ReactElement {
         </button>)}
         {!store.sessions.length && !store.jobs.length && <div className="desktop-muted">还没有会话</div>}
       </div>}
+      {menu && <FileMenu
+        x={menu.x}
+        y={menu.y}
+        target={menu.target}
+        bridge={bridge}
+        onAction={(action, target) => void runMenu(action, target)}
+        onClose={() => setMenu(undefined)}
+      />}
     </aside>
   );
 }
@@ -299,14 +409,14 @@ export function DesktopApp(): React.ReactElement {
 
   return <div className="desktop-app" style={paneStyle}>
     <Explorer store={store} />
-    <PaneSplitter orientation="vertical" label="调整文件树宽度"
-      onDelta={delta => resize("explorer", clampExplorer(layout.explorer + delta, viewportWidth(), layout.agent))} />
+    <PaneSplitter orientation="vertical" label="调整文件树宽度" value={layout.explorer}
+      onResize={next => resize("explorer", clampExplorer(next, viewportWidth(), layout.agent))} />
     <main className="desktop-editor">
       <DesktopCodeArea store={store} timeline={timeline} />
       <DesktopConsole store={store} height={layout.console} onHeight={value => resize("console", clampConsole(value, viewportHeight()))} />
     </main>
-    <PaneSplitter orientation="vertical" label="调整 Agent 栏宽度"
-      onDelta={delta => resize("agent", clampAgent(layout.agent - delta, viewportWidth(), layout.explorer))} />
+    <PaneSplitter orientation="vertical" label="调整 Agent 栏宽度" value={layout.agent} sign={-1}
+      onResize={next => resize("agent", clampAgent(next, viewportWidth(), layout.explorer))} />
     <aside className="desktop-agent">
       <AgentPanel store={store} timeline={timeline} />
     </aside>

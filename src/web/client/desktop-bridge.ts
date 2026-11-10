@@ -12,6 +12,16 @@ export interface DesktopBridge {
   readPreview?(path: string): Promise<DocumentPreview>;
   /** Open a preview the workbench cannot paint in the OS application. */
   openPath?(path: string): Promise<{ ok: boolean }>;
+  /** File-tree menu: show the entry in Finder/Explorer. */
+  revealPath?(path: string): Promise<{ ok: boolean }>;
+  /** File-tree menu: copy the absolute path to the system clipboard. */
+  copyPath?(path: string): Promise<{ ok: boolean; path?: string }>;
+  /** File-tree menu: create an empty file or folder. */
+  createEntry?(input: { path: string; kind: "file" | "dir" }): Promise<{ ok?: boolean; path?: string; kind?: string }>;
+  /** File-tree menu: rename inside the same folder. */
+  renameEntry?(input: { from: string; to: string }): Promise<{ from?: string; to?: string }>;
+  /** File-tree menu: move the entry to the trash after a native confirmation. */
+  trashEntry?(path: string): Promise<{ ok: boolean; canceled?: boolean }>;
   /** Desktop mode only: pick a new project folder and restart the local backend there. */
   openWorkspace?(): Promise<{ canceled?: boolean; path?: string; mode?: "window" | "switch" }>;
   /** Desktop mode only: pick a folder and open it in a second window. */

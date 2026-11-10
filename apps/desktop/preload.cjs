@@ -20,6 +20,13 @@ contextBridge.exposeInMainWorld("lubanDesktop", Object.freeze({
   readPreview: path => ipcRenderer.invoke("luban:readPreview", path),
   // Hand a file the preview cannot paint to the system application.
   openPath: path => ipcRenderer.invoke("luban:openPath", path),
+  // File-tree menu: reveal in Finder, copy the absolute path, and the three
+  // mutations the tree can perform without an editor round-trip.
+  revealPath: path => ipcRenderer.invoke("luban:revealPath", path),
+  copyPath: path => ipcRenderer.invoke("luban:copyPath", path),
+  createEntry: input => ipcRenderer.invoke("luban:createEntry", input),
+  renameEntry: input => ipcRenderer.invoke("luban:renameEntry", input),
+  trashEntry: path => ipcRenderer.invoke("luban:trashEntry", path),
   // Opens the folder picker in the main process, which owns workspace switching.
   openWorkspace: () => ipcRenderer.invoke("luban:openWorkspace"),
   // The Creator window floats on top, so the workbench owns a switch for it.
