@@ -3,7 +3,7 @@ import type { WorkbenchStore } from "./store";
 import { desktopErrorText } from "./desktop-bridge";
 import { Markdown } from "./markdown";
 import { DesktopTerminal } from "./desktop-terminal";
-import { DEFAULT_CONSOLE_HEIGHT, MIN_CONSOLE_HEIGHT } from "./desktop-layout";
+import { DEFAULT_CONSOLE_HEIGHT, MIN_CONSOLE_HEIGHT, terminalConsoleHeight } from "./desktop-layout";
 import { PaneSplitter } from "./desktop-panes";
 
 export function ConsoleOutput({ text, raw = false }: { text: string; raw?: boolean }): React.ReactElement {
@@ -63,7 +63,7 @@ export function DesktopConsole({ store, height = DEFAULT_CONSOLE_HEIGHT, onHeigh
   };
   return <section className={`desktop-console${tab === "terminal" ? " terminal" : ""}${visible ? "" : " collapsed"}`} style={{ height: visible ? height : undefined }}>
     {visible && <PaneSplitter orientation="horizontal" label="调整控制台高度" onDelta={delta => onHeight(Math.max(MIN_CONSOLE_HEIGHT, height - delta))} />}
-    <div className="desktop-console-tabs"><button className={tab === "console" ? "active" : ""} onClick={() => { setTab("console"); setVisible(true); input.current?.focus(); }}>控制台</button><button className={tab === "terminal" ? "active" : ""} onClick={() => { setTerminalReady(true); setTab("terminal"); setVisible(true); }}>终端</button><button className={tab === "task" ? "active" : ""} onClick={() => { setTab("task"); setVisible(true); }}>任务信息</button><span className="spacer" /><button onClick={() => { setCommands(current => current.filter(item => !item.exit)); }}>清除已结束</button><button aria-label={visible ? "折叠控制台" : "展开控制台"} onClick={() => setVisible(current => !current)}>{visible ? "⌄" : "⌃"}</button></div>
+    <div className="desktop-console-tabs"><button className={tab === "console" ? "active" : ""} onClick={() => { setTab("console"); setVisible(true); input.current?.focus(); }}>控制台</button><button className={tab === "terminal" ? "active" : ""} onClick={() => { setTerminalReady(true); setTab("terminal"); setVisible(true); onHeight(terminalConsoleHeight(height, window.innerHeight)); }}>终端</button><button className={tab === "task" ? "active" : ""} onClick={() => { setTab("task"); setVisible(true); }}>任务信息</button><span className="spacer" /><button onClick={() => { setCommands(current => current.filter(item => !item.exit)); }}>清除已结束</button><button aria-label={visible ? "折叠控制台" : "展开控制台"} onClick={() => setVisible(current => !current)}>{visible ? "⌄" : "⌃"}</button></div>
     {visible && <>
       {terminalReady && <div className="desktop-console-pane" hidden={tab !== "terminal"}><DesktopTerminal /></div>}
       {tab === "console" ? <>

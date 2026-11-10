@@ -38,6 +38,13 @@ describe("desktop media preview", () => {
       .toBe(`luban-media://workspace/${encodeURIComponent("slides 演示")}.pptx?entry=${encodeURIComponent("ppt/media/image 1.png")}`);
   });
 
+  it("names the owning window when several desktops are open", () => {
+    // Every window talks to its own backend port; the media scheme is shared.
+    expect(mediaSource("clip.mp4", "5123")).toBe("luban-media://workspace/clip.mp4?port=5123");
+    expect(mediaEntrySource("deck.pptx", "ppt/media/image 1.png", "5123"))
+      .toBe(`luban-media://workspace/deck.pptx?port=5123&entry=${encodeURIComponent("ppt/media/image 1.png")}`);
+  });
+
   it("renders a player instead of the text editor", () => {
     const video = renderToStaticMarkup(<DesktopMediaView path="clip.mp4" kind="video" />);
     expect(video).toContain("<video");

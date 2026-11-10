@@ -13,7 +13,9 @@ export interface DesktopBridge {
   /** Open a preview the workbench cannot paint in the OS application. */
   openPath?(path: string): Promise<{ ok: boolean }>;
   /** Desktop mode only: pick a new project folder and restart the local backend there. */
-  openWorkspace?(): Promise<{ canceled?: boolean; path?: string }>;
+  openWorkspace?(): Promise<{ canceled?: boolean; path?: string; mode?: "window" | "switch" }>;
+  /** Desktop mode only: pick a folder and open it in a second window. */
+  openWorkspaceWindow?(): Promise<{ canceled?: boolean; path?: string }>;
   /** Whether the floating Creator window is on screen; absent on older builds. */
   petVisible?(): Promise<boolean>;
   /** Show or hide the floating Creator window; resolves with the new state. */
@@ -23,6 +25,8 @@ export interface DesktopBridge {
   stopCommand(id: string): Promise<void>;
   startTerminal(input: { cols: number; rows: number }): Promise<TerminalStart>;
   writeTerminal(input: { id: string; data: string }): Promise<{ ok: boolean }>;
+  /** Re-fit the pty after a drag; absent on bridges from older builds. */
+  resizeTerminal?(input: { id: string; cols: number; rows: number }): Promise<{ ok: boolean; resized: boolean }>;
   stopTerminal(id: string): Promise<{ ok: boolean }>;
   setDirty(dirty: boolean): void;
   onCommandEvent(listener: (event: CommandEvent) => void): () => void;

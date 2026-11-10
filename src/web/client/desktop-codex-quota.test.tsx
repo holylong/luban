@@ -21,6 +21,11 @@ it("distinguishes loading, unsupported accounts, failures and stale data", () =>
   expect(failed).toContain("查询失败");
   expect(failed).not.toContain("0.0%");
   expect(renderToStaticMarkup(<CodexQuotaView quota={{ windows: [], error: "失败", updatedAt: 1 }} />)).toContain("上次成功");
+  const diagnosable = renderToStaticMarkup(<CodexQuotaView quota={{ windows: [], error: "无法查询 Codex 额度。",
+    hint: "找不到 codex 命令：设置 LUBAN_CODEX_BIN 后重启 luban。", detail: "Cannot start Codex CLI: spawn codex ENOENT" }} />);
+  expect(diagnosable).toContain("LUBAN_CODEX_BIN");
+  expect(diagnosable).toContain("desktop-quota-detail");
+  expect(diagnosable).toContain("ENOENT");
 });
 
 it("offers reset cards only when the account has some", () => {

@@ -38,12 +38,22 @@ export function ProjectSwitcher({ store }: { store: WorkbenchStore }): React.Rea
         <button
           id="desktop-open-workspace"
           className="desktop-open-workspace"
-          title="选择另一个文件夹作为工作区，桌面端会重启本地服务后打开"
+          title="选择文件夹；桌面端会问你在新窗口打开还是替换当前窗口的项目"
           onClick={() => {
             void bridge.openWorkspace!().then(reply => { if (!reply.canceled) setError(""); })
               .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
           }}
         >打开文件夹…<small>Ctrl+O</small></button>
+        {bridge.openWorkspaceWindow && (
+          <button
+            className="desktop-open-workspace"
+            title="换个文件夹并用新窗口打开，当前窗口的项目继续运行"
+            onClick={() => {
+              void bridge.openWorkspaceWindow!().then(reply => { if (!reply.canceled) setError(""); })
+                .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
+            }}
+          >新窗口…</button>
+        )}
         <span className="desktop-workspace-path" title={path ?? store.project}>{path ?? store.project}</span>
         {error && <span className="desktop-error" role="alert">{error}</span>}
       </div>

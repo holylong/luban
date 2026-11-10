@@ -146,6 +146,13 @@ describe("desktop workspace terminal", () => {
       await waitFor(() => events.some(event => event.id === started.id && event.kind === "output"), 15000);
       terminalService.writeTerminal({ id: started.id, data: "echo LUBAN_TERM_OK\n" });
       await waitFor(() => events.map(event => event.text).join("").includes("LUBAN_TERM_OK"), 15000);
+      // The panel can grow after the shell starts; the pty must follow it.
+      const resized = terminalService.resizeTerminal({ id: started.id, cols: 100, rows: 40 });
+      expect(resized.resized).toBe(true);
+      terminalService.writeTerminal({ id: started.id, data: "stty size\n" });
+      await waitFor(() => /40 100/u.test(events.map(event => event.text).join("")), 15000);
+      expect(() => terminalService.resizeTerminal({ id: started.id, cols: 0, rows: 0 })).not.toThrow();
+      expect(() => terminalService.resizeTerminal({ id: "missing", cols: 80, rows: 20 })).toThrow(/not running/u);
       terminalService.stopTerminal(started.id);
       await waitFor(() => events.some(event => event.id === started.id && event.kind === "exit"), 15000);
       expect(() => terminalService.writeTerminal({ id: started.id, data: "x" })).toThrow(/not running/u);

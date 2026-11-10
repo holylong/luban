@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { codexResetRequest, createCodexQuotaReader, quotaSnapshot } from "./codex-quota.js";
+import { codexResetRequest, createCodexQuotaReader, describeCodexError, quotaSnapshot } from "./codex-quota.js";
 
 it("converts account windows to bounded remaining percentages", () => {
   const result = quotaSnapshot({ rateLimits: { primary: { usedPercent: 85, windowDurationMins: 300, resetsAt: 123 }, secondary: { usedPercent: 120 } } }, 42);
@@ -37,10 +37,10 @@ it("coalesces concurrent reads, caches for one minute and honours invalidate", a
   expect(read).toHaveBeenCalledTimes(3);
 });
 
-it("caches failures without exposing raw errors and labels old data stale", async () => {
+it("caches failures, keeps old data and reports the CLI reason", async () => {
   let now = 0;
   const read = vi.fn().mockResolvedValueOnce({ rateLimits: { primary: { usedPercent: 90 } }, rateLimitResetCredits: { availableCount: 1 } })
-    .mockRejectedValue(new Error("secret token"));
+    .mockRejectedValue(new Error("Cannot start Codex CLI: spawn codex ENOENT"));
   const quota = createCodexQuotaReader(read, () => now);
   await quota.read();
   now = 60_000;
@@ -49,9 +49,27 @@ it("caches failures without exposing raw errors and labels old data stale", asyn
   expect(failed.availableResetCredits).toBe(1);
   expect(failed.updatedAt).toBe(0);
   expect(failed.error).toContain("无法查询");
-  expect(JSON.stringify(failed)).not.toContain("secret");
+  expect(failed.detail).toContain("ENOENT");
+  expect(failed.hint).toContain("LUBAN_CODEX_BIN");
   await quota.read();
   expect(read).toHaveBeenCalledTimes(2);
+});
+
+it("explains the three ways a terminal-only CLI setup fails", () => {
+  expect(describeCodexError(new Error("spawn codex ENOENT")).hint).toContain("LUBAN_CODEX_BIN");
+  expect(describeCodexError(new Error("Codex account/rateLimits/read: not logged in")).hint).toContain("codex login");
+  expect(describeCodexError(new Error("Codex account/rateLimits/read: method not found")).hint).toContain("升级");
+  expect(describeCodexError(new Error("Codex app-server exited (1): boom")).hint).toContain("codex login");
+  expect(describeCodexError(new Error("weird failure")).hint).toBeUndefined();
+});
+
+it("redacts secrets and home paths from the CLI detail", () => {
+  const detail = describeCodexError(new Error(`failed for /Users/me/.codex/auth.json with api_key=abcdefghijklmnop and sk-1234567890abcdef`), "/Users/me").detail;
+  expect(detail).toContain("~/.codex/auth.json");
+  expect(detail).not.toContain("abcdefghijklmnop");
+  expect(detail).not.toContain("sk-1234567890abcdef");
+  expect(detail).toContain("已隐藏");
+  expect(describeCodexError(new Error("x".repeat(400))).detail).toHaveLength(280);
 });
 
 it("validates reset requests before they reach Codex", () => {

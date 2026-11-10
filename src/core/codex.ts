@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
-import { codexInvocation } from "./codex-command.js";
+import { codexSpawn } from "./codex-command.js";
 import { PLAN_MARKER, VERIFICATION_MARKER } from "./plan.js";
 import { resolveImageParts } from "./vision.js";
 
@@ -162,7 +162,7 @@ export class CodexClient {
       if (effort) args.push("-c", `model_reasoning_effort="${effort}"`);
       args.push("-");
       const result = await new Promise<{ code: number | null; stderr: string; timedOut: boolean }>((resolve, reject) => {
-        const child = spawn(...codexInvocation(args), { stdio: ["pipe", "pipe", "pipe"] });
+        const child = spawn(...codexSpawn(args), { stdio: ["pipe", "pipe", "pipe"] });
         let stderr = "";
         let pending = "";
         let timedOut = false;

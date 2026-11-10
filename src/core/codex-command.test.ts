@@ -1,9 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { codexInvocation } from "./codex-command.js";
+import { codexInvocation, codexSpawn, resolveCodexExecutable } from "./codex-command.js";
 
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
@@ -50,4 +50,51 @@ it("supports explicit JS and Node shebang overrides and reports a missing Window
     .toThrow("npm install -g @openai/codex");
   expect(codexInvocation(["login"], { platform: "linux", command: "custom-codex" }))
     .toEqual(["custom-codex", ["login"]]);
+});
+
+it("finds codex for a GUI launch that starts without the login PATH", () => {
+  const root = mkdtempSync(join(tmpdir(), "luban-resolve-"));
+  homes.push(root);
+  const home = join(root, "home");
+  const pathDir = join(root, "path-bin");
+  const localDir = join(home, ".local", "bin");
+  mkdirSync(pathDir, { recursive: true });
+  mkdirSync(localDir, { recursive: true });
+  writeFileSync(join(pathDir, "codex"), "#!/bin/sh\n", { mode: 0o755 });
+  writeFileSync(join(localDir, "codex"), "#!/bin/sh\n", { mode: 0o755 });
+  chmodSync(join(localDir, "codex"), 0o755);
+
+  const env = { PATH: pathDir, HOME: home };
+  expect(resolveCodexExecutable("codex", { env, loginShellProbe: false })).toBe(join(pathDir, "codex"));
+  // A launched app may have almost no PATH, but the usual install dir still answers.
+  expect(resolveCodexExecutable("codex", { env: { PATH: "/usr/bin", HOME: home }, loginShellProbe: false }))
+    .toBe(join(localDir, "codex"));
+  // Nothing anywhere: keep the bare name so the spawn error names the real problem.
+  expect(resolveCodexExecutable("codex", { env: { PATH: "/usr/bin", HOME: join(root, "empty") }, loginShellProbe: false }))
+    .toBe("codex");
+  // Explicit paths and Windows shims are left to the caller.
+  expect(resolveCodexExecutable("/opt/custom/codex", { env })).toBe("/opt/custom/codex");
+  expect(resolveCodexExecutable("codex", { platform: "win32", env })).toBe("codex");
+});
+
+it("starts the npm codex shim with our own node, like a packaged app must", () => {
+  const root = mkdtempSync(join(tmpdir(), "luban-shebang-"));
+  homes.push(root);
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const shim = join(bin, "codex");
+  writeFileSync(shim, "#!/usr/bin/env node\nconsole.log('ok')\n", { mode: 0o755 });
+  chmodSync(shim, 0o755);
+  const native = join(bin, "codex-native");
+  writeFileSync(native, "#!/bin/sh\necho ok\n", { mode: 0o755 });
+  chmodSync(native, 0o755);
+  process.env.LUBAN_CODEX_BIN = shim;
+  try {
+    // A Finder-launched app has no node on PATH, so the shebang cannot work.
+    expect(codexSpawn(["app-server"])).toEqual([process.execPath, [shim, "app-server"]]);
+    process.env.LUBAN_CODEX_BIN = native;
+    expect(codexSpawn(["app-server"])).toEqual([native, ["app-server"]]);
+  } finally {
+    delete process.env.LUBAN_CODEX_BIN;
+  }
 });

@@ -33,13 +33,22 @@ export function documentPreviewKind(path: string): DocumentPreviewKind | null {
   return DOCUMENTS[dot < 0 ? "" : lower.slice(dot + 1)] ?? null;
 }
 
+/** The backend port of this window. Several desktop windows share the media
+ * scheme, so each URL names the workspace that owns it. */
+export function desktopMediaPort(): string {
+  if (typeof window === "undefined" || !window.location) return "";
+  return window.location.protocol === "http:" ? window.location.port : "";
+}
+
 /** `luban-media://workspace/<path>`: the desktop main process streams the file,
  * so a 4 MB editor limit never applies to media. */
-export function mediaSource(path: string): string {
-  return `luban-media://workspace/${path.split("/").filter(Boolean).map(encodeURIComponent).join("/")}`;
+export function mediaSource(path: string, port: string = desktopMediaPort()): string {
+  const url = `luban-media://workspace/${path.split("/").filter(Boolean).map(encodeURIComponent).join("/")}`;
+  return port ? `${url}?port=${encodeURIComponent(port)}` : url;
 }
 
 /** An image inside a deck: the main process reads the zip entry on demand. */
-export function mediaEntrySource(path: string, entry: string): string {
-  return `${mediaSource(path)}?entry=${encodeURIComponent(entry)}`;
+export function mediaEntrySource(path: string, entry: string, port: string = desktopMediaPort()): string {
+  const source = mediaSource(path, port);
+  return `${source}${source.includes("?") ? "&" : "?"}entry=${encodeURIComponent(entry)}`;
 }

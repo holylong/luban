@@ -21,6 +21,8 @@ export const DEFAULT_AGENT_RATIO = 0.33;
 export const MIN_AGENT_WIDTH = 300;
 export const MIN_CONSOLE_HEIGHT = 160;
 export const DEFAULT_CONSOLE_HEIGHT = 240;
+/** Opening the terminal grows a short console so more than a few rows show. */
+export const TERMINAL_CONSOLE_HEIGHT = 420;
 /** The code column never shrinks below this, whatever is dragged. */
 export const MIN_CODE_WIDTH = 320;
 
@@ -49,6 +51,10 @@ export function clampAgent(value: number, viewport: number, explorer: number): n
 
 export function clampConsole(value: number, viewport: number): number {
   return clampRange(value, MIN_CONSOLE_HEIGHT, Math.round(viewport * 0.7));
+}
+
+export function terminalConsoleHeight(current: number, viewport: number): number {
+  return clampConsole(Math.max(current, TERMINAL_CONSOLE_HEIGHT), viewport);
 }
 
 /** Rescue a stored or freshly dragged layout against the current window size. */

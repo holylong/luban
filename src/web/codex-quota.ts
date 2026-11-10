@@ -34,6 +34,34 @@ export function quotaSnapshot(result: CodexRateLimits, now = Date.now()): CodexQ
 }
 
 /**
+ * Turn a CLI failure into something the user can act on. The raw message is
+ * kept (redacted and truncated) because "无法查询额度" alone hides whether the
+ * binary is missing, the account is logged out, or the CLI is too old.
+ */
+export function describeCodexError(error: unknown, home = process.env.HOME ?? ""): { error: string; hint?: string; detail: string } {
+  const raw = error instanceof Error ? error.message : String(error);
+  let detail = raw.replace(/\s+/gu, " ").trim();
+  detail = detail.replace(/sk-[A-Za-z0-9_-]{8,}/gu, "sk-[已隐藏]")
+    .replace(/\b(api[_-]?key|token|access_token|authorization|bearer)\b\s*[:=]?\s*[A-Za-z0-9._~+/=-]{12,}/giu, "$1: [已隐藏]");
+  if (home) detail = detail.split(home).join("~");
+  detail = detail.slice(0, 280);
+  const lower = detail.toLowerCase();
+  let hint: string | undefined;
+  if (/method not found|unknown method|not supported|unsupported/u.test(lower)) {
+    hint = "当前 Codex CLI 版本不支持额度查询接口，请升级：npm install -g @openai/codex。";
+  } else if (/not logged in|login required|unauthorized|401|please run .*login|no credentials/u.test(lower)) {
+    hint = "Codex 账号未登录或已过期：在终端执行 codex login，完成后点击刷新。";
+  } else if (/env: node: no such file|node: (?:command )?not found/u.test(lower)) {
+    hint = "启动 codex 需要 node，但桌面应用的环境里没有 node；luban 已尝试用自带 node 启动，仍失败请把 Codex 可执行文件路径写进 LUBAN_CODEX_BIN。";
+  } else if (/enoent|cannot start codex|cannot find a runnable codex|command not found/u.test(lower)) {
+    hint = "找不到 codex 命令：确认已安装 @openai/codex，或把 Codex 可执行文件路径写进环境变量 LUBAN_CODEX_BIN 后重启 luban。";
+  } else if (/exited \(/u.test(lower)) {
+    hint = "codex app-server 启动后退出，通常是未登录或版本过旧；可在终端运行 codex login 或升级 CLI。";
+  }
+  return { error: "无法查询 Codex 额度。", ...(hint ? { hint } : {}), detail };
+}
+
+/**
  * Coalesce requests and cache successes AND failures to avoid spawning a CLI
  * process per poll. `invalidate()` drops the cache after a reset consumes a card.
  */
@@ -45,7 +73,8 @@ export function createCodexQuotaReader(read = readCodexRateLimits, now = Date.no
     if (pending) return pending;
     if (cached && now() < expires) return Promise.resolve(cached);
     pending = Promise.resolve().then(() => read()).then(result => quotaSnapshot(result, now()))
-      .catch((): CodexQuota => ({ ...cached, windows: cached?.windows ?? [], error: "无法查询 Codex 额度，请确认 Codex CLI 已安装并已登录。" }))
+      .catch((error: unknown): CodexQuota => ({ ...cached, windows: cached?.windows ?? [], credits: cached?.credits ?? [],
+        ...describeCodexError(error) }))
       .then(result => { cached = result; expires = now() + 60_000; return result; })
       .finally(() => { pending = undefined; });
     return pending;

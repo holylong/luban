@@ -30,6 +30,17 @@ describe("desktop project switcher", () => {
     expect(openWorkspace).not.toHaveBeenCalled();
   });
 
+  it("offers a second window for another folder", () => {
+    const openWorkspace = vi.fn();
+    const openWorkspaceWindow = vi.fn();
+    vi.stubGlobal("window", { lubanDesktop: { openWorkspace, openWorkspaceWindow } });
+
+    const html = renderToStaticMarkup(<ProjectSwitcher store={store()} />);
+
+    expect(html).toContain("新窗口");
+    expect(openWorkspaceWindow).not.toHaveBeenCalled();
+  });
+
   it("keeps the project dropdown for the browser workbench", () => {
     vi.stubGlobal("window", {});
 

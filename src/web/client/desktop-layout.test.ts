@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampAgent, clampConsole, clampExplorer, DESKTOP_LAYOUT_KEY, defaultLayout, fitLayout,
   loadLayout, MIN_AGENT_WIDTH, MIN_CODE_WIDTH, MIN_CONSOLE_HEIGHT, MIN_EXPLORER_WIDTH,
-  parseLayout, saveLayout,
+  parseLayout, saveLayout, TERMINAL_CONSOLE_HEIGHT, terminalConsoleHeight,
 } from "./desktop-layout";
 
 describe("desktop pane layout", () => {
@@ -22,6 +22,14 @@ describe("desktop pane layout", () => {
     expect(clampAgent(5000, 900, 250)).toBe(900 - 250 - MIN_CODE_WIDTH - 10);
     expect(clampConsole(0, 900)).toBe(MIN_CONSOLE_HEIGHT);
     expect(clampConsole(5000, 900)).toBe(630);
+  });
+
+  it("grows a short console when the terminal tab opens", () => {
+    // 240px was only ~10 rows of terminal; opening it should give real space.
+    expect(terminalConsoleHeight(240, 900)).toBeGreaterThanOrEqual(TERMINAL_CONSOLE_HEIGHT);
+    // A console the user dragged taller is kept, and the window cap still applies.
+    expect(terminalConsoleHeight(520, 900)).toBe(520);
+    expect(terminalConsoleHeight(240, 600)).toBe(420);
   });
 
   it("rescues a layout stored for a much wider window", () => {

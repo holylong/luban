@@ -255,6 +255,7 @@ function createWorkspace(root, emit = () => {}, options = {}) {
   // `script` is the fallback, and a plain pipe is the last resort.
   const PTY_BRIDGE = String.raw`
 import os, pty, sys, select, signal
+import fcntl, termios, struct
 cols, rows, shell = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 pid, fd = pty.fork()
 if pid == 0:
@@ -264,14 +265,32 @@ if pid == 0:
         os.execvpe(shell, [shell, "-il"], env)
     except OSError:
         os._exit(127)
-import fcntl, termios, struct
+def setsize(c, r):
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", r, c, 0, 0))
+    except OSError:
+        pass
+setsize(cols, rows)
+# fd 3 carries "resize COLS ROWS" lines, so the shell follows the panel without
+# a restart. It is optional: older launchers only hand us the three stdio pipes.
 try:
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    control = os.fdopen(3, "r")
 except OSError:
-    pass
+    control = None
 try:
     while True:
-        ready, _, _ = select.select([0, fd], [], [])
+        ready, _, _ = select.select([0, fd] + ([3] if control else []), [], [])
+        if control is not None and 3 in ready:
+            line = control.readline()
+            if not line:
+                control = None
+            else:
+                parts = line.split()
+                if len(parts) == 3 and parts[0] == "resize":
+                    try:
+                        setsize(int(parts[1]), int(parts[2]))
+                    except ValueError:
+                        pass
         if 0 in ready:
             data = os.read(0, 65536)
             if not data:
@@ -311,7 +330,7 @@ finally:
     const shell = resolveShell();
     if (process.platform !== "win32") {
       const python = resolvePython();
-      if (python) return { command: python, args: ["-c", PTY_BRIDGE, String(cols), String(rows), shell], pty: true, shell };
+      if (python) return { command: python, args: ["-c", PTY_BRIDGE, String(cols), String(rows), shell], pty: true, shell, control: true };
       const script = ["/usr/bin/script", "/bin/script"].find(candidate => fs.existsSync(candidate));
       if (script) {
         const boot = `stty rows ${rows} cols ${cols} 2>/dev/null; exec '${shell.replaceAll("'", "'\\''")}' -il`;
@@ -334,10 +353,13 @@ finally:
       cwd: root,
       env: { ...process.env, TERM: "xterm-256color", COLUMNS: String(cols), LINES: String(rows) },
       detached: process.platform !== "win32",
-      stdio: ["pipe", "pipe", "pipe"],
+      // fd 3 is the resize channel; only the pty bridge understands it.
+      stdio: launch.control ? ["pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    const record = { child, bytes: 0, pty: launch.pty };
+    const control = launch.control ? child.stdio[3] : null;
+    control?.on("error", () => {});
+    const record = { child, bytes: 0, pty: launch.pty, control, cols, rows };
     terminals.set(id, record);
     const limit = options.maxTerminalBytes || MAX_TERMINAL_BYTES;
     const output = chunk => {
@@ -376,6 +398,19 @@ finally:
     record.child.stdin.write(input.data);
     return { ok: true };
   }
+  /** Match the pty to the panel after a drag or window resize. */
+  function resizeTerminal(input) {
+    assertActive();
+    const cols = terminalSize(input?.cols, 0, 20, 400);
+    const rows = terminalSize(input?.rows, 0, 5, 200);
+    const record = terminals.get(input?.id);
+    if (!record) throw new Error("Terminal is not running");
+    if (!record.control) return { ok: true, resized: false };
+    record.control.write(`resize ${cols} ${rows}\n`);
+    record.cols = cols;
+    record.rows = rows;
+    return { ok: true, resized: true };
+  }
   function stopTerminal(id) {
     if (disposed || typeof id !== "string") return { ok: true };
     const record = terminals.get(id);
@@ -395,7 +430,7 @@ finally:
   }
   return {
     readFile, saveFile, mediaFile, listFiles, readPreview, archiveEntry, absolutePath, runCommand, stopCommand,
-    startTerminal, writeTerminal, stopTerminal, dispose,
+    startTerminal, writeTerminal, resizeTerminal, stopTerminal, dispose,
   };
 }
 

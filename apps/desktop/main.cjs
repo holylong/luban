@@ -2,8 +2,10 @@ const { app, BrowserWindow, dialog, Menu, nativeImage, ipcMain, protocol, screen
 const { preparePetTask } = require("./pet-task.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
-let backendAccess;
 let petJob;
+// The pet submits into one window; remember which so its status keeps working
+// after focus moves to another project.
+let petSession;
 let petSubmitting = false;
 let quitting = false;
 let tray;
@@ -12,29 +14,92 @@ let tray;
 let botChild;
 let botError;
 let botQuitting = false;
+
+// One session per window: its own project root, local backend, workspace
+// service and unsaved-changes flag, so two folders can be open at once.
+const sessions = new Map();
+let lastSession;
+let sessionSeq = 0;
+
+function createSession() {
+  return {
+    key: ++sessionSeq,
+    window: undefined,
+    workspace: undefined,
+    workspaceService: undefined,
+    backend: undefined,
+    backendAccess: undefined,
+    trustedOrigin: undefined,
+    dirty: false,
+    approvedUnload: false,
+    opening: false,
+  };
+}
+
+function liveSessions() {
+  return [...sessions.values()].filter(session => session.window && !session.window.isDestroyed());
+}
+
+function focusedSession() {
+  const win = BrowserWindow.getFocusedWindow();
+  const focused = win && !win.isDestroyed() ? sessions.get(win.webContents.id) : undefined;
+  if (focused) return focused;
+  if (lastSession && lastSession.window && !lastSession.window.isDestroyed()) return lastSession;
+  return liveSessions().at(-1);
+}
+
+/** The session behind an IPC event, or undefined when the sender is not ours. */
+function trustedSession(event) {
+  const session = sessions.get(event.sender.id);
+  if (!session || !session.trustedOrigin) return undefined;
+  const win = session.window;
+  if (!win || win.isDestroyed() || event.sender !== win.webContents ||
+      event.senderFrame !== win.webContents.mainFrame) return undefined;
+  try { return new URL(event.senderFrame.url).origin === session.trustedOrigin ? session : undefined; }
+  catch { return undefined; }
+}
+
+function trustedSender(event) {
+  return Boolean(trustedSession(event));
+}
+
+function emitCommand(session, event) {
+  const win = session.window;
+  if (!win || win.isDestroyed() || !session.trustedOrigin) return;
+  try {
+    if (new URL(win.webContents.getURL()).origin === session.trustedOrigin) win.webContents.send("luban:commandEvent", event);
+  } catch { /* No document during navigation. */ }
+}
+
+function showSession(session) {
+  const win = session && session.window;
+  if (!win || win.isDestroyed()) return false;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  return true;
+}
+
 function showMain() {
-  if (window && !window.isDestroyed()) {
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
-    return;
-  }
-  // Closing the window with the tray present only hides it, but a crashed
+  const session = focusedSession();
+  if (showSession(session)) return;
+  // Closing a window with the tray present only hides it, but a crashed
   // renderer can destroy it; reopen the last project instead of doing nothing.
-  if (opening) return;
-  void openWorkspace(currentWorkspace || savedWorkspace() || homedir())
+  if (liveSessions().length || [...sessions.values()].some(item => item.opening)) return;
+  void openWorkspaceWindow(savedWorkspace() || homedir())
     .catch(error => dialog.showErrorBox("无法打开项目", error instanceof Error ? error.message : String(error)));
 }
+
 function trustedPet(event) {
   return pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame === pet.webContents.mainFrame && event.senderFrame.url === require('node:url').pathToFileURL(join(__dirname, 'pet.html')).href;
 }
-async function petApi(path, body) {
-  if (!backendAccess || opening) throw new Error('工作区尚未就绪');
-  const access = backendAccess;
+async function petApi(session, path, body) {
+  const access = session && session.backendAccess;
+  if (!access || (session.window && session.window.isDestroyed())) throw new Error('工作区尚未就绪');
   const response = await fetch(new URL(path, access.url), { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${access.token}`, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000) });
   const result = await response.json();
   if (!response.ok || result.ok === false) throw new Error(result.error || `HTTP ${response.status}`);
-  if (backendAccess !== access) throw new Error('工作区已切换');
+  if (session.backendAccess !== access) throw new Error('工作区已切换');
   return result;
 }
 ipcMain.handle('luban:petOpen', event => { if (!trustedPet(event)) throw new Error('Untrusted pet'); showMain(); });
@@ -47,28 +112,31 @@ ipcMain.handle('luban:petSubmit', async (event, input) => {
   if (!trustedPet(event) || petSubmitting) throw new Error('桌宠正在处理提交');
   petSubmitting = true;
   try {
-    if (petJob) { const job = await petApi(`/api/jobs/${encodeURIComponent(petJob)}`); if (['queued','pending','working','paused'].includes(job.status)) throw new Error('请先完成或取消当前任务'); }
-    const access = backendAccess;
+    const session = petSession && petSession.backendAccess ? petSession : focusedSession();
+    if (!session || !session.backendAccess) throw new Error('工作区尚未就绪');
+    if (petJob) { const job = await petApi(session, `/api/jobs/${encodeURIComponent(petJob)}`); if (['queued','pending','working','paused'].includes(job.status)) throw new Error('请先完成或取消当前任务'); }
+    const access = session.backendAccess;
     const task = await preparePetTask(input);
-    if (backendAccess !== access || !access) throw new Error('工作区已切换，请重新提交');
-    const nodeInfo = await petApi('/api/node');
-    const project = Object.entries(nodeInfo.projects || {}).find(([, root]) => root === currentWorkspace)?.[0] || Object.keys(nodeInfo.projects || {})[0];
+    if (session.backendAccess !== access) throw new Error('工作区已切换，请重新提交');
+    const nodeInfo = await petApi(session, '/api/node');
+    const project = Object.entries(nodeInfo.projects || {}).find(([, root]) => root === session.workspace)?.[0] || Object.keys(nodeInfo.projects || {})[0];
     if (!project) throw new Error('没有可用项目');
     if (!nodeInfo.interactive) throw new Error('未启用交互审批，拒绝自动执行');
-    if (backendAccess !== access) throw new Error('工作区已切换，请重新提交');
-    const reply = await petApi('/api/jobs', { ...task, project_id: project, interaction: 'on' });
+    if (session.backendAccess !== access) throw new Error('工作区已切换，请重新提交');
+    const reply = await petApi(session, '/api/jobs', { ...task, project_id: project, interaction: 'on' });
     petJob = reply.job_id;
-    showMain();
-    window.webContents.send('luban:petJob', petJob);
+    petSession = session;
+    showSession(session);
+    session.window?.webContents.send('luban:petJob', petJob);
     return { id: petJob };
   } finally { petSubmitting = false; }
 });
 ipcMain.handle('luban:petStatus', async event => {
   if (!trustedPet(event)) throw new Error('Untrusted pet');
-  if (!petJob) return { status: 'idle', text: '把任务或文本文件喂给我吧' };
-  const job = await petApi(`/api/jobs/${encodeURIComponent(petJob)}`);
-  const approvals = await petApi(`/api/approvals?job=${encodeURIComponent(petJob)}`);
-  const questions = await petApi(`/api/questions?job=${encodeURIComponent(petJob)}`);
+  if (!petJob || !petSession || !petSession.backendAccess) return { status: 'idle', text: '把任务或文本文件喂给我吧' };
+  const job = await petApi(petSession, `/api/jobs/${encodeURIComponent(petJob)}`);
+  const approvals = await petApi(petSession, `/api/approvals?job=${encodeURIComponent(petJob)}`);
+  const questions = await petApi(petSession, `/api/questions?job=${encodeURIComponent(petJob)}`);
   return { status: approvals.length || questions.length ? 'approval' : job.status, text: job.result || job.error || job.title || '', id: petJob };
 });
 ipcMain.handle('luban:botStatus', event => {
@@ -93,10 +161,13 @@ function announcePet() {
   const visible = petVisible();
   rememberPet(visible);
   if (tray && !tray.isDestroyed()) tray.setContextMenu(Menu.buildFromTemplate(trayTemplate()));
-  if (!window || window.isDestroyed() || !trustedOrigin) return;
-  try {
-    if (new URL(window.webContents.getURL()).origin === trustedOrigin) window.webContents.send('luban:petVisibility', visible);
-  } catch { /* No document during navigation. */ }
+  for (const session of sessions.values()) {
+    const win = session.window;
+    if (!win || win.isDestroyed() || !session.trustedOrigin) continue;
+    try {
+      if (new URL(win.webContents.getURL()).origin === session.trustedOrigin) win.webContents.send('luban:petVisibility', visible);
+    } catch { /* No document during navigation. */ }
+  }
 }
 function createPet() {
   if (pet && !pet.isDestroyed()) { pet.show(); pet.focus(); announcePet(); return; }
@@ -134,20 +205,25 @@ function trayImage() {
   return image.resize({ width: size, height: size });
 }
 function trayTooltip() {
-  return `luban${currentWorkspace ? ` · ${basename(currentWorkspace)}` : ""}`;
+  const session = focusedSession();
+  return `luban${session?.workspace ? ` · ${basename(session.workspace)}` : ""}`;
 }
 function quitApp() {
-  // The tray may be the only visible surface; surface the window first so an
+  // The tray may be the only visible surface; surface a window first so an
   // "放弃未保存的更改？" prompt is not parented to a hidden window.
-  if (dirty) showMain();
+  if (dirtySessions().length) showMain();
   app.quit();
+}
+function dirtySessions() {
+  return liveSessions().filter(session => session.dirty);
 }
 function trayTemplate() {
   return [
     { label: "打开主界面", click: showMain },
     { label: petVisible() ? "隐藏桌宠" : "显示桌宠", click: togglePet },
     { type: "separator" },
-    { label: "打开项目文件夹…", click: async () => { const path = await chooseWorkspace(); if (path) await openWorkspace(path); } },
+    { label: "新建窗口", click: () => { void newWindow().catch(reportOpenError); } },
+    { label: "打开项目文件夹…", click: async () => { const path = await chooseWorkspace(); if (path) await openFolder(path).catch(reportOpenError); } },
     { type: "separator" },
     { label: "退出 luban", click: quitApp },
   ];
@@ -164,6 +240,11 @@ function createTray() {
   tray.on("double-click", showMain);
   return tray;
 }
+function updateTray() {
+  if (!tray || tray.isDestroyed()) return;
+  tray.setToolTip(trayTooltip());
+  tray.setContextMenu(Menu.buildFromTemplate(trayTemplate()));
+}
 const { createWorkspace } = require("./workspace.cjs");
 const { MEDIA_SCHEME, mediaResponse } = require("./media.cjs");
 
@@ -179,59 +260,43 @@ const { basename, dirname, join, resolve } = require("node:path");
 
 const cli = process.env.LUBAN_CLI || resolve(__dirname, "../../dist/cli.js");
 const node = process.env.LUBAN_NODE_BIN || "node";
-let window;
-let backend;
-let opening = false;
-let workspaceService;
-let currentWorkspace;
-let trustedOrigin;
-let dirty = false;
-let approvedUnload = false;
 
-function trustedSender(event) {
-  if (!window || window.isDestroyed() || event.sender !== window.webContents ||
-      event.senderFrame !== window.webContents.mainFrame || !trustedOrigin) return false;
-  try { return new URL(event.senderFrame.url).origin === trustedOrigin; }
-  catch { return false; }
-}
-function emitCommand(event) {
-  if (!window || window.isDestroyed() || !trustedOrigin) return;
-  try {
-    if (new URL(window.webContents.getURL()).origin === trustedOrigin) window.webContents.send("luban:commandEvent", event);
-  } catch { /* No document during navigation. */ }
-}
-for (const method of ["readFile", "saveFile", "listFiles", "readPreview", "runCommand", "stopCommand", "startTerminal", "writeTerminal", "stopTerminal"]) {
+for (const method of ["readFile", "saveFile", "listFiles", "readPreview", "runCommand", "stopCommand", "startTerminal", "writeTerminal", "resizeTerminal", "stopTerminal"]) {
   ipcMain.handle(`luban:${method}`, (event, input) => {
-    if (!trustedSender(event) || !workspaceService || opening) throw new Error("Untrusted or inactive workspace");
-    return workspaceService[method](input);
+    const session = trustedSession(event);
+    if (!session || !session.workspaceService || session.opening) throw new Error("Untrusted or inactive workspace");
+    return session.workspaceService[method](input);
   });
 }
 // Formats the preview cannot paint (a PDF the user wants to annotate, a deck to
 // edit) still open in the application the OS associates with them.
 ipcMain.handle("luban:openPath", async (event, value) => {
-  if (!trustedSender(event) || !workspaceService || opening) throw new Error("Untrusted or inactive workspace");
-  const error = await shell.openPath(workspaceService.absolutePath(value));
+  const session = trustedSession(event);
+  if (!session || !session.workspaceService || session.opening) throw new Error("Untrusted or inactive workspace");
+  const error = await shell.openPath(session.workspaceService.absolutePath(value));
   if (error) throw new Error(error);
   return { ok: true };
 });
 ipcMain.on("luban:setDirty", (event, value) => {
-  const allowed = trustedSender(event) && typeof value === "boolean";
-  if (allowed) dirty = value;
+  const session = trustedSession(event);
+  const allowed = Boolean(session) && typeof value === "boolean";
+  if (allowed) session.dirty = value;
   event.returnValue = allowed;
 });
-function confirmDiscard() {
-  if (!dirty) return true;
+function confirmDiscard(session) {
+  if (!session.dirty) return true;
+  const win = session.window;
   // A modal prompt parented to a window hidden in the tray never shows up.
-  if (window && !window.isDestroyed()) window.show();
-  return dialog.showMessageBoxSync(window, {
+  if (win && !win.isDestroyed()) win.show();
+  return dialog.showMessageBoxSync(win && !win.isDestroyed() ? win : undefined, {
     type: "warning", title: "未保存的更改", message: "放弃未保存的更改？",
     buttons: ["取消", "放弃更改"], defaultId: 0, cancelId: 0, noLink: true,
   }) === 1;
 }
-function stopWorkspace() {
-  workspaceService?.dispose();
-  workspaceService = undefined;
-  trustedOrigin = undefined;
+function stopWorkspace(session) {
+  session.workspaceService?.dispose();
+  session.workspaceService = undefined;
+  session.trustedOrigin = undefined;
 }
 function savedWorkspace() {
   try {
@@ -242,12 +307,12 @@ function savedWorkspace() {
 function rememberWorkspace(path) {
   writeFileSync(join(app.getPath("userData"), "workspace.json"), JSON.stringify({ path }));
 }
-function stopBackend() {
-  backendAccess = undefined;
-  petJob = undefined;
-  if (!backend) return;
-  backend.kill("SIGTERM");
-  backend = undefined;
+function stopBackend(session) {
+  if (petSession === session) { petJob = undefined; petSession = undefined; }
+  session.backendAccess = undefined;
+  if (!session.backend) return;
+  session.backend.kill("SIGTERM");
+  session.backend = undefined;
 }
 function botHome() {
   return process.env.LUBAN_HOME ? resolve(process.env.LUBAN_HOME) : join(homedir(), ".luban");
@@ -277,15 +342,19 @@ function stopBot() {
   botChild = undefined;
   child.kill("SIGTERM");
 }
-function startBackend(workspace) {
+function startBackend(session, workspace) {
   return new Promise((resolveStart, rejectStart) => {
     const token = randomBytes(32).toString("base64url");
     // The window talks to a loopback-only backend. --remote dials the relay
-    // configured in ~/.luban/config.json so the phone's device list can see it.
-    const child = spawn(node, [cli, "web", workspace, "--host", "127.0.0.1", "--port", "0", "--no-mesh", "--remote"], {
+    // configured in ~/.luban/config.json so the phone's device list can see it;
+    // one device can only hold one relay slot, so extra windows stay local.
+    const remote = ![...sessions.values()].some(other => other !== session && other.backendAccess);
+    const args = [cli, "web", workspace, "--host", "127.0.0.1", "--port", "0", "--no-mesh"];
+    if (remote) args.push("--remote");
+    const child = spawn(node, args, {
       env: { ...process.env, LUBAN_WEB_TOKEN: token }, stdio: ["ignore", "pipe", "pipe"],
     });
-    backend = child;
+    session.backend = child;
     let output = "";
     let errors = "";
     let settled = false;
@@ -307,129 +376,252 @@ function startBackend(workspace) {
     child.on("error", error => finish(error));
     child.on("exit", code => {
       if (!settled) finish(new Error(`本地服务退出 (${code})：${errors.slice(-500)}`));
-      else if (backend === child && window && !window.isDestroyed()) {
-        stopWorkspace();
-        backendAccess = undefined;
-        petJob = undefined;
-        showMain();
-        dialog.showMessageBox(window, { type: "error", title: "luban", message: "桌面服务已停止", detail: errors.slice(-500) || `退出码 ${code}` });
+      else if (session.backend === child && session.window && !session.window.isDestroyed()) {
+        stopWorkspace(session);
+        stopBackend(session);
+        showSession(session);
+        dialog.showMessageBox(session.window, { type: "error", title: "luban", message: "桌面服务已停止", detail: errors.slice(-500) || `退出码 ${code}` });
       }
     });
   });
 }
-async function chooseWorkspace() {
-  const options = { title: "选择项目文件夹", defaultPath: savedWorkspace() || homedir(), properties: ["openDirectory"] };
-  // The tray can ask for a folder while the window is hidden behind it.
-  if (window && !window.isDestroyed()) window.show();
-  const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+async function chooseWorkspace(session) {
+  const win = session && session.window && !session.window.isDestroyed() ? session.window : undefined;
+  const options = { title: "选择项目文件夹", defaultPath: session?.workspace || savedWorkspace() || homedir(), properties: ["openDirectory"] };
+  // The tray can ask for a folder while every window is hidden behind it.
+  if (win) win.show();
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
   return result.canceled ? undefined : result.filePaths[0];
+}
+function reportOpenError(error) {
+  dialog.showErrorBox("无法打开项目", error instanceof Error ? error.message : String(error));
+}
+/**
+ * Opening another folder while a project is already on screen is ambiguous, so
+ * the user picks: a second window (the current project keeps running) or this
+ * window (its project is replaced). Returns "window", "switch" or "cancel".
+ */
+async function askOpenMode(session, workspace) {
+  if (!session?.workspace) return "switch";
+  const options = {
+    type: "question", title: "打开项目", message: `打开「${basename(workspace)}」`,
+    detail: `当前窗口打开的是「${basename(session.workspace)}」。新窗口打开可以让它继续运行；在当前窗口打开会关掉它的后端并换成新文件夹。`,
+    buttons: ["新窗口打开", "在当前窗口打开", "取消"], defaultId: 0, cancelId: 2, noLink: true,
+  };
+  const win = session.window && !session.window.isDestroyed() ? session.window : undefined;
+  const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  return response === 0 ? "window" : response === 1 ? "switch" : "cancel";
+}
+function findWindowFor(workspace) {
+  const target = resolve(workspace);
+  return liveSessions().find(session => session.workspace && resolve(session.workspace) === target && !session.opening);
 }
 // The window's own project dropdown is disabled in desktop mode (the backend is
 // pinned to one root), so the renderer needs a way to reach the same folder
 // picker as the File menu instead of making the native menu the only path.
 ipcMain.handle("luban:openWorkspace", async event => {
-  if (!trustedSender(event) || opening || petSubmitting) throw new Error("当前无法切换工作区");
-  const target = await chooseWorkspace();
+  const session = trustedSession(event);
+  if (!session || session.opening || petSubmitting) throw new Error("当前无法切换工作区");
+  const target = await chooseWorkspace(session);
   if (!target) return { canceled: true };
+  const mode = await askOpenMode(session, target);
+  if (mode === "cancel") return { canceled: true };
   // Reply first: switching replaces this document, so a later reply would be
   // dropped with the renderer that is waiting for it.
-  setImmediate(() => { openWorkspace(target).catch(error => dialog.showErrorBox("无法打开项目", error instanceof Error ? error.message : String(error))); });
+  setImmediate(() => {
+    (mode === "switch" ? loadInSession(session, target) : openWorkspaceWindow(target)).catch(reportOpenError);
+  });
+  return { path: target, mode };
+});
+// The multi-window path: the current project keeps running in its own window.
+ipcMain.handle("luban:openWorkspaceWindow", async event => {
+  const session = trustedSession(event);
+  if (!session || petSubmitting) throw new Error("当前无法打开窗口");
+  const target = await chooseWorkspace(session);
+  if (!target) return { canceled: true };
+  // A new window is the point of this action, so a folder that is already open
+  // elsewhere gets its own window too instead of silently focusing the old one.
+  setImmediate(() => { openWorkspaceWindow(target).catch(reportOpenError); });
   return { path: target };
 });
-function installWindowGuards() {
-  window.once("ready-to-show", () => window.show());
-  // Closing hides the window: the backend and the bot worker keep running and
-  // the tray icon reopens it. Without a usable tray the close stays a real one.
-  window.on('close', event => { if (!quitting && tray && !tray.isDestroyed()) { event.preventDefault(); window.hide(); } });
-  window.on("closed", () => { window = undefined; dirty = false; stopWorkspace(); stopBackend(); });
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  window.webContents.on("will-prevent-unload", event => {
-    if (approvedUnload || confirmDiscard()) {
-      dirty = false;
+function installWindowGuards(session) {
+  const win = session.window;
+  win.once("ready-to-show", () => win.show());
+  win.on("focus", () => { lastSession = session; updateTray(); });
+  // Closing hides the window: its backend keeps running and the tray icon
+  // reopens it. Without a usable tray the close stays a real one.
+  win.on('close', event => { if (!quitting && tray && !tray.isDestroyed()) { event.preventDefault(); win.hide(); } });
+  win.on("closed", () => {
+    // The webContents is already gone here, so the id was captured at creation.
+    if (session.webContentsId) sessions.delete(session.webContentsId);
+    session.webContentsId = undefined;
+    session.window = undefined;
+    session.dirty = false;
+    stopWorkspace(session);
+    stopBackend(session);
+    if (lastSession === session) lastSession = undefined;
+    updateTray();
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-prevent-unload", event => {
+    if (session.approvedUnload || confirmDiscard(session)) {
+      session.dirty = false;
       event.preventDefault(); // Electron: allow unloading despite renderer's veto.
     }
   });
   for (const name of ["will-navigate", "will-redirect"]) {
-    window.webContents.on(name, (event, target) => {
-      try { if (new URL(target).origin !== trustedOrigin) event.preventDefault(); }
+    win.webContents.on(name, (event, target) => {
+      try { if (new URL(target).origin !== session.trustedOrigin) event.preventDefault(); }
       catch { event.preventDefault(); }
     });
   }
-  window.webContents.on("did-frame-navigate", (_event, url, _code, _status, isMainFrame) => {
+  win.webContents.on("did-frame-navigate", (_event, url, _code, _status, isMainFrame) => {
     if (!isMainFrame) return;
     // Only a committed navigation replaces the service; canceled reloads keep it.
-    workspaceService?.dispose();
-    workspaceService = undefined;
-    dirty = false;
-    approvedUnload = false;
-    if (trustedOrigin && new URL(url).origin === trustedOrigin) {
-      workspaceService = createWorkspace(currentWorkspace, emitCommand);
+    session.workspaceService?.dispose();
+    session.workspaceService = undefined;
+    session.dirty = false;
+    session.approvedUnload = false;
+    if (session.trustedOrigin && new URL(url).origin === session.trustedOrigin) {
+      session.workspaceService = createWorkspace(session.workspace, event => emitCommand(session, event));
     }
   });
-  window.webContents.on("render-process-gone", () => { dirty = false; stopWorkspace(); });
+  win.webContents.on("render-process-gone", () => { session.dirty = false; stopWorkspace(session); });
 }
-async function openWorkspace(workspace) {
-  if (opening || petSubmitting || !confirmDiscard()) return;
-  opening = true;
+function ensureWindow(session) {
+  if (session.window && !session.window.isDestroyed()) return session.window;
+  const win = new BrowserWindow({
+    width: 1500, height: 950, minWidth: 920, minHeight: 620,
+    show: false, backgroundColor: "#050607",
+    icon: join(dirname(cli), "web-ui", process.platform === "win32" ? "icon.ico" : "icon-512.png"),
+    // plugins:true is what enables Chromium's bundled PDF viewer for the
+    // luban-media:// embed, so a PDF preview needs no external application.
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, plugins: true, preload: join(__dirname, "preload.cjs") },
+  });
+  session.window = win;
+  session.webContentsId = win.webContents.id;
+  sessions.set(session.webContentsId, session);
+  installWindowGuards(session);
+  return win;
+}
+/** Load a project into one window, replacing whatever that window showed. */
+async function loadInSession(session, workspace) {
+  if (session.opening) return;
+  if (!confirmDiscard(session)) throw new Error("已取消：这个窗口有未保存的更改");
+  const hadWorkspace = Boolean(session.workspace);
+  session.opening = true;
   try {
     // Validate the new root before disturbing the old workspace.
-    const nextWorkspace = createWorkspace(workspace, emitCommand);
-    stopWorkspace();
-    stopBackend();
-    workspaceService = nextWorkspace;
-    currentWorkspace = workspace;
-    const { url, token } = await startBackend(workspace);
-    backendAccess = { url, token };
+    const nextWorkspace = createWorkspace(workspace, event => emitCommand(session, event));
+    stopWorkspace(session);
+    stopBackend(session);
+    session.workspaceService = nextWorkspace;
+    session.workspace = workspace;
+    const { url, token } = await startBackend(session, workspace);
+    session.backendAccess = { url, token };
+    session.trustedOrigin = new URL(url).origin;
     rememberWorkspace(workspace);
-    if (!window || window.isDestroyed()) {
-      window = new BrowserWindow({
-        width: 1500, height: 950, minWidth: 920, minHeight: 620,
-        show: false, backgroundColor: "#050607",
-        icon: join(dirname(cli), "web-ui", process.platform === "win32" ? "icon.ico" : "icon-512.png"),
-        // plugins:true is what enables Chromium's bundled PDF viewer for the
-        // luban-media:// embed, so a PDF preview needs no external application.
-        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, plugins: true, preload: join(__dirname, "preload.cjs") },
-      });
-      installWindowGuards();
-    }
-    trustedOrigin = new URL(url).origin;
-    window.setTitle(`luban · ${basename(workspace)}`);
-    if (tray && !tray.isDestroyed()) tray.setToolTip(trayTooltip());
-    approvedUnload = true;
-    await window.loadURL(`${url}?desktop=1&token=${encodeURIComponent(token)}`);
-    window.show();
+    const win = ensureWindow(session);
+    win.setTitle(`luban · ${basename(workspace)}`);
+    updateTray();
+    session.approvedUnload = true;
+    await win.loadURL(`${url}?desktop=1&token=${encodeURIComponent(token)}`);
+    win.show();
   } catch (error) {
-    stopWorkspace();
-    stopBackend();
-    dialog.showErrorBox("无法打开项目", error instanceof Error ? error.message : String(error));
-    if (!window) app.quit();
-  } finally { opening = false; approvedUnload = false; }
+    stopWorkspace(session);
+    stopBackend(session);
+    // A window that never showed a project should not linger empty.
+    if (!hadWorkspace && session.window && !session.window.isDestroyed()) session.window.destroy();
+    throw error;
+  } finally {
+    session.opening = false;
+    session.approvedUnload = false;
+  }
 }
+/** Open a project in a brand new window and focus it. */
+async function openWorkspaceWindow(workspace) {
+  const session = createSession();
+  try {
+    await loadInSession(session, workspace);
+  } catch (error) {
+    if (session.webContentsId) sessions.delete(session.webContentsId);
+    if (!liveSessions().length) throw error;
+    reportOpenError(error);
+  }
+  showSession(session);
+  return session;
+}
+/**
+ * 文件 → 打开项目文件夹: reuse a window that already shows this folder, otherwise
+ * open a second window so the current project keeps running.
+ */
+async function newWindow() {
+  const source = focusedSession();
+  return openWorkspaceWindow(source?.workspace || savedWorkspace() || homedir());
+}
+async function openFolder(workspace) {
+  const source = focusedSession();
+  const mode = await askOpenMode(source, workspace);
+  if (mode === "cancel") return;
+  if (mode === "switch") { await loadInSession(source ?? createSession(), workspace); return; }
+  await openWorkspaceWindow(workspace);
+}
+/** The media scheme is shared by every window, so the URL names its backend. */
+function mediaSession(request) {
+  try {
+    const port = new URL(request.url).searchParams.get("port");
+    if (port) {
+      const owner = [...sessions.values()].find(session => {
+        try { return session.backendAccess && new URL(session.backendAccess.url).port === port; }
+        catch { return false; }
+      });
+      if (owner) return owner;
+    }
+  } catch { /* A malformed URL falls through to the focused window. */ }
+  return focusedSession();
+}
+function folderFromArgs(argv) {
+  return argv.slice(1)
+    .filter(value => !value.startsWith("-"))
+    .map(value => resolve(value))
+    .filter(value => value !== resolve(app.getAppPath()) && existsSync(value) && statSync(value).isDirectory())
+    .at(-1);
+}
+// Launching luban again, or opening a folder with it, belongs to the running
+// app: a second process would race for the relay slot and the bot worker.
+if (!app.requestSingleInstanceLock()) app.quit();
+else app.on("second-instance", (_event, argv) => {
+  const folder = folderFromArgs(argv);
+  if (!folder) { showMain(); return; }
+  const existing = findWindowFor(folder);
+  if (existing) { showSession(existing); return; }
+  void openFolder(folder).catch(reportOpenError);
+});
 app.whenReady().then(async () => {
   app.setName("luban");
   // Create the tray before the workspace opens so an unopenable project still
   // has a visible way out (退出 luban) instead of an invisible process.
   createTray();
   protocol.handle(MEDIA_SCHEME, request => {
-    try { return mediaResponse(workspaceService, request); }
+    try {
+      const session = mediaSession(request);
+      if (!session?.workspaceService) return new Response("工作区尚未就绪", { status: 503 });
+      return mediaResponse(session.workspaceService, request);
+    }
     catch (error) { return new Response(error instanceof Error ? error.message : String(error), { status: 500 }); }
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: "文件", submenu: [
-      { label: "打开项目文件夹…", accelerator: "CmdOrCtrl+O", click: async () => { const path = await chooseWorkspace(); if (path) await openWorkspace(path); } },
-      { label: "隐藏到托盘", click: () => { if (window && !window.isDestroyed()) window.hide(); } },
+      { label: "打开项目文件夹…", accelerator: "CmdOrCtrl+O", click: async () => { const path = await chooseWorkspace(focusedSession()); if (path) await openFolder(path).catch(reportOpenError); } },
+      { label: "新建窗口", accelerator: "CmdOrCtrl+Shift+N", click: () => { void newWindow().catch(reportOpenError); } },
+      { label: "隐藏到托盘", click: () => { const session = focusedSession(); if (session?.window && !session.window.isDestroyed()) session.window.hide(); } },
       { type: "separator" }, { role: "quit", label: "退出" },
     ] },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
     { label: "视图", submenu: [{ label: '显示桌宠', click: createPet }, { label: '打开主界面', click: showMain }, { role: "reload", label: "重新加载" }, { role: "togglefullscreen", label: "全屏" }] },
   ]));
-  const argument = process.argv.slice(1)
-    .filter(value => !value.startsWith("-"))
-    .map(value => resolve(value))
-    .filter(value => value !== resolve(app.getAppPath()) && existsSync(value) && statSync(value).isDirectory())
-    .at(-1);
-  await openWorkspace(argument || savedWorkspace() || homedir());
-  if (backendAccess) { startBot(); if (petPreference()) createPet(); }
+  await openWorkspaceWindow(folderFromArgs(process.argv) || savedWorkspace() || homedir());
+  if (liveSessions().some(session => session.backendAccess)) { startBot(); if (petPreference()) createPet(); }
 }).catch(error => { dialog.showErrorBox("luban", String(error)); app.quit(); });
 // before-quit may be canceled by a dirty window; keep its backend alive.
 app.on('before-quit', event => {
@@ -446,7 +638,13 @@ app.on('before-quit', event => {
   child.kill('SIGTERM');
 });
 app.on("activate", showMain);
-app.on("will-quit", () => { if (tray && !tray.isDestroyed()) tray.destroy(); tray = undefined; stopBot(); stopWorkspace(); stopBackend(); });
+app.on("will-quit", () => {
+  if (tray && !tray.isDestroyed()) tray.destroy();
+  tray = undefined;
+  stopBot();
+  for (const session of sessions.values()) { stopWorkspace(session); stopBackend(session); }
+  sessions.clear();
+});
 // The tray keeps luban (and the bot worker) alive with no window; a close
 // without a usable tray still quits, since nothing could reopen the app.
 app.on("window-all-closed", () => { if (!tray || tray.isDestroyed()) app.quit(); });

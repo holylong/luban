@@ -31,6 +31,8 @@ export function CodexQuotaView({ quota, loading = false, refresh, onReset, reset
     <header><b>Codex 剩余额度</b><button disabled={loading} onClick={refresh} title="额度数据缓存 1 分钟">{loading ? "查询中…" : "刷新"}</button></header>
     {!quota && <small>{loading ? "正在查询账户额度…" : "暂无额度数据"}</small>}
     {quota?.error && <p role="status">{quota.error}{quota.updatedAt ? " 以下为上次成功查询的数据。" : ""}</p>}
+    {quota?.hint && <p className="desktop-quota-hint" role="status">{quota.hint}</p>}
+    {quota?.detail && <small className="desktop-quota-detail">{quota.detail}</small>}
     {quota && !quota.error && !quota.windows.length && <p>账号未返回额度窗口；请确认已用 ChatGPT 账号登录 Codex。</p>}
     {quota?.windows.map(window => <div key={window.id} className={`desktop-quota-window${window.remaining <= 20 ? " low" : ""}`}>
       <div><span>{window.label}{window.durationMins ? ` · ${window.durationMins >= 60 ? `${Number((window.durationMins / 60).toFixed(1))}小时` : `${window.durationMins}分钟`}` : ""}</span><strong>{window.remaining.toFixed(1)}%{window.remaining <= 20 ? " · 额度偏低" : ""}</strong></div>
