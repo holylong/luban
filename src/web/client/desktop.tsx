@@ -17,6 +17,7 @@ import { clampAgent, clampConsole, clampExplorer, fitLayout, loadLayout, saveLay
 import { PaneSplitter } from "./desktop-panes";
 import { reloadPaths, sameTree } from "./desktop-tree";
 import { DesktopFileIcon } from "./desktop-file-icon";
+import { DesktopCodexQuota } from "./desktop-codex-quota";
 
 type ExplorerTab = "files" | "sessions";
 
@@ -202,6 +203,7 @@ export function AgentPanel({ store, timeline }: { store: WorkbenchStore; timelin
   const plan = latestDesktopPlan(timeline);
   return <>
     <TopBar store={store} />
+    <DesktopCodexQuota provider={store.node?.provider} modelId={store.node?.model_id} />
     {store.session && <div className="desktop-agent-tabs"><span>{store.session.title}</span><button onClick={store.startNew}>＋ 新会话</button></div>}
     {store.approvals.length > 0 && <div className="desktop-approvals"><Approvals store={store} /></div>}
     <DesktopQuestions store={store} />

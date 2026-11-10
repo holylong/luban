@@ -11,8 +11,10 @@ import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
 import { savePreferredModel, saveProject, saveTheme } from "../core/config.js";
 import { THEMES, findTheme, resolveTheme } from "../ui/theme.js";
+import { consumeCodexReset, formatCodexResetOutcome, readCodexRateLimits } from "../core/codex-account.js";
 import { supportedReasoningEfforts } from "../core/model-controls.js";
 import { VERSION } from "../version.js";
+import { createCodexQuotaReader, codexResetRequest } from "./codex-quota.js";
 import { DASHBOARD_HTML, DOCS_HTML, webAssetPath, WEB_CONTENT_TYPES } from "./assets.js";
 import { ApprovalBroker, type ApprovalDecision } from "./approval.js";
 import { QuestionBroker } from "./question.js";
@@ -189,6 +191,8 @@ export interface LubanWebServerOptions {
 
 export class LubanWebServer {
   private server?: Server;
+  private readonly codexQuota = createCodexQuotaReader();
+  private codexResetting = false;
   private readonly listeners = new Set<ServerResponse>();
   private readonly interactiveJobs = new Set<string>();
   private readonly jobModes = new Map<string, "edits" | "agent" | "read">();
@@ -370,6 +374,10 @@ export class LubanWebServer {
         auth_required: this.requiresToken,
         web: { host: this.host, port: this.port },
       });
+    }
+    if (url.pathname === "/api/codex/quota") {
+      if (this.config.model.provider !== "codex") throw new HttpError(409, "当前模型不是 Codex");
+      return json(res, await this.codexQuota.read());
     }
     if (url.pathname === "/api/themes") {
       return json(res, { active: resolveTheme(this.config.theme || "midnight", this.config.themeColors),
@@ -560,6 +568,25 @@ export class LubanWebServer {
       try { await savePreferredModel(this.config.home, found.id, found.reasoningEffort); }
       catch (error) { throw new HttpError(500, `could not save model choice: ${error instanceof Error ? error.message : String(error)}`); }
       return json(res, { ok: true, model_id: found.id, model: found.model, provider: found.provider, name: found.name });
+    }
+    if (url.pathname === "/api/codex/quota/reset") {
+      if (this.config.model.provider !== "codex") throw new HttpError(409, "当前模型不是 Codex");
+      const request = codexResetRequest(body);
+      if (request.error) throw new HttpError(400, request.error);
+      // One consume at a time: a second click must not spend a second card.
+      if (this.codexResetting) throw new HttpError(409, "正在处理另一个重置请求，请稍后查看额度");
+      this.codexResetting = true;
+      try {
+        const result = await consumeCodexReset(request.creditId, undefined, request.requestId);
+        // The card is gone now, so cached window percentages are already stale.
+        this.codexQuota.invalidate();
+        return json(res, { ok: true, outcome: result.outcome, message: formatCodexResetOutcome(result.outcome),
+          quota: await this.codexQuota.read() });
+      } catch (error) {
+        throw new HttpError(502, `重置结果不确定：${error instanceof Error ? error.message : String(error)}。请先刷新额度确认，再决定是否重试。`);
+      } finally {
+        this.codexResetting = false;
+      }
     }
     if (url.pathname === "/api/projects") {
       const rawPath = typeof body.path === "string" ? body.path.trim() : "";

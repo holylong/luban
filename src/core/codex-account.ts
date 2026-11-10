@@ -116,7 +116,7 @@ export function formatCodexResetOutcome(outcome: CodexResetOutcome): string {
   }
 }
 
-export function consumeCodexReset(creditId?: string, signal?: AbortSignal, idempotencyKey = randomUUID()) {
+export function consumeCodexReset(creditId?: string, signal?: AbortSignal, idempotencyKey: string = randomUUID()) {
   return codexAccountRequest<{ outcome: CodexResetOutcome }>(
     "account/rateLimitResetCredit/consume",
     { idempotencyKey, ...(creditId ? { creditId } : {}) },

@@ -60,6 +60,10 @@ const query = (params: Record<string, string | number | undefined>): string => {
 };
 
 export const api = {
+  codexQuota: () => request<import("../codex-quota-types").CodexQuota>("/api/codex/quota"),
+  codexReset: (input: { creditId?: string; requestId: string }) =>
+    post<{ ok: boolean; outcome: string; message: string; quota: import("../codex-quota-types").CodexQuota }>(
+      "/api/codex/quota/reset", { credit_id: input.creditId, request_id: input.requestId }),
   themes: () => request<import("./desktop-theme").ThemeCatalog>("/api/themes"),
   setTheme: (id: string) => post<{ active: import("./desktop-theme").DesktopTheme }>("/api/theme", { id }),
   setModel: (model: string, effort?: import("./types").ReasoningEffort | null) =>
