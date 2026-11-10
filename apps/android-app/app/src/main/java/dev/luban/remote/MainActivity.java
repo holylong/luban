@@ -39,9 +39,10 @@ import org.json.JSONObject;
 /**
  * Android shell for the existing /m console, which stays served by the luban relay.
  *
- * The shell draws native chrome around the WebView (a slim status strip, the
- * setup screen and the appearance screen) instead of leaving a stock button bar
- * above a web page that already has its own header.
+ * The shell draws native chrome around the WebView (a floating menu, the setup
+ * screen and the appearance screen) instead of leaving a stock button bar above
+ * a web page that already has its own header. Connection state is reported only
+ * when it is a problem, so the console keeps the whole screen while it works.
  */
 public final class MainActivity extends Activity {
     private static final String PREF_URL = "relay_url";
@@ -58,6 +59,9 @@ public final class MainActivity extends Activity {
     private WebView web;
     private TextView status;
     private TextView statusDot;
+    private LinearLayout statusPill;
+    private TextView menuButton;
+    private boolean consoleConnected;
     // Live task line reported by the console; empty means "only connected".
     private String taskText = "";
     private String connectionText = "";
@@ -223,11 +227,15 @@ public final class MainActivity extends Activity {
      *  always-visible surface, so it is what tells the reader the computer is
      *  still busy after the transcript has scrolled away. */
     private void renderStatus() {
-        if (status == null) return;
-        boolean busy = !taskText.isEmpty();
-        status.setText(busy ? taskText : connectionText);
-        status.setTextColor(busy ? theme.accent : theme.muted);
-        if (statusDot != null) statusDot.setTextColor(busy ? theme.accent : connectionDot);
+        if (status == null || statusPill == null) return;
+        // Connected and idle is the normal case; the page already shows the
+        // run in progress, so the pill stays gone and costs no pixels.
+        boolean problem = !consoleConnected;
+        statusPill.setVisibility(problem ? View.VISIBLE : View.GONE);
+        if (!problem) return;
+        status.setText(connectionText);
+        status.setTextColor(theme.muted);
+        if (statusDot != null) statusDot.setTextColor(connectionDot);
     }
 
     /** The console reports {working,label,detail,seconds,stalled}; anything it
@@ -259,6 +267,27 @@ public final class MainActivity extends Activity {
     /** The page pushes progress through this; a WebView has no other channel
      *  that the shell can read without polling the DOM. */
     private final class TaskBridge {
+        /** The page has no native chrome of its own; its 设置 row calls this so
+         *  the menu stays reachable without a permanent strip on screen. */
+        @JavascriptInterface
+        public void openMenu() {
+            runOnUiThread(() -> {
+                if (screen == SCREEN_CONSOLE) showMenu();
+            });
+        }
+
+        /** An account sign-in happens inside the console page, so no new
+         *  document load tells the shell that the session is now usable. */
+        @JavascriptInterface
+        public void setConnected(boolean connected) {
+            runOnUiThread(() -> {
+                if (screen != SCREEN_CONSOLE) return;
+                consoleConnected = connected;
+                if (connected) connectionText = "已连接 · " + (origin == null ? "" : origin.getHost());
+                renderStatus();
+            });
+        }
+
         @JavascriptInterface
         public void setTaskStatus(String payload) {
             final TextView target = status;
@@ -301,6 +330,17 @@ public final class MainActivity extends Activity {
         sheet.setOrientation(LinearLayout.VERTICAL);
         sheet.setPadding(dp(6), dp(6), dp(6), dp(6));
         sheet.setBackground(surface(theme.panel, theme.line, 16));
+        String host = origin == null ? "" : origin.getHost();
+        TextView stateRow = label(consoleConnected ? "● 已连接 · " + host : "● " + connectionText,
+                13f, consoleConnected ? theme.success : theme.danger, true);
+        stateRow.setPadding(dp(14), dp(12), dp(14), dp(2));
+        stateRow.setMaxLines(2);
+        sheet.addView(stateRow);
+        TextView versionRow = label(consoleConnected && !taskText.isEmpty()
+                ? taskText : "luban 手机版 v" + appVersion(), 12f, theme.dim, false);
+        versionRow.setPadding(dp(14), 0, dp(14), dp(10));
+        versionRow.setMaxLines(2);
+        sheet.addView(versionRow);
         sheet.addView(menuRow("外观设置", view -> { appearanceDirty = false; showAppearance(); }));
         sheet.addView(menuRow("刷新页面", view -> { closeOverlay(); if (web != null) web.reload(); }));
         sheet.addView(menuRow("连接记录", view -> { closeOverlay(); showSetup(""); }));
@@ -435,6 +475,10 @@ public final class MainActivity extends Activity {
         destroyWeb();
         status = null;
         statusDot = null;
+        statusPill = null;
+        consoleConnected = false;
+        if (menuButton != null && menuButton.getParent() == frame) frame.removeView(menuButton);
+        menuButton = null;
         column.removeAllViews();
 
         ScrollView scroll = new ScrollView(this);
@@ -622,6 +666,21 @@ public final class MainActivity extends Activity {
         web = null;
     }
 
+
+    /** SPA logins push history without a document load; re-read the cookie. */
+    private void markConnectedIfLoggedIn() {
+        if (web == null || origin == null) return;
+        String url = web.getUrl();
+        if (url == null) return;
+        Uri loaded = Uri.parse(url);
+        if (!sameOrigin(loaded) || !"/m/".equals(loaded.getPath())) return;
+        String cookies = CookieManager.getInstance().getCookie(url);
+        if (!hasCookie(cookies, "luban_token") && !hasCookie(cookies, "luban_account")) return;
+        consoleConnected = true;
+        connectionText = "已连接 · " + origin.getHost();
+        renderStatus();
+    }
+
     private void open(String address) {
         Uri requested = Uri.parse(address);
         origin = requested;
@@ -639,23 +698,11 @@ public final class MainActivity extends Activity {
         destroyWeb();
         status = null;
         statusDot = null;
+        statusPill = null;
+        consoleConnected = false;
+        if (menuButton != null && menuButton.getParent() == frame) frame.removeView(menuButton);
+        menuButton = null;
         column.removeAllViews();
-
-        LinearLayout bar = new LinearLayout(this);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(14), dp(8), dp(8), dp(8));
-        bar.setBackgroundColor(theme.panel);
-        statusDot = label("●", 11f, theme.dim, false);
-        bar.addView(statusDot);
-        status = label("连接中 · " + requested.getHost(), 13.5f, theme.muted, true);
-        status.setSingleLine(true);
-        status.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(0, -2, 1);
-        statusParams.leftMargin = dp(8);
-        bar.addView(status, statusParams);
-        bar.addView(iconAction("⋮", view -> showMenu()), new LinearLayout.LayoutParams(dp(38), dp(38)));
-        column.addView(bar, new LinearLayout.LayoutParams(-1, -2));
-        column.addView(divider(), new LinearLayout.LayoutParams(-1, dp(1)));
 
         web = new WebView(this);
         // Same object name as reportNativeStatus() in the mobile client.
@@ -689,6 +736,9 @@ public final class MainActivity extends Activity {
                 }
                 return false;
             }
+            @Override public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                if (view == web) markConnectedIfLoggedIn();
+            }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (view != web) return;
                 // An earlier 401 belongs to its navigation, not to a later
@@ -696,6 +746,7 @@ public final class MainActivity extends Activity {
                 mainFrameHttpError = null;
                 // A navigation reloads the console: its old progress is stale.
                 taskText = "";
+                consoleConnected = false;
                 setStatus("连接中 · " + origin.getHost(), theme.dim);
             }
             @Override public void onPageFinished(WebView view, String url) {
@@ -727,6 +778,7 @@ public final class MainActivity extends Activity {
                     CookieManager.getInstance().flush();
                     view.clearHistory();
                 }
+                consoleConnected = consoleReady;
                 if (mainFrameHttpError == null) {
                     setStatus(consoleReady ? "已连接 · " + origin.getHost() : "未登录 · 点右上角重新连接",
                             consoleReady ? theme.success : theme.dim);
@@ -755,6 +807,38 @@ public final class MainActivity extends Activity {
             }
         });
         column.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        // The console page owns the top of the screen: no permanent strip. A
+        // floating menu keeps the native chrome one tap away, and connection
+        // trouble appears as a pill that exists only while something is wrong.
+        statusDot = label("●", 11f, theme.dim, false);
+        status = label("连接中 · " + requested.getHost(), 13f, theme.muted, true);
+        status.setSingleLine(true);
+        status.setEllipsize(TextUtils.TruncateAt.END);
+        statusPill = new LinearLayout(this);
+        statusPill.setGravity(Gravity.CENTER_VERTICAL);
+        statusPill.setPadding(dp(10), dp(7), dp(12), dp(7));
+        statusPill.setBackground(surface(theme.panel, theme.line, 14));
+        statusPill.addView(statusDot);
+        LinearLayout.LayoutParams pillTextParams = new LinearLayout.LayoutParams(0, -2, 1);
+        pillTextParams.leftMargin = dp(7);
+        statusPill.addView(status, pillTextParams);
+        statusPill.setVisibility(View.GONE);
+        FrameLayout.LayoutParams pillParams =
+                new FrameLayout.LayoutParams(-1, -2, Gravity.TOP | Gravity.START);
+        pillParams.topMargin = dp(6);
+        pillParams.leftMargin = dp(8);
+        pillParams.rightMargin = dp(54);
+        frame.addView(statusPill, pillParams);
+
+        menuButton = iconAction("⋮", view -> showMenu());
+        menuButton.setGravity(Gravity.CENTER);
+        menuButton.setBackground(surface(theme.panel, theme.line, 19));
+        FrameLayout.LayoutParams menuParams =
+                new FrameLayout.LayoutParams(dp(38), dp(38), Gravity.TOP | Gravity.END);
+        menuParams.topMargin = dp(6);
+        menuParams.rightMargin = dp(8);
+        frame.addView(menuButton, menuParams);
 
         String path = requested.getPath();
         String destination = path == null || path.isEmpty() || "/".equals(path)

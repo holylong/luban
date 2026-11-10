@@ -2,14 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api, setNodeScope } from "./api";
 import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, ReasoningEffort, SessionDetail, SessionSummary, ToolRun } from "./types";
 import { MobileSessionHistory } from "./mobile-session";
-import { reportNativeStatus } from "./mobile-native";
+import { clearNativeInsets, hasNativeMenu, openNativeMenu, reportNativeConnected, reportNativeStatus } from "./mobile-native";
 import { followTranscript } from "./transcript-scroll";
 import { mobileProject, mobileProjects } from "./mobile-project";
 import {
   appearanceOf, applyAppearance, loadAppearance, saveAppearance, systemDark,
   THEME_OPTIONS, type Appearance, type ThemeMode,
 } from "./mobile-theme";
-import { version as webVersion } from "../../../package.json";
 import {
   deriveTimeline, editRecordStats, formatDuration, liveProgress, parseEditRecord,
   relativeTime, STATUS_LABELS, toolLabel, withOutcome,
@@ -276,6 +275,14 @@ function AuthScreen({ emailVerification, onAuthenticated }: {
 
 export function MobileApp(): React.ReactElement {
   const [tab, setTab] = useState<Tab>("live");
+  // Inside the Android shell the native ⋮ owns the top-right corner and the
+  // shell menu is one row away in 设置; a plain browser shows neither.
+  const [nativeShell, setNativeShell] = useState(false);
+  useEffect(() => {
+    if (!hasNativeMenu()) return;
+    setNativeShell(true);
+    document.documentElement.dataset.shell = "android";
+  }, []);
   // Painted on <html> via data-luban-theme. The Android shell pins it with
   // ?theme= so the native window and the page cannot disagree.
   const [look, setLook] = useState<Appearance>(() => loadAppearance(location.search));
@@ -316,6 +323,14 @@ export function MobileApp(): React.ReactElement {
   const selectedRef = useRef<string | undefined>(selectedId);
   selectedRef.current = selectedId;
   const ready = auth.state === "account" || auth.state === "legacy";
+  // An account sign-in happens inside this page, so the Android shell learns
+  // from here that the console is usable and can drop its connection notice.
+  const nativeConnected = ready && Boolean(node);
+  useEffect(() => {
+    if (!nativeShell) return;
+    clearNativeInsets();
+    reportNativeConnected(nativeConnected);
+  }, [nativeShell, nativeConnected]);
   useEffect(() => { applyAppearance(look); }, [look]);
   // Follow the OS while the page owns the choice. Inside the Android shell the
   // shell resolves "跟随系统" itself and pins the result through ?theme=.
@@ -678,18 +693,22 @@ export function MobileApp(): React.ReactElement {
 
   // A phone that keeps its thumb still should still see the newest line: the
   // transcript follows the tail unless the reader has scrolled up.
-  const mainRef = useRef<HTMLElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
+  // Attach through state, not `useRef`: the console mounts before sign-in and
+  // the scroller only exists afterwards, so a one-shot effect would leave the
+  // page without a follower for the whole session.
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const [content, setContent] = useState<HTMLDivElement | null>(null);
   const follower = useRef<ReturnType<typeof followTranscript> | null>(null);
   useEffect(() => {
-    const element = mainRef.current;
-    const content = contentRef.current;
-    if (!element || !content) return;
-    const handle = followTranscript(element, content);
+    if (!scroller || !content) return;
+    const handle = followTranscript(scroller, content);
     follower.current = handle;
     return () => { handle.dispose(); follower.current = null; };
-  }, []);
-  const pinToBottom = useCallback(() => { follower.current?.reset(); }, []);
+  }, [scroller, content]);
+  const pinToBottom = useCallback(() => { follower.current?.pin(); }, []);
+  // Opening a saved session or a running job lands on its newest line, and a
+  // task that keeps writing stays there until the reader scrolls away.
+  useEffect(() => { pinToBottom(); }, [job?.id, continueSession?.id, pinToBottom]);
 
   // The WebView shell draws the native strip, so the page has to tell it when
   // work starts, ticks and ends; a plain browser simply has no bridge.
@@ -872,29 +891,18 @@ export function MobileApp(): React.ReactElement {
 
   return (
     <div className={`m-app ${tab === "live" ? "m-app-compose" : ""}`}>
+      {/* One line of orientation, nothing more: the transcript is the page. */}
       <header className="m-head">
-        <div className="m-head-row">
+        <button type="button" className="m-head-bar" onClick={() => setTab("settings")} title={nodeLabel}>
           <span className={`m-dot ${dotClass}`} />
-          <span className="m-brand">luban</span>
-          <small className="m-version">{webVersion}</small>
-          {relayMode && relayNodes.length > 0 && (
-            <select value={scope ?? ""} onChange={event => chooseNode(event.target.value)} aria-label="选择 luban 实例">
-              {relayNodes.map(item => (
-                <option key={item.id} value={item.id}>{item.online ? "● " : "○ "}{item.name}</option>
-              ))}
-            </select>
-          )}
-          {relayMode && relayNodes.length === 0 && <span className="m-chip failed" style={{ marginLeft: "auto" }}>无设备</span>}
-        </div>
-        <div className="m-head-meta" title={nodeLabel}>{nodeLabel}</div>
-        <div className="m-head-context">
-          {job ? `${job.title || job.id} · ${STATUS_LABELS[job.status] ?? job.status}` : node?.workspace || (relayMode ? "选择一台电脑开始" : "未选择任务")}
-          {activeJobs > 1 ? ` · ${activeJobs} 个进行中` : ""}
-        </div>
+          <span className="m-head-name">{node?.name || (connectionError ? "未连接" : "连接中")}</span>
+          {node?.model && <span className="m-head-model">{node.model}</span>}
+          {activeJobs > 0 && <span className="m-chip working">{activeJobs} 个进行中</span>}
+        </button>
       </header>
 
-      <main className="m-main" ref={mainRef}>
-        <div className="m-main-inner" ref={contentRef}>
+      <main className="m-main" ref={setScroller}>
+        <div className="m-main-inner" ref={setContent}>
           {sessionListError && <div className="m-banner warn">会话列表读取失败：{sessionListError}</div>}
           {relayMode && relayNodes.length === 0 && (
             <div className="m-banner warn">
@@ -909,11 +917,10 @@ export function MobileApp(): React.ReactElement {
           {tab === "live" && (
             <>
               {continueSession && (
-                <div className="m-banner">
-                  将接续会话：{continueSession.title}
-                  <div className="m-banner-actions">
-                    <button className="m-btn" onClick={() => setContinueSession(undefined)}>改为新会话</button>
-                  </div>
+                <div className="m-banner m-session-bar">
+                  <span className="m-session-tag">接续</span>
+                  <span className="m-session-title" title={continueSession.title}>{continueSession.title}</span>
+                  <button className="m-session-new" onClick={() => setContinueSession(undefined)}>＋ 新会话</button>
                 </div>
               )}
               {pendingApprovals.length + pendingQuestions.length > 0 && (
@@ -1086,6 +1093,59 @@ export function MobileApp(): React.ReactElement {
 
           {tab === "settings" && (
             <>
+              {nativeShell && (
+                <div className="m-card">
+                  <h3>App</h3>
+                  <p className="m-note">连接状态、外观、刷新页面和连接记录在 App 菜单里；右上角 ⋮ 也是同一个菜单。</p>
+                  <div className="m-row" style={{ marginBottom: 0 }}>
+                    <button type="button" className="m-btn" onClick={() => openNativeMenu()}>打开 App 菜单</button>
+                  </div>
+                </div>
+              )}
+              <div className="m-card">
+                <h3>派活</h3>
+                <label className="m-field">
+                  <span>会话</span>
+                  <select
+                    value={continueSession?.id ?? ""}
+                    aria-label="继续会话"
+                    onChange={event => {
+                      const next = sessions.find(item => item.id === event.target.value);
+                      setContinueSession(next);
+                      setSessionDetail(undefined);
+                      setSessionError(undefined);
+                      selectedRef.current = undefined;
+                      setJob(undefined);
+                      setEvents([]);
+                      setSelectedId(undefined);
+                      localStorage.removeItem(JOB_KEY);
+                      setTab("live");
+                      if (next) setProject(next.project);
+                    }}
+                  >
+                    <option value="">新会话</option>
+                    {sessions.slice(0, 8).map(item => <option key={item.id} value={item.id}>继续：{item.title}</option>)}
+                  </select>
+                </label>
+                <label className="m-field">
+                  <span>项目</span>
+                  <select value={project} onChange={event => { setProject(event.target.value); setContinueSession(undefined); setSessionDetail(undefined); }} aria-label="项目">
+                    {Object.keys(mobileProjects(node)).length === 0 && <option value="">电脑当前工作区</option>}
+                    {Object.entries(mobileProjects(node)).map(([name, path]) => <option key={name} value={name}>{name} · {path}</option>)}
+                  </select>
+                </label>
+                <label className="m-field">
+                  <span>权限</span>
+                  <select value={mode} onChange={event => setMode(event.target.value as TaskMode)} aria-label="权限">
+                    {(Object.keys(MODE_LABELS) as TaskMode[]).map(key => <option key={key} value={key}>{MODE_LABELS[key]}</option>)}
+                  </select>
+                </label>
+                <p className="m-note">{node?.interactive ? "电脑端可审批：写入与命令会先问你。" : "电脑端自动放行：任务直接执行。"}</p>
+                <div className="m-workspace-actions">
+                  <button type="button" className="m-btn" disabled={workspaceBusy} onClick={() => void addWorkspace("new")}>＋ 新建工作区</button>
+                  <button type="button" className="m-btn" disabled={workspaceBusy} onClick={() => void addWorkspace("existing")}>＋ 添加已有目录</button>
+                </div>
+              </div>
               <div className="m-card">
                 <h3>外观</h3>
                 <div className="m-choices" role="group" aria-label="主题">
@@ -1127,8 +1187,18 @@ export function MobileApp(): React.ReactElement {
               )}
               <div className="m-card">
                 <h3>连接</h3>
+                {relayMode && relayNodes.length > 1 && (
+                  <label className="m-field">
+                    <span>电脑</span>
+                    <select value={scope ?? ""} onChange={event => chooseNode(event.target.value)} aria-label="选择 luban 实例">
+                      {relayNodes.map(item => (
+                        <option key={item.id} value={item.id}>{item.online ? "● " : "○ "}{item.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <dl className="m-kv">
-                  <dt>模式</dt><dd>{relayMode ? "中继（公网）" : "直连（局域网）"}</dd>
+                  <dt>模式</dt><dd>{relayMode ? `中继 · ${location.host || "公网"}` : "直连（局域网）"}</dd>
                   <dt>节点</dt><dd>{node?.name || "—"}</dd>
                   <dt>工作区</dt><dd>{node?.workspace || "—"}</dd>
                   <dt>模型</dt><dd>{node?.model ? `${node.model}${node.provider ? ` · ${node.provider}` : ""}` : "—"}</dd>
@@ -1240,50 +1310,14 @@ export function MobileApp(): React.ReactElement {
           />
           <button className="m-send" disabled={busy || submissionPending || !draft.trim() || !node || Boolean(continueSession && (!sessionDetail || sessionError || sessionDetail.live?.running))} onClick={() => void submit()} aria-label="发送">↑</button>
         </div>
-        <details className="m-compose-options">
-          <summary>派活选项 <span>{continueSession ? "接续会话" : "新会话"} · {project || "当前工作区"} · {MODE_LABELS[mode]}</span></summary>
-        <div className="m-compose-hint">
-          {sessions.length > 0 && (
-            <select
-              value={continueSession?.id ?? ""}
-              aria-label="继续会话"
-              onChange={event => {
-                const next = sessions.find(item => item.id === event.target.value);
-                setContinueSession(next);
-                setSessionDetail(undefined);
-                setSessionError(undefined);
-                selectedRef.current = undefined;
-                setJob(undefined);
-                setEvents([]);
-                setSelectedId(undefined);
-                localStorage.removeItem(JOB_KEY);
-                setTab("live");
-                if (next) setProject(next.project);
-              }}
-            >
-              <option value="">新会话</option>
-              {sessions.slice(0, 8).map(item => <option key={item.id} value={item.id}>继续：{item.title}</option>)}
-            </select>
-          )}
-          <select value={project} onChange={event => { setProject(event.target.value); setContinueSession(undefined); setSessionDetail(undefined); }} aria-label="项目">
-            {Object.keys(mobileProjects(node)).length === 0 && <option value="">电脑当前工作区</option>}
-            {Object.entries(mobileProjects(node)).map(([name, path]) => <option key={name} value={name}>{name} · {path}</option>)}
-          </select>
-          <select value={node?.model_id ?? ""} aria-label="模型"
-            onChange={event => { const id = event.target.value; if (id && id !== node?.model_id) void switchModel(id); }}>
-            {modelCatalog.length === 0 && <option value="">模型</option>}
-            {modelCatalog.map(model => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}
-          </select>
-          <select value={mode} onChange={event => setMode(event.target.value as TaskMode)} aria-label="权限">
-            {(Object.keys(MODE_LABELS) as TaskMode[]).map(key => <option key={key} value={key}>{MODE_LABELS[key]}</option>)}
-          </select>
-          <span style={{ marginLeft: "auto" }}>{node?.interactive ? "可审批" : "自动放行"}</span>
-          <div className="m-workspace-actions">
-            <button type="button" className="m-btn" disabled={workspaceBusy} onClick={() => void addWorkspace("new")}>＋ 新建工作区</button>
-            <button type="button" className="m-btn" disabled={workspaceBusy} onClick={() => void addWorkspace("existing")}>＋ 添加已有目录</button>
-          </div>
-        </div>
-        </details>
+        {/* Everything that shapes a request lives in 设置; this line is the way there. */}
+        <button type="button" className="m-compose-summary" onClick={() => setTab("settings")}>
+          <span className="m-compose-summary-main">
+            {continueSession ? `接续 · ${continueSession.title}` : "新会话"}
+            {" · "}{project || "当前工作区"}{" · "}{MODE_LABELS[mode]}
+          </span>
+          <span className="m-compose-summary-link">派活设置 ›</span>
+        </button>
       </div>
 
       <nav className="m-tabs">

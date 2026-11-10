@@ -6,8 +6,11 @@ import { deriveTimeline } from "./timeline";
 export function sessionTimeline(session: SessionDetail): TimelineItem[] {
   const at = Date.parse(session.updatedAt) / 1000;
   const items: TimelineItem[] = [];
-  const results = new Map(session.messages.filter(message => message.role === "tool").map(message => [message.tool_call_id, message]));
-  session.messages.forEach((message, index) => {
+  // A node that cannot hand back the transcript (older build, half-written
+  // session file) must not blank the whole page: show what is displayable.
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const results = new Map(messages.filter(message => message.role === "tool").map(message => [message.tool_call_id, message]));
+  messages.forEach((message, index) => {
     const id = `${session.id}-${index}`;
     if (message.role === "user" && message.content) items.push({ kind: "user", id, text: message.content, at });
     if (message.role === "assistant") {

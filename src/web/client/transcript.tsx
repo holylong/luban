@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { ToolCard } from "./tool-card";
 import { followTranscript } from "./transcript-scroll";
@@ -82,25 +82,26 @@ export function Transcript({ job, events, onCancel, onResume, history, compactEd
   onCancel: () => void;
   onResume: () => void;
 }): React.ReactElement {
-  const ref = useRef<HTMLElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
   const scroll = useRef<ReturnType<typeof followTranscript> | undefined>(undefined);
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const [content, setContent] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!ref.current || !contentRef.current) return;
-    const controller = followTranscript(ref.current, contentRef.current);
+    if (!scroller || !content) return;
+    const controller = followTranscript(scroller, content);
     scroll.current = controller;
     return () => { controller.dispose(); scroll.current = undefined; };
-  }, []);
+  }, [scroller, content]);
 
-  useEffect(() => { scroll.current?.reset(); }, [job?.id]);
+  // A resumed or freshly opened job shows its newest line first.
+  useEffect(() => { scroll.current?.pin(); }, [job?.id]);
   useEffect(() => { scroll.current?.follow(); }, [events, job?.status, history]);
 
   const active = job ? ["queued", "pending", "working"].includes(job.status) : false;
 
   return (
-    <section className="thread" ref={ref}>
-      <div className="thread-inner" ref={contentRef}>
+    <section className="thread" ref={setScroller}>
+      <div className="thread-inner" ref={setContent}>
         {history}
         {!job && !history && (
           <div className="empty">
