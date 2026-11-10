@@ -1,6 +1,7 @@
 import type { RelayDeviceStatus } from "./mobile-device";
 import { MobileDeviceCard } from "./mobile-device-card";
 import { MobileCollapse } from "./mobile-collapse";
+import { pickDefaultSession } from "./mobile-session-pick";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setNodeScope } from "./api";
 import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, ReasoningEffort, SessionDetail, SessionSummary, ToolRun } from "./types";
@@ -477,6 +478,19 @@ export function MobileApp(): React.ReactElement {
     }
   }, [ready, node, project]);
 
+  // Landing on a device with an empty composer hid a day of work behind 设置.
+  // The list is newest-first, so the newest session is what "open this device"
+  // means; an explicitly chosen session or a running job keeps the live view.
+  useEffect(() => {
+    const next = pickDefaultSession({
+      sessions,
+      pinned: sessionPinned.current,
+      current: continueSession,
+      jobSelected: Boolean(job),
+    });
+    if (next) setContinueSession(next);
+  }, [node?.name, sessions, continueSession, job]);
+
   const refreshRelayNodes = useCallback(async () => {
     try {
       const response = await fetch("/relay/nodes");
@@ -808,6 +822,9 @@ export function MobileApp(): React.ReactElement {
   }, [notify]);
 
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Whether the reader picked a session (or 新会话) for this device themselves;
+  // until then a device opens on its newest session instead of an empty chat.
+  const sessionPinned = useRef(false);
 
   const chooseNode = useCallback((id: string) => {
     setNodeScope(id || undefined);
@@ -823,6 +840,7 @@ export function MobileApp(): React.ReactElement {
     setEvents([]);
     setSessions([]);
     setContinueSession(undefined);
+    sessionPinned.current = false;
     setProject("");
     void refresh();
   }, [refresh]);
@@ -868,6 +886,7 @@ export function MobileApp(): React.ReactElement {
 
   /** Switching the session also drops the job, replay and detail of the old one. */
   const chooseSession = (next?: SessionSummary): void => {
+    sessionPinned.current = true;
     setContinueSession(next);
     setSessionDetail(undefined);
     setSessionError(undefined);

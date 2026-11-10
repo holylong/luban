@@ -10,6 +10,8 @@ const { app, BrowserWindow } = require("electron");
 const { writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { spawn } = require("node:child_process");
+const { mkdtempSync } = require("node:fs");
+const { tmpdir } = require("node:os");
 
 const WIDTH = Number(process.env.LUBAN_PROBE_WIDTH || 390);
 const HEIGHT = Number(process.env.LUBAN_PROBE_HEIGHT || 844);
@@ -17,6 +19,9 @@ const TAB = process.env.LUBAN_PROBE_TAB || "live";
 const TOKEN = "probe-token";
 
 app.disableHardwareAcceleration();
+// A fresh profile per run: a leftover job id in localStorage would make the
+// probe believe the phone already had something open.
+app.setPath("userData", mkdtempSync(join(tmpdir(), "luban-probe-")));
 
 function startBackend(workspace) {
   const child = spawn(process.execPath, [join(__dirname, "..", "dist", "cli.js"), "web", workspace,
@@ -41,6 +46,16 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({ width: WIDTH, height: HEIGHT, show: false, webPreferences: { offscreen: true } });
   await win.loadURL(`${url}m/?token=${TOKEN}`);
   await new Promise(resolve => setTimeout(resolve, 2500));
+  // A device opens on its newest session, not on an empty composer.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const view = await win.webContents.executeJavaScript(`(() => ({
+      session: document.querySelector(".m-session-bar .m-session-title")?.textContent ?? null,
+      placeholder: document.querySelector(".m-compose textarea")?.getAttribute("placeholder") ?? null,
+    }))()`);
+    if (view.session) { console.log("默认打开:", JSON.stringify(view)); break; }
+    if (attempt === 7) console.log("默认打开:", JSON.stringify(view));
+    await new Promise(resolve => setTimeout(resolve, 700));
+  }
   if (process.env.LUBAN_PROBE_SESSION) {
     // Pick a saved session the way a person would: 设置 → 派活 → 会话.
     await win.webContents.executeJavaScript(`(() => {
