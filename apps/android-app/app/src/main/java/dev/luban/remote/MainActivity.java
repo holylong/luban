@@ -16,6 +16,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -31,6 +32,9 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * Android shell for the existing /m console, which stays served by the luban relay.
@@ -54,6 +58,10 @@ public final class MainActivity extends Activity {
     private WebView web;
     private TextView status;
     private TextView statusDot;
+    // Live task line reported by the console; empty means "only connected".
+    private String taskText = "";
+    private String connectionText = "";
+    private int connectionDot;
     private Uri origin;
     private String pendingAddress;
     private String consoleUrl;
@@ -206,8 +214,59 @@ public final class MainActivity extends Activity {
     }
 
     private void setStatus(String text, int dot) {
-        if (status != null) status.setText(text);
-        if (statusDot != null) statusDot.setTextColor(dot);
+        connectionText = text;
+        connectionDot = dot;
+        renderStatus();
+    }
+
+    /** Work in progress outranks the connection line: the strip is the only
+     *  always-visible surface, so it is what tells the reader the computer is
+     *  still busy after the transcript has scrolled away. */
+    private void renderStatus() {
+        if (status == null) return;
+        boolean busy = !taskText.isEmpty();
+        status.setText(busy ? taskText : connectionText);
+        status.setTextColor(busy ? theme.accent : theme.muted);
+        if (statusDot != null) statusDot.setTextColor(busy ? theme.accent : connectionDot);
+    }
+
+    /** The console reports {working,label,detail,seconds,stalled}; anything it
+     *  cannot parse simply means the strip keeps its connection text. */
+    private void applyTaskStatus(String payload) {
+        String line = "";
+        try {
+            JSONObject json = new JSONObject(payload);
+            if (json.optBoolean("working", false)) {
+                String label = json.optString("label", "");
+                String detail = json.optString("detail", "");
+                int seconds = json.optInt("seconds", 0);
+                StringBuilder text = new StringBuilder(label.isEmpty() ? "工作中" : label);
+                if (!detail.isEmpty()) {
+                    text.append(" · ").append(detail.length() > 34
+                            ? detail.substring(0, 33) + "…" : detail);
+                }
+                if (seconds > 0) text.append(" · ").append(seconds).append("s");
+                if (json.optBoolean("stalled", false)) text.append(" · 等待输出");
+                line = text.toString();
+            }
+        } catch (JSONException ignored) {
+            line = "";
+        }
+        taskText = line;
+        renderStatus();
+    }
+
+    /** The page pushes progress through this; a WebView has no other channel
+     *  that the shell can read without polling the DOM. */
+    private final class TaskBridge {
+        @JavascriptInterface
+        public void setTaskStatus(String payload) {
+            final TextView target = status;
+            if (target == null) return;
+            target.post(() -> {
+                if (status == target) applyTaskStatus(payload);
+            });
+        }
     }
 
     private String appVersion() {
@@ -576,6 +635,7 @@ public final class MainActivity extends Activity {
         }
         screen = SCREEN_CONSOLE;
         appearanceDirty = false;
+        taskText = "";
         destroyWeb();
         status = null;
         statusDot = null;
@@ -598,6 +658,8 @@ public final class MainActivity extends Activity {
         column.addView(divider(), new LinearLayout.LayoutParams(-1, dp(1)));
 
         web = new WebView(this);
+        // Same object name as reportNativeStatus() in the mobile client.
+        web.addJavascriptInterface(new TaskBridge(), "lubanShell");
         web.setBackgroundColor(theme.bg);
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         WebSettings settings = web.getSettings();
@@ -632,6 +694,8 @@ public final class MainActivity extends Activity {
                 // An earlier 401 belongs to its navigation, not to a later
                 // successful login redirect or a manual reload.
                 mainFrameHttpError = null;
+                // A navigation reloads the console: its old progress is stale.
+                taskText = "";
                 setStatus("连接中 · " + origin.getHost(), theme.dim);
             }
             @Override public void onPageFinished(WebView view, String url) {

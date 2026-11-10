@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api, setNodeScope } from "./api";
 import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, ReasoningEffort, SessionDetail, SessionSummary, ToolRun } from "./types";
 import { MobileSessionHistory } from "./mobile-session";
+import { reportNativeStatus } from "./mobile-native";
+import { followTranscript } from "./transcript-scroll";
 import { mobileProject, mobileProjects } from "./mobile-project";
 import {
   appearanceOf, applyAppearance, loadAppearance, saveAppearance, systemDark,
@@ -641,15 +643,50 @@ export function MobileApp(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, scope, loadJob, notify]);
 
-  // One-second clock, only while something is running, for the live elapsed time.
+  // The docked strip has to cover both modes: a job's own stream, and a session
+  // that the desktop TUI is still driving.
   const running = Boolean(job && ACTIVE_STATUS.has(job.status));
+  const sessionLive = continueSession && sessionDetail?.live?.running ? sessionDetail.live : undefined;
+  const ticking = running || Boolean(sessionLive);
+  const progress = useMemo(() => {
+    if (running) return liveProgress(events, clock);
+    if (sessionLive) return liveProgress(sessionLive.events, clock);
+    return null;
+  }, [running, events, clock, sessionLive]);
+
+  // One-second clock, only while something is running, for the live elapsed time.
   useEffect(() => {
-    if (!running) return;
+    if (!ticking) return;
     const timer = setInterval(() => setClock(Date.now() / 1000), 1000);
     return () => clearInterval(timer);
-  }, [running]);
+  }, [ticking]);
 
-  const progress = useMemo(() => (running ? liveProgress(events, clock) : null), [running, events, clock]);
+  // A phone that keeps its thumb still should still see the newest line: the
+  // transcript follows the tail unless the reader has scrolled up.
+  const mainRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const follower = useRef<ReturnType<typeof followTranscript> | null>(null);
+  useEffect(() => {
+    const element = mainRef.current;
+    const content = contentRef.current;
+    if (!element || !content) return;
+    const handle = followTranscript(element, content);
+    follower.current = handle;
+    return () => { handle.dispose(); follower.current = null; };
+  }, []);
+  const pinToBottom = useCallback(() => { follower.current?.reset(); }, []);
+
+  // The WebView shell draws the native strip, so the page has to tell it when
+  // work starts, ticks and ends; a plain browser simply has no bridge.
+  const liveLabel = progress?.label ?? "";
+  const liveDetail = progress ? (progress.stalled ? `已 ${progress.silentSeconds}s 无输出` : progress.detail) : "";
+  const liveSeconds = progress?.seconds ?? 0;
+  const liveStalled = progress?.stalled ?? false;
+  useEffect(() => {
+    reportNativeStatus(liveLabel
+      ? { working: true, label: liveLabel, detail: liveDetail, seconds: liveSeconds, stalled: liveStalled }
+      : { working: false });
+  }, [liveLabel, liveDetail, liveSeconds, liveStalled]);
   const pendingApprovals = approvals;
   const pendingQuestions = questions;
   const answerQuestion = async (id: string, answer: string): Promise<void> => {
@@ -687,7 +724,8 @@ export function MobileApp(): React.ReactElement {
     setSessionDetail(undefined);
     void loadJob(id).catch(error => notify(error instanceof Error ? error.message : String(error), true));
     setTab("live");
-  }, [loadJob, notify]);
+    pinToBottom();
+  }, [loadJob, notify, pinToBottom]);
 
   const submit = useCallback(async () => {
     if (submittingRef.current || localStorage.getItem(PENDING_KEY)) {
@@ -840,321 +878,328 @@ export function MobileApp(): React.ReactElement {
         </div>
       </header>
 
-      <main className="m-main">
-        {sessionListError && <div className="m-banner warn">会话列表读取失败：{sessionListError}</div>}
-        {relayMode && relayNodes.length === 0 && (
-          <div className="m-banner warn">
-            账户下还没有 luban 实例。打开「设置 → 添加电脑」生成设备令牌，然后在电脑上运行：
-            <pre style={{ margin: "8px 0 0", font: "11.5px var(--mono)", whiteSpace: "pre-wrap" }}>luban web &lt;项目路径&gt; --relay {location.origin} --relay-device-token &lt;设备令牌&gt;</pre>
-          </div>
-        )}
-        {!connected && connectionError && relayMode && relayNodes.length > 0 && (
-          <div className="m-banner warn">连接失败：{connectionError}<div className="m-banner-actions"><button className="m-btn" onClick={() => void refresh()}>重试</button></div></div>
-        )}
+      <main className="m-main" ref={mainRef}>
+        <div className="m-main-inner" ref={contentRef}>
+          {sessionListError && <div className="m-banner warn">会话列表读取失败：{sessionListError}</div>}
+          {relayMode && relayNodes.length === 0 && (
+            <div className="m-banner warn">
+              账户下还没有 luban 实例。打开「设置 → 添加电脑」生成设备令牌，然后在电脑上运行：
+              <pre style={{ margin: "8px 0 0", font: "11.5px var(--mono)", whiteSpace: "pre-wrap" }}>luban web &lt;项目路径&gt; --relay {location.origin} --relay-device-token &lt;设备令牌&gt;</pre>
+            </div>
+          )}
+          {!connected && connectionError && relayMode && relayNodes.length > 0 && (
+            <div className="m-banner warn">连接失败：{connectionError}<div className="m-banner-actions"><button className="m-btn" onClick={() => void refresh()}>重试</button></div></div>
+          )}
 
-        {tab === "live" && (
-          <>
-            {continueSession && (
-              <div className="m-banner">
-                将接续会话：{continueSession.title}
-                <div className="m-banner-actions">
-                  <button className="m-btn" onClick={() => setContinueSession(undefined)}>改为新会话</button>
+          {tab === "live" && (
+            <>
+              {continueSession && (
+                <div className="m-banner">
+                  将接续会话：{continueSession.title}
+                  <div className="m-banner-actions">
+                    <button className="m-btn" onClick={() => setContinueSession(undefined)}>改为新会话</button>
+                  </div>
                 </div>
-              </div>
-            )}
-            {pendingApprovals.length + pendingQuestions.length > 0 && (
-              <div className="m-banner">
-                ⚠️ 有 {pendingApprovals.length + pendingQuestions.length} 个问题或操作等待回应
-                <div className="m-banner-actions">
-                  <button className="m-btn primary" onClick={() => setTab("approvals")}>去处理</button>
+              )}
+              {pendingApprovals.length + pendingQuestions.length > 0 && (
+                <div className="m-banner">
+                  ⚠️ 有 {pendingApprovals.length + pendingQuestions.length} 个问题或操作等待回应
+                  <div className="m-banner-actions">
+                    <button className="m-btn primary" onClick={() => setTab("approvals")}>去处理</button>
+                  </div>
                 </div>
-              </div>
-            )}
-            {progress && (
-              <div className={`m-live ${progress.stalled ? "stalled" : ""}`}>
-                <span className="m-spin" />
-                <span className="label">{progress.label}</span>
-                <span className="detail">{progress.stalled ? `已 ${progress.silentSeconds}s 无输出` : progress.detail}</span>
-                <span className="clock">{progress.seconds}s</span>
-              </div>
-            )}
-            {continueSession && <>
-              {sessionError && <div className="m-banner warn">会话同步失败：{sessionError}（正在重试）</div>}
-              {!sessionDetail && !sessionError && <div className="m-note">正在加载会话记录…</div>}
-              {sessionDetail && <MobileSessionHistory session={sessionDetail} renderTool={run =>
-                <ToolCard run={run} open={openTools[run.callId] ?? false} onToggle={() => setOpenTools(current => ({ ...current, [run.callId]: !current[run.callId] }))} />
-              } />}
-            </>}
-            {!job && !continueSession && (
-              <div className="m-empty">
-                <h2>手机上派活，电脑上干活</h2>
-                <p>在下方输入指令，本机的 luban 会执行；这里实时显示推理、工具调用和文件改动。</p>
-              </div>
-            )}
-            {job && (
-              <>
-                <div className="m-row">
-                  {ACTIVE_STATUS.has(job.status) && <button className="m-btn danger" onClick={() => void cancel()}>取消任务</button>}
-                  {job.status === "paused" && <button className="m-btn primary" onClick={() => void resume()}>继续任务</button>}
-                  <button className="m-btn" onClick={() => { void loadJob(job.id).catch(() => undefined); }}>刷新</button>
+              )}
+              {continueSession && <>
+                {sessionError && <div className="m-banner warn">会话同步失败：{sessionError}（正在重试）</div>}
+                {!sessionDetail && !sessionError && <div className="m-note">正在加载会话记录…</div>}
+                {sessionDetail && <MobileSessionHistory session={sessionDetail} renderTool={run =>
+                  <ToolCard run={run} open={openTools[run.callId] ?? false} onToggle={() => setOpenTools(current => ({ ...current, [run.callId]: !current[run.callId] }))} />
+                } />}
+              </>}
+              {!job && !continueSession && (
+                <div className="m-empty">
+                  <h2>手机上派活，电脑上干活</h2>
+                  <p>在下方输入指令，本机的 luban 会执行；这里实时显示推理、工具调用和文件改动。</p>
                 </div>
-                <div>
-                  {items.map(item => {
-                    if (item.kind === "user") {
+              )}
+              {job && (
+                <>
+                  <div className="m-row">
+                    {ACTIVE_STATUS.has(job.status) && <button className="m-btn danger" onClick={() => void cancel()}>取消任务</button>}
+                    {job.status === "paused" && <button className="m-btn primary" onClick={() => void resume()}>继续任务</button>}
+                    <button className="m-btn" onClick={() => { void loadJob(job.id).catch(() => undefined); }}>刷新</button>
+                  </div>
+                  <div>
+                    {items.map(item => {
+                      if (item.kind === "user") {
+                        return (
+                          <div className="m-turn" key={item.id}>
+                            <div className="m-turn-head"><span>我</span><span>{relativeTime(item.at)}前</span>{item.mode && <span className="m-chip">{MODE_LABELS[item.mode as TaskMode] ?? item.mode}</span>}</div>
+                            <div className="m-turn-user">{item.text}</div>
+                          </div>
+                        );
+                      }
+                      if (item.kind === "tool") {
+                        return <ToolCard key={item.id} run={item.run} open={openTools[item.run.callId] ?? false} onToggle={() => setOpenTools(current => ({ ...current, [item.run.callId]: !(current[item.run.callId] ?? false) }))} />;
+                      }
+                      if (item.kind === "thinking") {
+                        return <details className="m-turn m-thinking" key={item.id}>
+                          <summary>💭 思考过程</summary>
+                          <div className="m-body think">{item.text}</div>
+                        </details>;
+                      }
+                      if (item.kind === "assistant") {
+                        return <div className="m-turn" key={item.id}><div className="m-body">{item.text}</div></div>;
+                      }
+                      if (item.kind === "status") {
+                        return <div className="m-turn" key={item.id}><div className="m-body muted">· {item.text}</div></div>;
+                      }
+                      if (item.kind === "error") {
+                        return <div className="m-turn" key={item.id}><div className="m-body error">✗ {item.text}</div></div>;
+                      }
                       return (
                         <div className="m-turn" key={item.id}>
-                          <div className="m-turn-head"><span>我</span><span>{relativeTime(item.at)}前</span>{item.mode && <span className="m-chip">{MODE_LABELS[item.mode as TaskMode] ?? item.mode}</span>}</div>
-                          <div className="m-turn-user">{item.text}</div>
+                          <div className="m-turn-head"><span>{STATUS_LABELS[item.status] ?? item.status}</span><span>{relativeTime(item.at)}前</span></div>
+                          <div className={`m-body result ${item.status === "failed" || item.status === "cancelled" ? "failed" : ""}`}>{item.text}</div>
                         </div>
                       );
-                    }
-                    if (item.kind === "tool") {
-                      return <ToolCard key={item.id} run={item.run} open={openTools[item.run.callId] ?? false} onToggle={() => setOpenTools(current => ({ ...current, [item.run.callId]: !(current[item.run.callId] ?? false) }))} />;
-                    }
-                    if (item.kind === "thinking") {
-                      return <details className="m-turn m-thinking" key={item.id}>
-                        <summary>💭 思考过程</summary>
-                        <div className="m-body think">{item.text}</div>
-                      </details>;
-                    }
-                    if (item.kind === "assistant") {
-                      return <div className="m-turn" key={item.id}><div className="m-body">{item.text}</div></div>;
-                    }
-                    if (item.kind === "status") {
-                      return <div className="m-turn" key={item.id}><div className="m-body muted">· {item.text}</div></div>;
-                    }
-                    if (item.kind === "error") {
-                      return <div className="m-turn" key={item.id}><div className="m-body error">✗ {item.text}</div></div>;
-                    }
-                    return (
-                      <div className="m-turn" key={item.id}>
-                        <div className="m-turn-head"><span>{STATUS_LABELS[item.status] ?? item.status}</span><span>{relativeTime(item.at)}前</span></div>
-                        <div className={`m-body result ${item.status === "failed" || item.status === "cancelled" ? "failed" : ""}`}>{item.text}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </>
-        )}
-
-        {tab === "devices" && (
-          <>
-            {!relayMode && (
-              <div className="m-empty"><h2>直连模式</h2><p>当前页面直接连接本机 luban；登录中继账户后，这里会列出账户下的所有电脑。</p></div>
-            )}
-            {relayMode && relayNodes.length === 0 && (
-              <div className="m-empty"><h2>还没有 luban 实例</h2><p>在「设置 → 添加电脑」生成设备令牌，然后在电脑上启动 luban web 并接入中继。</p></div>
-            )}
-            {relayNodes.map(device => {
-              const deviceJobs = device.status?.jobs ?? [];
-              const active = deviceJobs.filter(item => ACTIVE_STATUS.has(item.status));
-              const latest = active[0] ?? deviceJobs[0];
-              return (
-                <div className={`m-card m-device ${device.id === scope ? "active" : ""}`} key={device.id}>
-                  <div className="m-device-row">
-                    <span className={`m-dot ${device.online ? "online" : "offline"}`} />
-                    <strong>{device.name}</strong>
-                    <span className={`m-chip ${device.online ? "done" : "failed"}`}>{device.online ? "在线" : "离线"}</span>
-                    {active.length > 1 && <span className="m-chip working">{active.length} 个进行中</span>}
-                  </div>
-                  <div className="m-device-path">{device.workspace || "未报告工作区"}{device.status?.model ? ` · ${device.status.model}` : ""}</div>
-                  {latest ? (
-                    <>
-                      <div className="m-device-job">
-                        <span className={`m-chip ${latest.status}`}>{STATUS_LABELS[latest.status as keyof typeof STATUS_LABELS] ?? latest.status}</span>
-                        <span>{latest.title || latest.instruction || latest.id}</span>
-                      </div>
-                      <div className="m-note" style={{ marginTop: 5 }}>
-                        {ACTIVE_STATUS.has(latest.status) ? `进度 ${Math.round(latest.progress)}%` : "最近任务"}
-                        {latest.updated_at ? ` · ${relativeTime(latest.updated_at)}前更新` : ""}
-                        {deviceJobs.length > 1 ? ` · 共 ${deviceJobs.length} 条记录` : ""}
-                      </div>
-                    </>
-                  ) : <div className="m-note">{device.online ? "空闲，等待派活" : "离线"}</div>}
-                  <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
-                    <button className="m-btn primary" disabled={!device.online} onClick={() => openDevice(device.id)}>打开并派活</button>
-                    <button className="m-btn" onClick={() => { chooseNode(device.id); setTab("jobs"); }}>查看任务</button>
-                  </div>
-                </div>
-              );
-            })}
-          </>
-        )}
-
-        {tab === "jobs" && (
-          <>
-            {jobs.length === 0 && <div className="m-empty"><h2>还没有任务</h2><p>输入指令后，任务会出现在这里。</p></div>}
-            {jobs.map(item => (
-              <button className={`m-job ${item.id === selectedId ? "active" : ""}`} key={item.id} onClick={() => selectJob(item.id)}>
-                <div className="m-job-title">{item.title || item.instruction || item.id}</div>
-                <div className="m-job-meta">
-                  <span className={`m-chip ${item.status}`}>{STATUS_LABELS[item.status] ?? item.status}</span>
-                  <span>{relativeTime(item.created_at)}前</span>
-                  <span>{item.project_id}</span>
-                  {(item.resume_count ?? 0) > 0 && <span>继续 {item.resume_count} 次</span>}
-                </div>
-              </button>
-            ))}
-          </>
-        )}
-
-        {tab === "approvals" && (
-          <>
-            {pendingApprovals.length + pendingQuestions.length === 0 && <div className="m-empty"><h2>没有待回答的请求</h2><p>Agent 需要你的决定时会在这里询问。</p></div>}
-            {pendingQuestions.map(item => <div className="m-approval" key={item.id}>
-              <h3>{item.question}</h3>
-              <div className="risk">任务 {item.job_id}</div>
-              <div className="m-approval-actions">
-                {item.options.map(option => <button className="m-btn" key={option.label}
-                  title={option.description} onClick={() => void answerQuestion(item.id, option.label)}>
-                  {option.label}{option.description ? ` · ${option.description}` : ""}
-                </button>)}
-              </div>
-              <div className="m-approval-actions">
-                <input className="m-input" aria-label="自定义回答" placeholder="或输入自己的答案"
-                  value={questionDrafts[item.id] ?? ""}
-                  onChange={event => setQuestionDrafts(current => ({ ...current, [item.id]: event.target.value }))} />
-                <button className="m-btn primary" disabled={!(questionDrafts[item.id] ?? "").trim()}
-                  onClick={() => void answerQuestion(item.id, questionDrafts[item.id] ?? "")}>发送</button>
-              </div>
-            </div>)}
-            {pendingApprovals.map(item => (
-              <div className="m-approval" key={item.id}>
-                <h3>{toolLabel(item.tool)}</h3>
-                <div className="risk">风险：{item.risk} · 任务 {item.job_id}</div>
-                {item.once_only && <p>{item.description}</p>}
-                <pre>{JSON.stringify(item.args, null, 2)}</pre>
-                <div className="m-approval-actions">
-                  <button className="m-btn primary" onClick={() => void decide(item.id, "once")}>允许一次</button>
-                  {!item.once_only && <><button className="m-btn ok" onClick={() => void decide(item.id, "always")}>本会话允许</button>
-                  <button className="m-btn" onClick={() => void decide(item.id, "tool")}>该工具都允许</button></>}
-                  <button className="m-btn danger" onClick={() => void decide(item.id, "deny")}>拒绝</button>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-
-        {tab === "settings" && (
-          <>
-            <div className="m-card">
-              <h3>外观</h3>
-              <div className="m-choices" role="group" aria-label="主题">
-                {THEME_OPTIONS.map(option => (
-                  <button
-                    key={option.value}
-                    className={`m-choice ${look.mode === option.value ? "active" : ""}`}
-                    aria-pressed={look.mode === option.value}
-                    disabled={look.locked}
-                    onClick={() => chooseAppearance(option.value)}
-                  >{option.label}</button>
-                ))}
-              </div>
-              <p className="m-note" style={{ marginBottom: 0 }}>
-                {look.locked
-                  ? `主题由 luban App 控制，当前为${look.theme === "dark" ? "深色" : "浅色"}；可在 App 的「外观设置」里切换。`
-                  : look.mode === "system"
-                    ? `跟随系统，当前${look.theme === "dark" ? "深色" : "浅色"}。`
-                    : `已固定为${look.theme === "dark" ? "深色" : "浅色"}。`}
-              </p>
-            </div>
-            {account && (
-              <div className="m-card">
-                <h3>账户</h3>
-                <dl className="m-kv">
-                  <dt>邮箱</dt><dd>{account.email}</dd>
-                  <dt>实例</dt><dd>{relayNodes.length} 个</dd>
-                </dl>
-                <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
-                  <button className="m-btn primary" onClick={() => void requestDeviceToken()}>添加电脑</button>
-                </div>
-                {deviceSetup && (
-                  <div className="m-device-token">
-                    <p className="m-note">令牌只显示这一次；重新生成只新增一枚，不影响其他电脑。</p>
-                    <pre>{deviceSetup.command}</pre>
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="m-card">
-              <h3>连接</h3>
-              <dl className="m-kv">
-                <dt>模式</dt><dd>{relayMode ? "中继（公网）" : "直连（局域网）"}</dd>
-                <dt>节点</dt><dd>{node?.name || "—"}</dd>
-                <dt>工作区</dt><dd>{node?.workspace || "—"}</dd>
-                <dt>模型</dt><dd>{node?.model ? `${node.model}${node.provider ? ` · ${node.provider}` : ""}` : "—"}</dd>
-                <dt>版本</dt><dd>v{node?.version || "—"}</dd>
-                <dt>实时流</dt><dd>{live ? "已连接" : "断开"}</dd>
-              </dl>
-            </div>
-            <div className="m-card">
-              <h3>模型</h3>
-              <p className="m-note">切换的是电脑端下一任务使用的模型；电脑端新增或切换模型后，这里会自动同步。</p>
-              {modelCatalog.length === 0
-                ? <p className="m-note" style={{ marginBottom: 0 }}>电脑端还没有报告可用模型，请确认 luban 正在运行。</p>
-                : <div className="m-model-list" role="listbox" aria-label="模型">
-                  {modelCatalog.map(item => (
-                    <button key={item.id} type="button" role="option" aria-selected={item.id === node?.model_id}
-                      className={`m-model ${item.id === node?.model_id ? "active" : ""}`}
-                      disabled={modelBusy || item.id === node?.model_id}
-                      onClick={() => void switchModel(item.id)}>
-                      <span className="m-model-main">
-                        <strong>{item.name}</strong>
-                        <span>{item.provider}{item.reasoning_effort ? ` · ${item.reasoning_effort}` : ""}</span>
-                      </span>
-                      {item.id === node?.model_id && <span className="m-chip done">当前</span>}
-                    </button>
-                  ))}
-                </div>}
-              {(activeModel?.reasoning_efforts?.length ?? 0) > 0 && (
-                <>
-                  <p className="m-note" style={{ margin: "12px 0 6px" }}>推理强度</p>
-                  <div className="m-choices" role="group" aria-label="推理强度">
-                    {effortChoices.map(level => (
-                      <button key={level ?? "default"} type="button" disabled={modelBusy}
-                        className={`m-choice ${(node?.reasoning_effort ?? null) === level ? "active" : ""}`}
-                        aria-pressed={(node?.reasoning_effort ?? null) === level}
-                        onClick={() => void switchModel(activeModel?.id ?? "", level)}>{level ?? "默认"}</button>
-                    ))}
+                    })}
                   </div>
                 </>
               )}
-              {modelBusy && <p className="m-note" style={{ marginBottom: 0 }}>正在切换模型…</p>}
-            </div>
-            {relayMode && (
+            </>
+          )}
+
+          {tab === "devices" && (
+            <>
+              {!relayMode && (
+                <div className="m-empty"><h2>直连模式</h2><p>当前页面直接连接本机 luban；登录中继账户后，这里会列出账户下的所有电脑。</p></div>
+              )}
+              {relayMode && relayNodes.length === 0 && (
+                <div className="m-empty"><h2>还没有 luban 实例</h2><p>在「设置 → 添加电脑」生成设备令牌，然后在电脑上启动 luban web 并接入中继。</p></div>
+              )}
+              {relayNodes.map(device => {
+                const deviceJobs = device.status?.jobs ?? [];
+                const active = deviceJobs.filter(item => ACTIVE_STATUS.has(item.status));
+                const latest = active[0] ?? deviceJobs[0];
+                return (
+                  <div className={`m-card m-device ${device.id === scope ? "active" : ""}`} key={device.id}>
+                    <div className="m-device-row">
+                      <span className={`m-dot ${device.online ? "online" : "offline"}`} />
+                      <strong>{device.name}</strong>
+                      <span className={`m-chip ${device.online ? "done" : "failed"}`}>{device.online ? "在线" : "离线"}</span>
+                      {active.length > 1 && <span className="m-chip working">{active.length} 个进行中</span>}
+                    </div>
+                    <div className="m-device-path">{device.workspace || "未报告工作区"}{device.status?.model ? ` · ${device.status.model}` : ""}</div>
+                    {latest ? (
+                      <>
+                        <div className="m-device-job">
+                          <span className={`m-chip ${latest.status}`}>{STATUS_LABELS[latest.status as keyof typeof STATUS_LABELS] ?? latest.status}</span>
+                          <span>{latest.title || latest.instruction || latest.id}</span>
+                        </div>
+                        <div className="m-note" style={{ marginTop: 5 }}>
+                          {ACTIVE_STATUS.has(latest.status) ? `进度 ${Math.round(latest.progress)}%` : "最近任务"}
+                          {latest.updated_at ? ` · ${relativeTime(latest.updated_at)}前更新` : ""}
+                          {deviceJobs.length > 1 ? ` · 共 ${deviceJobs.length} 条记录` : ""}
+                        </div>
+                      </>
+                    ) : <div className="m-note">{device.online ? "空闲，等待派活" : "离线"}</div>}
+                    <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
+                      <button className="m-btn primary" disabled={!device.online} onClick={() => openDevice(device.id)}>打开并派活</button>
+                      <button className="m-btn" onClick={() => { chooseNode(device.id); setTab("jobs"); }}>查看任务</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {tab === "jobs" && (
+            <>
+              {jobs.length === 0 && <div className="m-empty"><h2>还没有任务</h2><p>输入指令后，任务会出现在这里。</p></div>}
+              {jobs.map(item => (
+                <button className={`m-job ${item.id === selectedId ? "active" : ""}`} key={item.id} onClick={() => selectJob(item.id)}>
+                  <div className="m-job-title">{item.title || item.instruction || item.id}</div>
+                  <div className="m-job-meta">
+                    <span className={`m-chip ${item.status}`}>{STATUS_LABELS[item.status] ?? item.status}</span>
+                    <span>{relativeTime(item.created_at)}前</span>
+                    <span>{item.project_id}</span>
+                    {(item.resume_count ?? 0) > 0 && <span>继续 {item.resume_count} 次</span>}
+                  </div>
+                </button>
+              ))}
+            </>
+          )}
+
+          {tab === "approvals" && (
+            <>
+              {pendingApprovals.length + pendingQuestions.length === 0 && <div className="m-empty"><h2>没有待回答的请求</h2><p>Agent 需要你的决定时会在这里询问。</p></div>}
+              {pendingQuestions.map(item => <div className="m-approval" key={item.id}>
+                <h3>{item.question}</h3>
+                <div className="risk">任务 {item.job_id}</div>
+                <div className="m-approval-actions">
+                  {item.options.map(option => <button className="m-btn" key={option.label}
+                    title={option.description} onClick={() => void answerQuestion(item.id, option.label)}>
+                    {option.label}{option.description ? ` · ${option.description}` : ""}
+                  </button>)}
+                </div>
+                <div className="m-approval-actions">
+                  <input className="m-input" aria-label="自定义回答" placeholder="或输入自己的答案"
+                    value={questionDrafts[item.id] ?? ""}
+                    onChange={event => setQuestionDrafts(current => ({ ...current, [item.id]: event.target.value }))} />
+                  <button className="m-btn primary" disabled={!(questionDrafts[item.id] ?? "").trim()}
+                    onClick={() => void answerQuestion(item.id, questionDrafts[item.id] ?? "")}>发送</button>
+                </div>
+              </div>)}
+              {pendingApprovals.map(item => (
+                <div className="m-approval" key={item.id}>
+                  <h3>{toolLabel(item.tool)}</h3>
+                  <div className="risk">风险：{item.risk} · 任务 {item.job_id}</div>
+                  {item.once_only && <p>{item.description}</p>}
+                  <pre>{JSON.stringify(item.args, null, 2)}</pre>
+                  <div className="m-approval-actions">
+                    <button className="m-btn primary" onClick={() => void decide(item.id, "once")}>允许一次</button>
+                    {!item.once_only && <><button className="m-btn ok" onClick={() => void decide(item.id, "always")}>本会话允许</button>
+                    <button className="m-btn" onClick={() => void decide(item.id, "tool")}>该工具都允许</button></>}
+                    <button className="m-btn danger" onClick={() => void decide(item.id, "deny")}>拒绝</button>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {tab === "settings" && (
+            <>
               <div className="m-card">
-                <h3>{account ? "账户实例" : "中继节点"}</h3>
-                {relayNodes.length === 0 && <p className="m-note">还没有节点连上中继。</p>}
-                {relayNodes.map(item => (
-                  <button key={item.id} className={`m-job ${item.id === scope ? "active" : ""}`} onClick={() => chooseNode(item.id)}>
-                    <div className="m-job-title">{item.online ? "● " : "○ "}{item.name}</div>
-                    <div className="m-job-meta"><span>{item.workspace || "—"}</span><span>v{item.version || "—"}</span></div>
-                  </button>
-                ))}
+                <h3>外观</h3>
+                <div className="m-choices" role="group" aria-label="主题">
+                  {THEME_OPTIONS.map(option => (
+                    <button
+                      key={option.value}
+                      className={`m-choice ${look.mode === option.value ? "active" : ""}`}
+                      aria-pressed={look.mode === option.value}
+                      disabled={look.locked}
+                      onClick={() => chooseAppearance(option.value)}
+                    >{option.label}</button>
+                  ))}
+                </div>
+                <p className="m-note" style={{ marginBottom: 0 }}>
+                  {look.locked
+                    ? `主题由 luban App 控制，当前为${look.theme === "dark" ? "深色" : "浅色"}；可在 App 的「外观设置」里切换。`
+                    : look.mode === "system"
+                      ? `跟随系统，当前${look.theme === "dark" ? "深色" : "浅色"}。`
+                      : `已固定为${look.theme === "dark" ? "深色" : "浅色"}。`}
+                </p>
               </div>
-            )}
-            <div className="m-card">
-              <h3>本机页面</h3>
-              <p className="m-note">同一个任务队列也可以从电脑浏览器打开。</p>
-              <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
-                <a className="m-btn" style={{ textAlign: "center", textDecoration: "none" }} href="/">桌面工作台</a>
-                <a className="m-btn" style={{ textAlign: "center", textDecoration: "none" }} href="/diff">代码变更</a>
+              {account && (
+                <div className="m-card">
+                  <h3>账户</h3>
+                  <dl className="m-kv">
+                    <dt>邮箱</dt><dd>{account.email}</dd>
+                    <dt>实例</dt><dd>{relayNodes.length} 个</dd>
+                  </dl>
+                  <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
+                    <button className="m-btn primary" onClick={() => void requestDeviceToken()}>添加电脑</button>
+                  </div>
+                  {deviceSetup && (
+                    <div className="m-device-token">
+                      <p className="m-note">令牌只显示这一次；重新生成只新增一枚，不影响其他电脑。</p>
+                      <pre>{deviceSetup.command}</pre>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="m-card">
+                <h3>连接</h3>
+                <dl className="m-kv">
+                  <dt>模式</dt><dd>{relayMode ? "中继（公网）" : "直连（局域网）"}</dd>
+                  <dt>节点</dt><dd>{node?.name || "—"}</dd>
+                  <dt>工作区</dt><dd>{node?.workspace || "—"}</dd>
+                  <dt>模型</dt><dd>{node?.model ? `${node.model}${node.provider ? ` · ${node.provider}` : ""}` : "—"}</dd>
+                  <dt>版本</dt><dd>v{node?.version || "—"}</dd>
+                  <dt>实时流</dt><dd>{live ? "已连接" : "断开"}</dd>
+                </dl>
               </div>
-            </div>
-            <div className="m-card">
-              <h3>使用提示</h3>
-              <p className="m-note">在浏览器菜单里选择「添加到主屏幕」，即可像 App 一样全屏打开，并保留登录状态。</p>
-              <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
-                {account
-                  ? <button className="m-btn" onClick={() => void logout()}>退出登录</button>
-                  : <a className="m-btn" style={{ textAlign: "center", textDecoration: "none" }} href="/logout">退出登录</a>}
+              <div className="m-card">
+                <h3>模型</h3>
+                <p className="m-note">切换的是电脑端下一任务使用的模型；电脑端新增或切换模型后，这里会自动同步。</p>
+                {modelCatalog.length === 0
+                  ? <p className="m-note" style={{ marginBottom: 0 }}>电脑端还没有报告可用模型，请确认 luban 正在运行。</p>
+                  : <div className="m-model-list" role="listbox" aria-label="模型">
+                    {modelCatalog.map(item => (
+                      <button key={item.id} type="button" role="option" aria-selected={item.id === node?.model_id}
+                        className={`m-model ${item.id === node?.model_id ? "active" : ""}`}
+                        disabled={modelBusy || item.id === node?.model_id}
+                        onClick={() => void switchModel(item.id)}>
+                        <span className="m-model-main">
+                          <strong>{item.name}</strong>
+                          <span>{item.provider}{item.reasoning_effort ? ` · ${item.reasoning_effort}` : ""}</span>
+                        </span>
+                        {item.id === node?.model_id && <span className="m-chip done">当前</span>}
+                      </button>
+                    ))}
+                  </div>}
+                {(activeModel?.reasoning_efforts?.length ?? 0) > 0 && (
+                  <>
+                    <p className="m-note" style={{ margin: "12px 0 6px" }}>推理强度</p>
+                    <div className="m-choices" role="group" aria-label="推理强度">
+                      {effortChoices.map(level => (
+                        <button key={level ?? "default"} type="button" disabled={modelBusy}
+                          className={`m-choice ${(node?.reasoning_effort ?? null) === level ? "active" : ""}`}
+                          aria-pressed={(node?.reasoning_effort ?? null) === level}
+                          onClick={() => void switchModel(activeModel?.id ?? "", level)}>{level ?? "默认"}</button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {modelBusy && <p className="m-note" style={{ marginBottom: 0 }}>正在切换模型…</p>}
               </div>
-            </div>
-          </>
-        )}
+              {relayMode && (
+                <div className="m-card">
+                  <h3>{account ? "账户实例" : "中继节点"}</h3>
+                  {relayNodes.length === 0 && <p className="m-note">还没有节点连上中继。</p>}
+                  {relayNodes.map(item => (
+                    <button key={item.id} className={`m-job ${item.id === scope ? "active" : ""}`} onClick={() => chooseNode(item.id)}>
+                      <div className="m-job-title">{item.online ? "● " : "○ "}{item.name}</div>
+                      <div className="m-job-meta"><span>{item.workspace || "—"}</span><span>v{item.version || "—"}</span></div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="m-card">
+                <h3>本机页面</h3>
+                <p className="m-note">同一个任务队列也可以从电脑浏览器打开。</p>
+                <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
+                  <a className="m-btn" style={{ textAlign: "center", textDecoration: "none" }} href="/">桌面工作台</a>
+                  <a className="m-btn" style={{ textAlign: "center", textDecoration: "none" }} href="/diff">代码变更</a>
+                </div>
+              </div>
+              <div className="m-card">
+                <h3>使用提示</h3>
+                <p className="m-note">在浏览器菜单里选择「添加到主屏幕」，即可像 App 一样全屏打开，并保留登录状态。</p>
+                <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
+                  {account
+                    ? <button className="m-btn" onClick={() => void logout()}>退出登录</button>
+                    : <a className="m-btn" style={{ textAlign: "center", textDecoration: "none" }} href="/logout">退出登录</a>}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </main>
+
+      {/* Docked, not in the transcript: on a phone the top of the session is
+          scrolled away within seconds, and the composer is where the thumb is. */}
+      {progress && (
+        <div className="m-live-dock" role="status" aria-live="polite">
+          <div className={`m-live ${progress.stalled ? "stalled" : ""}`}>
+            <span className="m-spin" />
+            <span className="label">{progress.label}</span>
+            <span className="detail">{liveDetail}</span>
+            <span className="clock">{progress.seconds}s</span>
+          </div>
+        </div>
+      )}
 
       <div className="m-compose" hidden={tab !== "live"}>
         {submissionPending && !busy && <p className="m-note" role="alert">

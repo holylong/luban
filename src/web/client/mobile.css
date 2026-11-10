@@ -194,6 +194,7 @@ a { color: var(--blue); }
 
 /* Main ----------------------------------------------------------------- */
 .m-main { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 13px 13px 20px; }
+.m-main-inner { min-width: 0; }
 .m-empty { padding: 44px 18px; text-align: center; color: var(--muted); }
 .m-empty h2 { margin: 0 0 8px; color: var(--fg); font-size: 19px; }
 .m-empty p { margin: 0; font-size: 14px; }
@@ -223,6 +224,9 @@ a { color: var(--blue); }
   background: var(--panel);
   font-size: 13.5px;
 }
+/* Docked above the composer: the one place a thumb is already looking. */
+.m-live-dock { padding: 8px 13px 9px; border-top: 1px solid var(--line); background: var(--panel); }
+.m-live-dock .m-live { margin: 0; }
 .m-live.stalled { border-color: var(--stall-line); color: var(--stall-fg); }
 .m-live .label { color: var(--blue); font-weight: 650; flex: none; }
 .m-live .detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

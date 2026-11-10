@@ -1,6 +1,6 @@
 import React from "react";
 import type { SessionDetail, TimelineItem, ToolRun } from "./types";
-import { deriveTimeline, liveProgress } from "./timeline";
+import { deriveTimeline } from "./timeline";
 
 /** Durable transcript first, followed by the current TUI turn's event replay. */
 export function sessionTimeline(session: SessionDetail): TimelineItem[] {
@@ -37,12 +37,10 @@ export function MobileSessionHistory({ session, renderTool }: {
   session: SessionDetail;
   renderTool: (run: ToolRun) => React.ReactNode;
 }): React.ReactElement {
-  const progress = session.live?.running ? liveProgress(session.live.events, Date.now() / 1000) : null;
   const items = sessionTimeline(session);
   return <section aria-label="会话交互记录">
     <h3>{session.title}</h3>
     <p className="m-note">{session.live?.running ? "电脑正在执行 · 每秒同步" : "会话记录 · 自动同步"}</p>
-    {progress && <div className="m-live"><span className="m-spin" /><span className="label">{progress.label}</span><span className="detail">{progress.detail}</span><span className="clock">{progress.seconds}s</span></div>}
     {items.length === 0 && <p className="m-note">此会话还没有可显示的交互记录，请选择其他历史会话。</p>}
     {items.map(item => {
       if (item.kind === "tool") return <React.Fragment key={item.id}>{renderTool(item.run)}</React.Fragment>;

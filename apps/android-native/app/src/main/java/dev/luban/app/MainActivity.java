@@ -60,7 +60,7 @@ public final class MainActivity extends Activity {
     private String historySession = "";
     private LinearLayout interactions;
     private String interactionSignature = "";
-    private TextView resumeButton, liveStatus, liveProgress, liveOutput;
+    private TextView resumeButton, liveStatus, liveProgress, liveOutput, headerSubtitle;
     private StringBuilder liveBuffer;
     private long liveSince;
 
@@ -270,6 +270,7 @@ public final class MainActivity extends Activity {
 
     private void header(String title, String subtitle, View right) {
         Ui.clear(topBar);
+        headerSubtitle = null;
         topBar.setBackgroundColor(theme.surface);
         LinearLayout brandRow = ui.row();
         LinearLayout titles = ui.column();
@@ -281,6 +282,7 @@ public final class MainActivity extends Activity {
             sub.setSingleLine(true);
             sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
             titles.addView(sub);
+            headerSubtitle = sub;
         }
         brandRow.addView(titles, new LinearLayout.LayoutParams(0, -2, 1f));
         if (right != null) brandRow.addView(right);
@@ -305,6 +307,21 @@ public final class MainActivity extends Activity {
         box.addView(title);
         box.addView(note);
         setBody(box);
+    }
+
+    /** True when the transcript is parked at the newest line (or too short to
+     *  scroll), so streaming can follow without yanking the reader upwards. */
+    private boolean nearBottom() {
+        View child = scroll.getChildAt(0);
+        if (child == null) return true;
+        int distance = child.getHeight() - (scroll.getScrollY() + scroll.getHeight());
+        return distance < ui.dp(120);
+    }
+
+    private void followTail() {
+        scroll.post(() -> {
+            if (!background && screen.equals("job")) scroll.fullScroll(View.FOCUS_DOWN);
+        });
     }
 
     private void toast(String message) {
@@ -1053,6 +1070,8 @@ public final class MainActivity extends Activity {
                     stream.addView(interactions);
                     stream.addView(resumeButton);
                     stream.addView(card);
+                    // A job screen opens on the newest line, not on the history.
+                    followTail();
                 });
             } catch (Exception ignored) {
                 // Stream remains available even if historical session loading fails.
@@ -1097,11 +1116,16 @@ public final class MainActivity extends Activity {
                 String finishedSession = job.optString("session_id", "");
                 postResult(() -> {
                     if (token != pollToken || background) return;
+                    boolean following = nearBottom();
                     liveSince = next;
                     renderInteractions(id, approvals, questions);
                     resumeButton.setVisibility(job.optString("status").matches("failed|paused") ? View.VISIBLE : View.GONE);
                     status.setText(statusText);
                     progress.setText(percent + "%  ·  " + relative(job.optLong("created_at")));
+                    // The header is visible even when the transcript is long.
+                    if (headerSubtitle != null) {
+                        headerSubtitle.setText(Ui.join(" · ", nodeName, statusText, percent + "%"));
+                    }
                     if (delta.length() > 0) buffer.append(delta);
                     output.setText(buffer.toString());
                     if (complete) {
@@ -1114,7 +1138,7 @@ public final class MainActivity extends Activity {
                         if (!errorText.isEmpty()) output.append("\n✗ " + errorText);
                         buildComposer();
                     } else {
-                        if (interactions.getChildCount() == 0) scroll.post(() -> {
+                        if (following) scroll.post(() -> {
                             if (token == pollToken && !background) scroll.fullScroll(View.FOCUS_DOWN);
                         });
                         main.postDelayed(() -> pollJob(token, id, next, buffer, status, progress, output), 1200);
