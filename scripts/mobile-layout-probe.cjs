@@ -49,12 +49,17 @@ app.whenReady().then(async () => {
     })()`);
     await new Promise(resolve => setTimeout(resolve, 600));
     await win.webContents.executeJavaScript(`(() => {
-      const select = document.querySelector('select[aria-label="继续会话"]');
-      const option = [...select.options].find(item => item.value);
-      if (!option) return "no-saved-session";
-      select.value = option.value;
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-      return option.textContent;
+      const collapse = document.querySelector('.m-collapse[aria-label="继续会话"]');
+      if (!collapse) return "no-session-collapse";
+      collapse.click();
+      return "opened";
+    })()`);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    await win.webContents.executeJavaScript(`(() => {
+      const pick = [...document.querySelectorAll(".m-pick")].find(item => item.classList.contains("active") === false && !item.textContent.includes("新会话"));
+      if (!pick) return "no-saved-session";
+      pick.click();
+      return pick.textContent;
     })()`).then(picked => console.log("session:", picked));
     await new Promise(resolve => setTimeout(resolve, 1200));
     await win.webContents.executeJavaScript(`(() => {
@@ -70,6 +75,38 @@ app.whenReady().then(async () => {
     })()`);
     await new Promise(resolve => setTimeout(resolve, 800));
   }
+  // The settings lists fold: both long lists are closed until asked for.
+  const folding = await win.webContents.executeJavaScript(`(() => {
+    const tab = [...document.querySelectorAll(".m-tab")].find(node => node.textContent.trim().endsWith("设置"));
+    tab?.click();
+    return null;
+  })()`);
+  await new Promise(resolve => setTimeout(resolve, 800));
+  await win.webContents.executeJavaScript(`(() => {
+    const heads = [...document.querySelectorAll(".m-collapse")].map(node => ({
+      label: node.querySelector(".m-collapse-label")?.textContent ?? "",
+      summary: node.querySelector(".m-collapse-summary")?.textContent ?? "",
+      expanded: node.getAttribute("aria-expanded"),
+    }));
+    console.log("FOLD", JSON.stringify(heads), "models", document.querySelectorAll(".m-model").length, "picks", document.querySelectorAll(".m-pick").length);
+    return heads;
+  })()`).then(heads => console.log("折叠面板:", JSON.stringify(heads)));
+  await win.webContents.executeJavaScript(`(() => {
+    const heads = [...document.querySelectorAll(".m-collapse")];
+    heads.forEach(node => node.click());
+    return null;
+  })()`);
+  await new Promise(resolve => setTimeout(resolve, 600));
+  await win.webContents.executeJavaScript(`(() => ({
+    models: document.querySelectorAll(".m-model").length,
+    picks: document.querySelectorAll(".m-pick").length,
+    expanded: [...document.querySelectorAll(".m-collapse")].map(node => node.getAttribute("aria-expanded")),
+  }))()`).then(open => console.log("展开后:", JSON.stringify(open)));
+  if (TAB !== "settings") await win.webContents.executeJavaScript(`(() => {
+    const tab = [...document.querySelectorAll(".m-tab")].find(node => node.textContent.trim().endsWith("${TAB}"));
+    tab?.click();
+  })()`);
+
   const metrics = await win.webContents.executeJavaScript(`(() => {
     const box = selector => {
       const node = document.querySelector(selector);

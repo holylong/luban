@@ -35,7 +35,7 @@ describe("mobile layout", () => {
   });
 
   it("collects session, project and permission choices under 设置", () => {
-    for (const label of ['aria-label="继续会话"', 'aria-label="项目"', 'aria-label="权限"']) {
+    for (const label of ['ariaLabel="继续会话"', 'aria-label="项目"', 'aria-label="权限"']) {
       expect(settings).toContain(label);
     }
     expect(settings).toContain("addWorkspace(\"new\")");
@@ -54,6 +54,16 @@ describe("mobile layout", () => {
 
   it("shows the provider next to each model in 设置", () => {
     expect(settings).toContain("{item.provider}");
+  });
+
+  it("folds the long model and session lists behind their current choice", () => {
+    // Two long lists used to occupy the whole 设置 page; the collapsed header
+    // carries the answer, and the rows only appear when asked for.
+    expect(settings).toContain('<MobileCollapse label="会话" ariaLabel="继续会话"');
+    expect(settings).toContain('<MobileCollapse label="可选模型" ariaLabel="可选模型"');
+    expect(settings).toContain("summary={continueSession ? `继续：${continueSession.title}` : \"新会话\"}");
+    expect(settings).toContain("summary={activeModel ?");
+    expect(source).not.toContain("defaultOpen");
   });
 
   it("prevents status badges and names from shrinking into vertical text", () => {

@@ -417,6 +417,48 @@ html[data-shell="android"] .m-head-bar { padding-right: 46px; }
 .m-model.active { border-color: var(--blue-ring-strong); background: var(--blue-soft); }
 .m-model:disabled { opacity: .6; }
 
+/* Collapsible settings sections ---------------------------------------- */
+.m-collapse {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin: 10px 0 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel-2);
+  color: var(--fg);
+  text-align: left;
+}
+.m-collapse.open { border-color: var(--active-line); background: var(--active-bg); }
+.m-collapse-label { flex: none; font-size: 13px; color: var(--dim); }
+.m-collapse-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-collapse-mark { flex: none; color: var(--dim); font-size: 12px; }
+.m-collapse-body { margin-top: 9px; }
+.m-pick {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: 7px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  text-align: left;
+}
+.m-pick.active { border-color: var(--active-line); background: var(--active-bg); }
+.m-pick-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.m-pick-meta { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Composer ------------------------------------------------------------- */
 .m-compose {
   padding: 6px 12px 8px;

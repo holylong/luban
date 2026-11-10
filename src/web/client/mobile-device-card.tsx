@@ -26,7 +26,9 @@ export function MobileDeviceCard({ device, current, onOpen, onJobs, onRemove }: 
   onRemove(): void;
 }): React.ReactElement {
   const activity = deviceActivity(device.status);
-  const running = activity.running;
+  // The relay keeps the last status it saw, so an offline laptop would still
+  // advertise "正在工作" for a session that stopped a while ago.
+  const running = device.online ? activity.running : [];
   const latest = activity.latest;
   const busy = activity.active.length + running.length;
   const wrote = running[0]?.updated_at;
@@ -55,7 +57,7 @@ export function MobileDeviceCard({ device, current, onOpen, onJobs, onRemove }: 
         {latest.updated_at ? ` · ${relativeTime(latest.updated_at)}前更新` : ""}
         {activity.jobs.length > 1 ? ` · 共 ${activity.jobs.length} 条记录` : ""}
       </div>
-    </> : running.length === 0 ? <div className="m-note">{device.online ? "空闲，等待派活" : "离线"}</div> : null}
+    </> : running.length === 0 ? <div className="m-note">{device.online ? "空闲，等待派活" : "离线，状态已停止更新"}</div> : null}
     <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
       <button className="m-btn primary" disabled={!device.online} onClick={onOpen}>打开并派活</button>
       <button className="m-btn" onClick={onJobs}>查看任务</button>

@@ -63,6 +63,15 @@ describe("device card", () => {
     expect(render(node({ status: undefined, workspace: "" }))).toContain("未报告工作区");
   });
 
+  it("hides a session that a now-offline laptop left behind", () => {
+    // The relay keeps the last snapshot it saw; an offline node must not keep
+    // claiming that its terminal is still working.
+    const html = render(node({ online: false, status: { updated_at: 1, jobs: [], sessions: [session()] } }));
+    expect(html).not.toContain("正在工作");
+    expect(html).not.toContain("整理右键菜单");
+    expect(html).toContain("离线");
+  });
+
   it("offers removal only for an offline node", () => {
     expect(render(node({ online: false }))).toContain("移除");
     expect(render(node())).not.toContain("移除");

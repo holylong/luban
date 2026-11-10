@@ -1,5 +1,6 @@
 import type { RelayDeviceStatus } from "./mobile-device";
 import { MobileDeviceCard } from "./mobile-device-card";
+import { MobileCollapse } from "./mobile-collapse";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setNodeScope } from "./api";
 import type { ApprovalView, JobStreamRecord, MeshJob, NodeInfo, QuestionView, ReasoningEffort, SessionDetail, SessionSummary, ToolRun } from "./types";
@@ -865,6 +866,20 @@ export function MobileApp(): React.ReactElement {
     element.style.height = `${Math.min(132, element.scrollHeight)}px`;
   }, [draft]);
 
+  /** Switching the session also drops the job, replay and detail of the old one. */
+  const chooseSession = (next?: SessionSummary): void => {
+    setContinueSession(next);
+    setSessionDetail(undefined);
+    setSessionError(undefined);
+    selectedRef.current = undefined;
+    setJob(undefined);
+    setEvents([]);
+    setSelectedId(undefined);
+    localStorage.removeItem(JOB_KEY);
+    setTab("live");
+    if (next) setProject(next.project);
+  };
+
   const dotClass = !connected ? "offline" : running ? "working" : live ? "online" : "offline";
   const nodeLabel = node ? `${node.name}${node.model ? ` · ${node.model}` : ""}` : connectionError ? "未连接" : "连接中";
   const activeJobs = jobs.filter(item => ACTIVE_STATUS.has(item.status)).length;
@@ -1068,29 +1083,22 @@ export function MobileApp(): React.ReactElement {
               )}
               <div className="m-card">
                 <h3>派活</h3>
-                <label className="m-field">
-                  <span>会话</span>
-                  <select
-                    value={continueSession?.id ?? ""}
-                    aria-label="继续会话"
-                    onChange={event => {
-                      const next = sessions.find(item => item.id === event.target.value);
-                      setContinueSession(next);
-                      setSessionDetail(undefined);
-                      setSessionError(undefined);
-                      selectedRef.current = undefined;
-                      setJob(undefined);
-                      setEvents([]);
-                      setSelectedId(undefined);
-                      localStorage.removeItem(JOB_KEY);
-                      setTab("live");
-                      if (next) setProject(next.project);
-                    }}
-                  >
-                    <option value="">新会话</option>
-                    {sessions.slice(0, 8).map(item => <option key={item.id} value={item.id}>继续：{item.title}</option>)}
-                  </select>
-                </label>
+                <MobileCollapse label="会话" ariaLabel="继续会话"
+                  summary={continueSession ? `继续：${continueSession.title}` : "新会话"}>
+                  <button type="button" className={`m-pick ${continueSession ? "" : "active"}`}
+                    onClick={() => chooseSession(undefined)}>
+                    <span className="m-pick-title">新会话</span>
+                    <span className="m-pick-meta">从空白开始，不带历史</span>
+                  </button>
+                  {sessions.slice(0, 8).map(item => (
+                    <button key={item.id} type="button"
+                      className={`m-pick ${item.id === continueSession?.id ? "active" : ""}`}
+                      onClick={() => chooseSession(item)}>
+                      <span className="m-pick-title">{item.title}</span>
+                      <span className="m-pick-meta">{item.project}{item.updatedAt ? ` · ${relativeTime(Date.parse(item.updatedAt) / 1000)}前` : ""}</span>
+                    </button>
+                  ))}
+                </MobileCollapse>
                 <label className="m-field">
                   <span>项目</span>
                   <select value={project} onChange={event => { setProject(event.target.value); setContinueSession(undefined); setSessionDetail(undefined); }} aria-label="项目">
@@ -1175,7 +1183,9 @@ export function MobileApp(): React.ReactElement {
                 <p className="m-note">切换的是电脑端下一任务使用的模型；电脑端新增或切换模型后，这里会自动同步。</p>
                 {modelCatalog.length === 0
                   ? <p className="m-note" style={{ marginBottom: 0 }}>电脑端还没有报告可用模型，请确认 luban 正在运行。</p>
-                  : <div className="m-model-list" role="listbox" aria-label="模型">
+                  : <MobileCollapse label="可选模型" ariaLabel="可选模型"
+                    summary={activeModel ? `${activeModel.name}${activeModel.provider ? ` · ${activeModel.provider}` : ""}` : node?.model}>
+                  <div className="m-model-list" role="listbox" aria-label="模型">
                     {modelCatalog.map(item => (
                       <button key={item.id} type="button" role="option" aria-selected={item.id === node?.model_id}
                         className={`m-model ${item.id === node?.model_id ? "active" : ""}`}
@@ -1188,20 +1198,21 @@ export function MobileApp(): React.ReactElement {
                         {item.id === node?.model_id && <span className="m-chip done">当前</span>}
                       </button>
                     ))}
-                  </div>}
-                {(activeModel?.reasoning_efforts?.length ?? 0) > 0 && (
-                  <>
-                    <p className="m-note" style={{ margin: "12px 0 6px" }}>推理强度</p>
-                    <div className="m-choices" role="group" aria-label="推理强度">
-                      {effortChoices.map(level => (
-                        <button key={level ?? "default"} type="button" disabled={modelBusy}
-                          className={`m-choice ${(node?.reasoning_effort ?? null) === level ? "active" : ""}`}
-                          aria-pressed={(node?.reasoning_effort ?? null) === level}
-                          onClick={() => void switchModel(activeModel?.id ?? "", level)}>{level ?? "默认"}</button>
-                      ))}
-                    </div>
-                  </>
-                )}
+                  </div>
+                  {(activeModel?.reasoning_efforts?.length ?? 0) > 0 && (
+                    <>
+                      <p className="m-note" style={{ margin: "12px 0 6px" }}>推理强度</p>
+                      <div className="m-choices" role="group" aria-label="推理强度">
+                        {effortChoices.map(level => (
+                          <button key={level ?? "default"} type="button" disabled={modelBusy}
+                            className={`m-choice ${(node?.reasoning_effort ?? null) === level ? "active" : ""}`}
+                            aria-pressed={(node?.reasoning_effort ?? null) === level}
+                            onClick={() => void switchModel(activeModel?.id ?? "", level)}>{level ?? "默认"}</button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  </MobileCollapse>}
                 {modelBusy && <p className="m-note" style={{ marginBottom: 0 }}>正在切换模型…</p>}
               </div>
               {relayMode && (
