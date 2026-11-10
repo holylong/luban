@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld("lubanDesktop", Object.freeze({
   readFile: path => ipcRenderer.invoke("luban:readFile", path),
   saveFile: input => ipcRenderer.invoke("luban:saveFile", input),
   listFiles: () => ipcRenderer.invoke("luban:listFiles"),
+  // Parsed slide decks and draw.io diagrams render inside the workbench.
+  readPreview: path => ipcRenderer.invoke("luban:readPreview", path),
+  // Hand a file the preview cannot paint to the system application.
+  openPath: path => ipcRenderer.invoke("luban:openPath", path),
   // Opens the folder picker in the main process, which owns workspace switching.
   openWorkspace: () => ipcRenderer.invoke("luban:openWorkspace"),
   runCommand: command => ipcRenderer.invoke("luban:runCommand", command),

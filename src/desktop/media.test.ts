@@ -15,6 +15,7 @@ beforeEach(() => {
   writeFileSync(join(root, "clip.mp4"), Buffer.from("0123456789"));
   writeFileSync(join(root, "empty.mp3"), Buffer.alloc(0));
   writeFileSync(join(root, "notes.txt"), "text");
+  writeFileSync(join(root, "report.pdf"), "%PDF-1.4");
 });
 afterEach(() => { service.dispose(); rmSync(root, { recursive: true, force: true }); });
 
@@ -48,6 +49,13 @@ describe("luban-media:// responses", () => {
     expect(get("notes.txt").status).toBe(404);
     expect(get("missing.mp4").status).toBe(404);
     expect(mediaResponse(undefined, new Request(url("clip.mp4"))).status).toBe(503);
+  });
+
+  it("serves a PDF with the type the embedded viewer needs", async () => {
+    const response = get("report.pdf");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/pdf");
+    expect(await response.text()).toBe("%PDF-1.4");
   });
 
   it("answers HEAD and an empty file without a body", () => {

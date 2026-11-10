@@ -3,7 +3,9 @@ import { acceptSaved, desktopErrorText, quickMatches, type EditorDocument } from
 import { HighlightedCode, editorLanguage, highlightable } from "./desktop-syntax";
 import { startFileSync } from "./desktop-file-sync";
 import { DesktopMediaView } from "./desktop-media-view";
-import { mediaKind, type MediaKind } from "./desktop-media";
+import { documentPreviewKind, mediaKind, type DocumentPreviewKind, type MediaKind } from "./desktop-media";
+import { DesktopDocumentView } from "./desktop-document-view";
+import type { DocumentPreview } from "./desktop-preview";
 import type { WorkbenchStore } from "./store";
 
 export function DesktopEditor({ store, activeView = true }: { store: WorkbenchStore; activeView?: boolean }): React.ReactElement {
@@ -18,6 +20,8 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   // Audio, video and images are binary: they play in a read-only preview instead
   // of failing the text reader.
   const [preview, setPreview] = useState<{ path: string; kind: MediaKind } | null>(null);
+  // Slide decks and draw.io diagrams are parsed in the main process.
+  const [parsed, setParsed] = useState<{ path: string; kind: DocumentPreviewKind; model?: DocumentPreview; error?: string } | null>(null);
   const [position, setPosition] = useState({ line: 1, column: 1 });
   const area = useRef<HTMLTextAreaElement>(null);
   const gutter = useRef<HTMLPreElement>(null);
@@ -38,11 +42,25 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   const dirty = documents.some(item => item.content !== item.saved);
   const notify = store.notify;
 
+  const openParsed = async (path: string, kind: DocumentPreviewKind): Promise<void> => {
+    if (!bridge?.readPreview) { setParsed({ path, kind, error: "请重启桌面客户端以启用这个预览" }); return; }
+    try {
+      const model = await bridge.readPreview(path);
+      setParsed(current => current?.path === path ? { path, kind, model } : current);
+    } catch (cause) {
+      setParsed(current => current?.path === path ? { path, kind, error: desktopErrorText(cause, path) } : current);
+    }
+  };
   const open = async (path: string): Promise<void> => {
     if (!bridge) return;
+    // Parsed previews win: a .drawio.png is a diagram with a PNG preview, not
+    // a plain image, and .drawio.svg is a diagram too.
+    const parsedKind = documentPreviewKind(path);
+    if (parsedKind) { setPreview(null); setParsed({ path, kind: parsedKind }); setError(""); void openParsed(path, parsedKind); return; }
     const kind = mediaKind(path);
-    if (kind) { setPreview({ path, kind }); setError(""); return; }
+    if (kind) { setPreview({ path, kind }); setParsed(null); setError(""); return; }
     setPreview(null);
+    setParsed(null);
     const request = ++opening.current;
     if (documents.some(item => item.path === path)) { setActive(path); return; }
     try {
@@ -96,13 +114,15 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   const matches = quickMatches(files, query);
 
   return <>
-    <div className="desktop-editor-head"><span className="desktop-editor-title">{preview ? preview.path : active || "代码工作台"}</span><button onClick={showQuick} disabled={!bridge}>快速打开 ⌘/Ctrl P</button><button onClick={() => void save()} disabled={!document || saving || Boolean(diskIssue) || document.saved === document.content}>{saving ? "保存中…" : "保存"}</button></div>
-    <div className="desktop-document-tabs" role="tablist" aria-label="打开的文件">{documents.map(item => <div key={item.path} className={active === item.path ? "active" : ""}><button role="tab" aria-selected={active === item.path} title={item.path} onClick={() => { setActive(item.path); setPreview(null); }}>{item.content !== item.saved ? "● " : ""}{item.path.split("/").at(-1)}</button><button aria-label={`关闭 ${item.path}`} onClick={() => close(item)}>×</button></div>)}</div>
+    <div className="desktop-editor-head"><span className="desktop-editor-title">{(preview?.path ?? parsed?.path ?? active) || "代码工作台"}</span><button onClick={showQuick} disabled={!bridge}>快速打开 ⌘/Ctrl P</button><button onClick={() => void save()} disabled={!document || saving || Boolean(diskIssue) || document.saved === document.content}>{saving ? "保存中…" : "保存"}</button></div>
+    <div className="desktop-document-tabs" role="tablist" aria-label="打开的文件">{documents.map(item => <div key={item.path} className={active === item.path ? "active" : ""}><button role="tab" aria-selected={active === item.path} title={item.path} onClick={() => { setActive(item.path); setPreview(null); setParsed(null); }}>{item.content !== item.saved ? "● " : ""}{item.path.split("/").at(-1)}</button><button aria-label={`关闭 ${item.path}`} onClick={() => close(item)}>×</button></div>)}</div>
     {(error || diskIssue) && <div className="desktop-error" role="alert">{diskIssue || error}{document && <button onClick={async () => {
       if (!window.confirm("重新读取磁盘版本会放弃当前文件未保存内容，继续？")) return;
       try { const file = await bridge!.readFile(active); setDocuments(current => current.map(item => item.path === file.path ? { ...file, saved: file.content } : item)); setError(""); } catch (cause) { setError(desktopErrorText(cause, active)); }
     }}>重新读取磁盘</button>}</div>}
-    {preview ? <DesktopMediaView key={preview.path} path={preview.path} kind={preview.kind} onClose={() => setPreview(null)} /> : document ? <>
+    {preview ? <DesktopMediaView key={preview.path} path={preview.path} kind={preview.kind} onClose={() => setPreview(null)} />
+      : parsed ? <DesktopDocumentView key={parsed.path} path={parsed.path} kind={parsed.kind} model={parsed.model} error={parsed.error} onClose={() => setParsed(null)} />
+        : document ? <>
       <div className="desktop-code-editor" key={active}><pre className="desktop-line-numbers" ref={gutter} aria-hidden="true">{document.content.split("\n").map((_, index) => index + 1).join("\n")}</pre><div className="desktop-code-surface">
         {highlight && <pre className="desktop-code-highlight" ref={layer} aria-hidden="true"><HighlightedCode content={document.content} language={language} /></pre>}
         <textarea ref={area} className={highlight ? "highlighted" : undefined} aria-label={`编辑 ${active}`} value={document.content} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onChange={event => change(event.target.value)} onSelect={locate} onScroll={event => {

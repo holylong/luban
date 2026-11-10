@@ -148,7 +148,26 @@
 .desktop-media-stage video, .desktop-media-stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .desktop-media-stage audio { width: min(560px, 92%); }
 .desktop-media-hint { flex: none; display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--dim); }
-.desktop-media-hint button { margin-left: auto; }
+.desktop-media-hint span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-media-hint button { flex: none; }
+.desktop-media-pdf { align-items: stretch; justify-content: stretch; background: var(--panel); }
+.desktop-media-pdf embed { width: 100%; height: 100%; min-height: 320px; border: 0; }
+/* Parsed, read-only previews: slide decks and draw.io diagrams. */
+.desktop-doc { flex: 1; min-height: 100px; display: flex; flex-direction: column; gap: 10px; padding: 14px; background: var(--bg); }
+.desktop-doc-stage { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.desktop-doc-loading, .desktop-doc-error { margin: auto; color: var(--dim); font-size: 12px; text-align: center; }
+.desktop-doc-error { max-width: 520px; color: var(--yellow); }
+.desktop-doc-hint { flex: none; display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--dim); }
+.desktop-doc-hint span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-doc-hint button { flex: none; }
+.desktop-deck { display: flex; flex-direction: column; gap: 18px; }
+.desktop-slide { margin: 0 auto; width: 100%; max-width: 960px; display: flex; flex-direction: column; gap: 6px; }
+.desktop-slide figcaption, .desktop-diagram figcaption { font-size: 11px; color: var(--dim); }
+.desktop-slide-canvas { width: 100%; height: auto; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px #0004; }
+.desktop-slide-notes { margin: 0; font: 11px/1.5 var(--mono); color: var(--dim); white-space: pre-wrap; }
+.desktop-diagram-list { display: flex; flex-direction: column; gap: 16px; }
+.desktop-diagram { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.desktop-diagram-canvas { width: 100%; height: auto; max-height: 72vh; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
 /* Theme all shared components, including formerly dark-only surfaces. */
 .desktop-app ::selection { background: var(--selected); }
 .desktop-app .composer, .desktop-app .toast-item { border-color: var(--line); }

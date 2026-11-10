@@ -3,6 +3,9 @@ const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { TextDecoder } = require("node:util");
+const { openZip } = require("./zip.cjs");
+const { readPptx } = require("./office.cjs");
+const { readDrawio, readDrawioPng } = require("./drawio.cjs");
 
 // The editor holds the whole file in the renderer, so it stays bounded — but
 // at 4 MB, past the lockfiles, logs and bundles people actually click in the
@@ -14,7 +17,7 @@ const MAX_COMMAND_BYTES = 1024 * 1024;
 // A terminal streams far more than a one-shot command; cap it so a runaway
 // `yes` cannot fill the renderer.
 const MAX_TERMINAL_BYTES = 32 * 1024 * 1024;
-const tooLarge = () => new Error(`File exceeds ${MAX_FILE_MB} MB limit`);
+const tooLarge = (limit = MAX_FILE_MB) => new Error(`File exceeds ${limit} MB limit`);
 // Extensions the desktop preview can stream to <video>, <audio> and <img>.
 const MEDIA_TYPES = new Map([
   [".mp4", "video/mp4"], [".m4v", "video/mp4"], [".webm", "video/webm"], [".ogv", "video/ogg"],
@@ -23,7 +26,18 @@ const MEDIA_TYPES = new Map([
   [".flac", "audio/flac"], [".ogg", "audio/ogg"], [".oga", "audio/ogg"], [".opus", "audio/opus"],
   [".png", "image/png"], [".jpg", "image/jpeg"], [".jpeg", "image/jpeg"], [".gif", "image/gif"],
   [".webp", "image/webp"], [".avif", "image/avif"], [".bmp", "image/bmp"], [".ico", "image/x-icon"],
+  [".pdf", "application/pdf"],
 ]);
+// Images a slide deck embeds; the preview streams them straight out of the zip.
+const ARCHIVE_TYPES = new Map([
+  [".png", "image/png"], [".jpg", "image/jpeg"], [".jpeg", "image/jpeg"], [".gif", "image/gif"],
+  [".svg", "image/svg+xml"], [".webp", "image/webp"], [".bmp", "image/bmp"],
+]);
+// Office and diagram previews are parsed in the main process, so they keep a
+// larger budget than text while still bounded.
+const MAX_PREVIEW_BYTES = 96 * 1024 * 1024;
+const MAX_PREVIEW_MB = MAX_PREVIEW_BYTES / (1024 * 1024);
+const MAX_ARCHIVE_ENTRY_BYTES = 32 * 1024 * 1024;
 const EXCLUDED = new Set([".git", "node_modules", "dist"]);
 const revision = content => createHash("sha256").update(content).digest("hex");
 
@@ -139,6 +153,49 @@ function createWorkspace(root, emit = () => {}, options = {}) {
     const type = MEDIA_TYPES.get(path.extname(value).toLowerCase());
     if (!type) throw new Error("Not a media file");
     return { path: value, file: target, size: stat.size, type };
+  }
+  /** Which parsed preview a path needs: slide decks and draw.io diagrams are
+   *  binary or XML, so the text editor cannot show them. */
+  function previewKind(value) {
+    const lower = String(value).toLowerCase();
+    if (lower.endsWith(".drawio.png")) return "diagram-png";
+    if (lower.endsWith(".drawio.svg") || lower.endsWith(".drawio.xml")) return "diagram";
+    const extension = path.extname(lower);
+    if (extension === ".drawio" || extension === ".dio") return "diagram";
+    if (extension === ".pptx" || extension === ".pptm" || extension === ".ppsx") return "slides";
+    return undefined;
+  }
+  function readPreview(value) {
+    const kind = previewKind(value);
+    if (!kind) throw new Error("这个文件没有预览");
+    const target = checkedPath(value);
+    const stat = fs.statSync(target);
+    if (!stat.isFile()) throw new Error("Not a file");
+    if (stat.size > MAX_PREVIEW_BYTES) throw new Error(`File exceeds ${MAX_PREVIEW_MB} MB preview limit`);
+    const buffer = fs.readFileSync(target);
+    if (kind === "slides") return { ...readPptx(buffer), path: value };
+    if (kind === "diagram-png") return { ...readDrawioPng(buffer), path: value };
+    return { ...readDrawio(buffer.toString("utf8")), path: value };
+  }
+  /** One image entry inside a workspace archive (a pptx), streamed to the
+   *  preview without unpacking anything onto disk. */
+  function archiveEntry(value, entryName) {
+    if (typeof entryName !== "string" || !entryName || entryName.length > 512 || entryName.includes("\0")) throw new Error("Invalid archive entry");
+    const type = ARCHIVE_TYPES.get(path.extname(entryName).toLowerCase());
+    if (!type) throw new Error("Not an image entry");
+    const target = checkedPath(value);
+    const stat = fs.statSync(target);
+    if (!stat.isFile()) throw new Error("Not a file");
+    if (stat.size > MAX_PREVIEW_BYTES) throw tooLarge(MAX_PREVIEW_MB);
+    const bytes = openZip(fs.readFileSync(target)).read(entryName);
+    if (!bytes) throw new Error("Archive entry not found");
+    if (bytes.length > MAX_ARCHIVE_ENTRY_BYTES) throw tooLarge(MAX_ARCHIVE_ENTRY_BYTES / (1024 * 1024));
+    return { path: `${value}!${entryName}`, bytes, size: bytes.length, type };
+  }
+  /** Resolve a workspace path for the OS opener, keeping the same containment
+   *  checks as the editor. */
+  function absolutePath(value) {
+    return checkedPath(value);
   }
   function kill(child, signal) {
     if (!child.pid) return;
@@ -331,7 +388,7 @@ finally:
     disposed = true;
   }
   return {
-    readFile, saveFile, mediaFile, listFiles, runCommand, stopCommand,
+    readFile, saveFile, mediaFile, listFiles, readPreview, archiveEntry, absolutePath, runCommand, stopCommand,
     startTerminal, writeTerminal, stopTerminal, dispose,
   };
 }

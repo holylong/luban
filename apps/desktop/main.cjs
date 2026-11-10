@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, Menu, nativeImage, ipcMain, protocol, screen, Tray } = require("electron");
+const { app, BrowserWindow, dialog, Menu, nativeImage, ipcMain, protocol, screen, shell, Tray } = require("electron");
 const { preparePetTask } = require("./pet-task.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
@@ -156,12 +156,20 @@ function emitCommand(event) {
     if (new URL(window.webContents.getURL()).origin === trustedOrigin) window.webContents.send("luban:commandEvent", event);
   } catch { /* No document during navigation. */ }
 }
-for (const method of ["readFile", "saveFile", "listFiles", "runCommand", "stopCommand", "startTerminal", "writeTerminal", "stopTerminal"]) {
+for (const method of ["readFile", "saveFile", "listFiles", "readPreview", "runCommand", "stopCommand", "startTerminal", "writeTerminal", "stopTerminal"]) {
   ipcMain.handle(`luban:${method}`, (event, input) => {
     if (!trustedSender(event) || !workspaceService || opening) throw new Error("Untrusted or inactive workspace");
     return workspaceService[method](input);
   });
 }
+// Formats the preview cannot paint (a PDF the user wants to annotate, a deck to
+// edit) still open in the application the OS associates with them.
+ipcMain.handle("luban:openPath", async (event, value) => {
+  if (!trustedSender(event) || !workspaceService || opening) throw new Error("Untrusted or inactive workspace");
+  const error = await shell.openPath(workspaceService.absolutePath(value));
+  if (error) throw new Error(error);
+  return { ok: true };
+});
 ipcMain.on("luban:setDirty", (event, value) => {
   const allowed = trustedSender(event) && typeof value === "boolean";
   if (allowed) dirty = value;
@@ -334,7 +342,9 @@ async function openWorkspace(workspace) {
         width: 1500, height: 950, minWidth: 920, minHeight: 620,
         show: false, backgroundColor: "#050607",
         icon: join(dirname(cli), "web-ui", process.platform === "win32" ? "icon.ico" : "icon-512.png"),
-        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, preload: join(__dirname, "preload.cjs") },
+        // plugins:true is what enables Chromium's bundled PDF viewer for the
+        // luban-media:// embed, so a PDF preview needs no external application.
+        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, plugins: true, preload: join(__dirname, "preload.cjs") },
       });
       installWindowGuards();
     }

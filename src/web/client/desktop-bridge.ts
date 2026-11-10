@@ -1,3 +1,5 @@
+import type { DocumentPreview } from "./desktop-preview";
+
 export interface DesktopFile { path: string; content: string; revision: string }
 export interface CommandEvent { id: string; kind: "output" | "exit"; text: string }
 export interface TerminalStart { id: string; pty: boolean; cols: number; rows: number; shell: string }
@@ -6,6 +8,10 @@ export interface DesktopBridge {
   readFile(path: string): Promise<DesktopFile>;
   saveFile(input: DesktopFile): Promise<DesktopFile>;
   listFiles(): Promise<string[]>;
+  /** Parsed slide deck or draw.io diagram; absent on bridges from older builds. */
+  readPreview?(path: string): Promise<DocumentPreview>;
+  /** Open a preview the workbench cannot paint in the OS application. */
+  openPath?(path: string): Promise<{ ok: boolean }>;
   /** Desktop mode only: pick a new project folder and restart the local backend there. */
   openWorkspace?(): Promise<{ canceled?: boolean; path?: string }>;
   runCommand(command: string): Promise<{ id: string }>;
