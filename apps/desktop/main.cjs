@@ -349,7 +349,10 @@ function startBackend(session, workspace) {
     // configured in ~/.luban/config.json so the phone's device list can see it;
     // one device can only hold one relay slot, so extra windows stay local.
     const remote = ![...sessions.values()].some(other => other !== session && other.backendAccess);
-    const args = [cli, "web", workspace, "--host", "127.0.0.1", "--port", "0", "--no-mesh"];
+    // --parent-pid: this backend dies with the app. Orphaned backends keep
+    // polling the relay, and the phone then lists one ghost device per run.
+    const args = [cli, "web", workspace, "--host", "127.0.0.1", "--port", "0", "--no-mesh",
+      "--parent-pid", String(process.pid)];
     if (remote) args.push("--remote");
     const child = spawn(node, args, {
       env: { ...process.env, LUBAN_WEB_TOKEN: token }, stdio: ["ignore", "pipe", "pipe"],

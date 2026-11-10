@@ -35,6 +35,7 @@ import { generateToken } from "./web/auth.js";
 import { defaultAccountsPath } from "./web/accounts.js";
 import { instanceDeviceId } from "./web/device-id.js";
 import { readDeviceStatus } from "./web/device-status.js";
+import { watchParent } from "./web/parent-watch.js";
 import { loginRelayAccount, saveRelayDeviceToken } from "./web/relay-login.js";
 import { readEnvFileValue, relayLaunchSettings } from "./web/relay-launch.js";
 import { installProcessGuard } from "./core/process-guard.js";
@@ -75,6 +76,7 @@ interface DaemonOptions {
   relayCa?: string;
   relayDeviceToken?: string;
   remote?: boolean;
+  parentPid?: number;
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -217,6 +219,7 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     .option("--relay-device-token <token>", "account device-enrollment token (or LUBAN_RELAY_DEVICE_TOKEN)")
     .option("--relay-ca <path>", "PEM CA to trust when the relay URL is https with a self-signed certificate")
     .option("--remote", "use the remote relay settings from ~/.luban/config.json")
+    .option("--parent-pid <pid>", "exit when this parent process goes away (headless backend under the desktop app)", (value) => Number(value))
     .showHelpAfterError();
   program.parse(argv, { from: "user" });
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -226,6 +229,9 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     return 2;
   }
   process.stderr.write(`luban v${VERSION}\n`);
+  // A backend started by the desktop app is useless once that app exits; without
+  // this it outlives its window and the phone lists one ghost device per run.
+  if (options.parentPid !== undefined) watchParent(options.parentPid);
   const config = daemonConfig(workspace, options);
   const mesh = new MeshRuntime(config);
   // One broker serves both callers: the HTTP layer answers prompts for

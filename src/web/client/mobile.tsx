@@ -512,6 +512,21 @@ export function MobileApp(): React.ReactElement {
     }
   }, []);
 
+  /** Drop a device that is gone: an abandoned backend would otherwise stay in the list forever. */
+  const removeDevice = useCallback(async (id: string) => {
+    try {
+      const response = await fetch(`/api/account/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error || `移除失败 (${response.status})`);
+      }
+      notify("已移除该设备");
+      await refreshRelayNodes();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), true);
+    }
+  }, [refreshRelayNodes, notify]);
+
   const refreshApprovals = useCallback(async () => {
     try {
       const [pendingApprovals, pendingQuestions] = await Promise.all([api.approvals(), api.questions()]);
@@ -1007,6 +1022,7 @@ export function MobileApp(): React.ReactElement {
                     <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
                       <button className="m-btn primary" disabled={!device.online} onClick={() => openDevice(device.id)}>打开并派活</button>
                       <button className="m-btn" onClick={() => { chooseNode(device.id); setTab("jobs"); }}>查看任务</button>
+                      {!device.online && <button className="m-btn" onClick={() => void removeDevice(device.id)}>移除</button>}
                     </div>
                   </div>
                 );

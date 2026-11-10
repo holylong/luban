@@ -97,5 +97,9 @@ describe("relay launch settings", () => {
 
 it("starts the desktop backend with remote relay settings", () => {
   const desktop = readFileSync(new URL("../../apps/desktop/main.cjs", import.meta.url), "utf8");
-  expect(desktop).toContain('"--no-mesh", "--remote"');
+  expect(desktop).toContain('"--no-mesh"');
+  expect(desktop).toContain('args.push("--remote")');
+  // The backend must die with the app, or the relay keeps listing the machine
+  // once per abandoned window.
+  expect(desktop).toContain('"--parent-pid", String(process.pid)');
 });

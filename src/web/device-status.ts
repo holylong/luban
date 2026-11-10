@@ -48,7 +48,14 @@ export function summarizeJob(job: MeshJob): RelayJobSummary {
 
 export async function readDeviceStatus(config: LubanConfig, mesh?: MeshRuntime): Promise<RelayDeviceStatus> {
   if (!mesh) return { updated_at: Date.now() / 1000, model: config.model.model, jobs: [] };
-  const jobs = await mesh.jobs(MAX_JOBS);
+  // Instances share one job directory, so an unfiltered list shows every card on
+  // the phone the same recent task: ten devices then look like ten copies of one
+  // instruction. A device reports the work addressed to it (or claimed by it).
+  const node = mesh.config.mesh.nodeName;
+  const instance = mesh.instance;
+  const jobs = (await mesh.jobs(MAX_JOBS * 8))
+    .filter(job => job.target === node || job.instance_id === instance)
+    .slice(0, MAX_JOBS);
   return {
     updated_at: Date.now() / 1000,
     model: config.model.model,

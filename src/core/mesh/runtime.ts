@@ -206,6 +206,9 @@ export class MeshRuntime {
   /** Idle ceiling for inbound sockets. Overridable in tests so the timeout path stays fast. */
   socketIdleTimeoutMs: number = SOCKET_IDLE_TIMEOUT_MS;
 
+  /** Worker identity stamped on the jobs this process claims. */
+  get instance(): string { return this.instanceId; }
+
   constructor(readonly config: LubanConfig) {
     this.store = new MeshJobStore(config.mesh.jobsDir);
     for (const contact of config.mesh.contacts) this.setContact(contact);
