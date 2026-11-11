@@ -1,3 +1,17 @@
+## 2.3.11 — 2026-11-11
+
+- 修「刚跑完就退出，统计就少一截」：所有退出路径（TUI 退出、一次性 `--prompt` 跑完、`luban web`/`luban serve` 停机、desktop 关窗口时 `--parent-pid` 后端退出、`luban bot run` 停止）现在都会在给退出码之前强制补发一次待上报增量（新增 `flushUsageStatsOnExit`，`force` + 最长等 2 秒，超时的守卫定时器 `unref` 掉，不会拖着终端不关）。
+- 顺手修掉一个会算错的并发缺口：`usage-stats.json.lock` 独占账本，同一时刻只有一个进程上报（抢不到就跳过，锁文件超 30 秒视为崩溃残留自动接管）；成功回执改成「按已发送的量从 pending 里**减**」而不是「写回发送前读到的快照」，所以上传途中结束的另一次运行不会被覆盖掉。
+- 实测（本地起 127.0.0.1:18999 收包）：`LUBAN_HOME=<tmp> node dist/cli.js stats` 结束前发出 `{"input":77,"output":9,"runs":2}`，账本 pending 归零、reported 15/3/2，整条命令 0.97s；把地址指向没人监听的 19999 端口时同样 0.97s 退出、pending 原样保留、failures=1。
+- 验证：`src/core/usage-stats.test.ts` 新增「退出时无视间隔仍上报且第二次不发请求」「并发三个 flush 只发一次」「上传途中记录的新运行不丢」「锁被别人持有则跳过 / 锁文件过期可接管」（15 passed），`npx tsc -p tsconfig.json --noEmit`、`npm run build` 通过。
+
+## 2.3.10 — 2026-11-11
+
+- 修「token 统计不及时、看板刷不出来」：根因是客户端默认 `interval_hours: 6`，而且 `usage_stats.interval_hours` 走的是 `integer()`（`0.25` 被截断成 `0` 再被 `Math.max(1, …)` 抬回 1 小时），所以想调快也调不动。现在默认改成 **15 分钟**（`0.25`），`config.ts` 换成保留小数的 `flexible()`，下限 1 分钟、上限 168 小时；`usage-stats.ts` 同步去掉「最小 1 小时」的夹取。
+- 新增 `luban stats` 命令：打印本地账本的待上报/已上报 token 与运行次数、上次尝试与上次成功时间、当前上报地址与间隔；`--push` 忽略间隔立刻补发一次，失败时打印真实原因（新增 `flushUsageStats({ onError })` 钩子，`force` 跳过节流），`--json` 便于脚本排查。
+- 实测：`luban stats` 显示 pending 5,242,786 input / 20,430 output · 5 runs；`luban stats --push` 之后服务端 `/api/stats` 立刻从 80,778,883/482,918/38 变成 86,021,669/503,348/43，与本地账本逐字节对齐。
+- 验证：`src/core/usage-stats.test.ts` 新增「0.25 小时间隔下 14 分钟跳过、15 分钟放行」「`force` 立即发送 + `onError` 拿到 ECONNREFUSED」；`src/core/config.test.ts` 新增「默认 0.25、小数被保留、<1 分钟被夹到 1 分钟、LUBAN_USAGE_STATS=off 生效」（55 passed）。
+
 ## 2.3.9 — 2026-11-11
 
 - 统计服务整体搬出本仓库，独立成 https://github.com/holylong/luban-server （零依赖 ESM、自带 dashboard、`node --test`）：删掉 `src/stats/`、`deploy/luban-stats.service`、`scripts/deploy-stats.sh` 和 `stats:serve` 脚本；客户端协议（`POST /api/report`、`GET /api/stats`、`/health`）与 `usage_stats.url` 不变，线上 18080 继续收数。

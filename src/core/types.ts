@@ -165,7 +165,11 @@ export interface UsageStatsSettings {
   enabled: boolean;
   /** Collection endpoint; empty falls back to the built-in default. */
   url: string;
-  /** Minimum delay between two upload attempts. */
+  /**
+   * Minimum delay between two upload attempts, in hours; fractions are allowed
+   * (0.25 = 15 minutes). Empty deltas are skipped, so a short interval costs
+   * nothing while idle.
+   */
   intervalHours: number;
 }
 

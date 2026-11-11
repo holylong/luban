@@ -76,6 +76,11 @@ function integer(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
 }
 
+function flexible(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function stringList(value: unknown, fallback: string[] = []): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [...fallback];
 }
@@ -814,7 +819,9 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
       enabled: !/^(0|off|false|no)$/i.test(String(process.env.LUBAN_USAGE_STATS ?? ""))
         && usageStatsRaw.enabled !== false && usageStatsRaw.enabled !== "false" && usageStatsRaw.enabled !== 0,
       url: text(usageStatsRaw.url, process.env.LUBAN_USAGE_STATS_URL, ""),
-      intervalHours: Math.max(1, Math.min(24 * 7, integer(usageStatsRaw.interval_hours ?? usageStatsRaw.intervalHours, 6))),
+      // Fractions are the point: 0.25 keeps the dashboard within 15 minutes of
+      // reality, and an idle install uploads nothing at all.
+      intervalHours: Math.max(1 / 60, Math.min(24 * 7, flexible(usageStatsRaw.interval_hours ?? usageStatsRaw.intervalHours, 0.25))),
     },
     mesh: {
       enabled: options.mesh ?? true,

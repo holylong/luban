@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { AgentRunner, initialMessages } from "./agent.js";
 import { BotQueue, type BotExecute } from "./bot.js";
 import { loadConfig } from "./config.js";
+import { flushUsageStatsOnExit } from "./usage-stats.js";
 import { SessionStore } from "./session-store.js";
 import { BotPermissions } from "./bot-permissions.js";
 import { readdir } from "node:fs/promises";
@@ -151,6 +152,11 @@ export async function runBot(argv: string[]): Promise<number> {
     } finally {
       process.removeListener("SIGINT", shutdown); process.removeListener("SIGTERM", shutdown);
       stopHeartbeat?.();
+      // A long-lived worker stops with runs still inside the interval; the last
+      // delta goes out here so a restart does not silently swallow it.
+      try {
+        await flushUsageStatsOnExit({ home, settings: loadConfig({ workspace: process.cwd() }).usageStats });
+      } catch { /* statistics must never fail a shutdown */ }
       await rm(join(home, "bot", "status.json"), { force: true });
       await rm(lock, { recursive: true });
     }

@@ -15,9 +15,10 @@ import { codexInvocation } from "./core/codex-command.js";
 import { announceHost, directedBroadcasts, MeshRuntime } from "./core/mesh/runtime.js";
 import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
-import { scheduleUsageFlush } from "./core/usage-stats.js";
+import { flushUsageStatsOnExit, scheduleUsageFlush } from "./core/usage-stats.js";
 import { sharedHistory } from "./core/session-history.js";
 import { runHistory } from "./core/history-command.js";
+import { runStats } from "./core/stats-command.js";
 import { runMcp } from "./core/mcp-command.js";
 import { runBot } from "./core/bot-command.js";
 import { runReport } from "./core/report-command.js";
@@ -232,7 +233,17 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
   process.stderr.write(`luban v${VERSION}\n`);
   // A backend started by the desktop app is useless once that app exits; without
   // this it outlives its window and the phone lists one ghost device per run.
-  if (options.parentPid !== undefined) watchParent(options.parentPid);
+  if (options.parentPid !== undefined) {
+    // The window that owned this backend is gone: upload the last numbers
+    // before the process disappears, or the phone's dashboard quietly loses a run.
+    watchParent(options.parentPid, {
+      exit: (code) => {
+        void flushUsageStatsOnExit({ home: config.home, settings: config.usageStats })
+          .catch(() => "failed")
+          .finally(() => process.exit(code));
+      },
+    });
+  }
   const config = daemonConfig(workspace, options);
   const mesh = new MeshRuntime(config);
   // One broker serves both callers: the HTTP layer answers prompts for
@@ -1034,6 +1045,8 @@ const entry = command === "login" && process.argv[3] === "codex"
         ? runMeshCheck(process.argv.slice(3))
         : command === "history"
           ? runHistory(process.argv.slice(3))
+          : command === "stats"
+            ? runStats(process.argv.slice(3))
           : command === "relay"
             ? runRelay(process.argv.slice(3))
             : command === "mcp"
@@ -1042,7 +1055,27 @@ const entry = command === "login" && process.argv[3] === "codex"
               ? runToken(process.argv.slice(3))
               : main();
 
-entry.then((code) => { process.exitCode = code; }).catch((error) => {
+/**
+ * Upload whatever is still pending once the command is over.
+ *
+ * The interval exists to keep a *running* process quiet, not to strand the last
+ * run's tokens: a TUI quit, a one-shot run or a daemon stop must leave the
+ * ledger empty so the numbers on the dashboard match what actually happened.
+ * Never throws, and bounded by `flushUsageStatsOnExit`, so it cannot delay exit.
+ */
+async function settleUsageOnExit(): Promise<void> {
+  try {
+    const config = loadConfig({ workspace: process.cwd() });
+    await flushUsageStatsOnExit({ home: config.home, settings: config.usageStats });
+  } catch {
+    // Statistics are accounting, not functionality: an exit must not fail here.
+  }
+}
+
+entry.then(async (code) => {
+  await settleUsageOnExit();
+  process.exitCode = code;
+}).catch((error) => {
   process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`);
   process.exitCode = 1;
 });

@@ -801,3 +801,36 @@ describe("config", () => {
     expect(loadConfig({ workspace }).kev.mode).toBe("model");
   });
 });
+
+describe("usage statistics settings", () => {
+  it("accepts a fractional interval and defaults to 15 minutes", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-usage-config-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    expect(loadConfig({ workspace }).usageStats.intervalHours).toBe(0.25);
+
+    await writeFile(join(home, "config.json"), JSON.stringify({ usage_stats: { interval_hours: 0.5, url: "http://example.test/api/report" } }));
+    const configured = loadConfig({ workspace }).usageStats;
+    expect(configured.intervalHours).toBe(0.5);
+    expect(configured.url).toBe("http://example.test/api/report");
+
+    // Anything below a minute would just be a request storm.
+    await writeFile(join(home, "config.json"), JSON.stringify({ usage_stats: { interval_hours: 0.0001 } }));
+    expect(loadConfig({ workspace }).usageStats.intervalHours).toBeCloseTo(1 / 60, 6);
+  });
+
+  it("can be switched off from the environment", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-usage-off-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    process.env.LUBAN_USAGE_STATS = "off";
+    try {
+      expect(loadConfig({ workspace }).usageStats.enabled).toBe(false);
+    } finally {
+      delete process.env.LUBAN_USAGE_STATS;
+    }
+    expect(loadConfig({ workspace }).usageStats.enabled).toBe(true);
+  });
+});

@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { flushUsageStats, readUsageLedger, recordRunUsage, runUsage } from "./usage-stats.js";
+import { flushUsageStats, flushUsageStatsOnExit, readUsageLedger, recordRunUsage, runUsage, usageLedgerPath } from "./usage-stats.js";
 
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
@@ -148,4 +148,108 @@ it("gives up on a hung stats server instead of stalling the run", async () => {
   expect(ledger.pending).toEqual({ input: 10, output: 2, runs: 1 });
   expect(ledger.reported).toEqual({ input: 0, output: 0, runs: 0 });
   expect(ledger.failures).toBe(1);
+});
+
+it("honours a sub-hour interval so the dashboard stays fresh", async () => {
+  const home = makeHome();
+  const { bodies, fetchImpl } = recorder();
+  const quick = { ...settings, intervalHours: 0.25 };
+  let clock = HOUR;
+  recordRunUsage(home, { input: 10, output: 1, runs: 1 }, clock);
+  expect(await flushUsageStats({ home, settings: quick, fetchImpl, now: () => clock })).toBe("sent");
+  recordRunUsage(home, { input: 20, output: 2, runs: 1 }, clock + 60_000);
+  clock += 14 * 60_000;
+  expect(await flushUsageStats({ home, settings: quick, fetchImpl, now: () => clock })).toBe("skipped");
+  clock += 60_000;
+  expect(await flushUsageStats({ home, settings: quick, fetchImpl, now: () => clock })).toBe("sent");
+  expect(bodies.at(-1)).toMatchObject({ input: 20, output: 2 });
+});
+
+it("force uploads immediately and explains a failure", async () => {
+  const home = makeHome();
+  const { bodies, fetchImpl } = recorder();
+  recordRunUsage(home, { input: 5, output: 1, runs: 1 }, HOUR);
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR })).toBe("sent");
+  recordRunUsage(home, { input: 7, output: 2, runs: 1 }, HOUR + 1000);
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR + 1000 })).toBe("skipped");
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR + 1000, force: true })).toBe("sent");
+  expect(bodies.at(-1)).toMatchObject({ input: 7, output: 2 });
+
+  let reason = "";
+  recordRunUsage(home, { input: 1, output: 1, runs: 1 }, HOUR + 2000);
+  const broken = (async () => { throw new Error("connect ECONNREFUSED"); }) as unknown as typeof fetch;
+  expect(await flushUsageStats({
+    home, settings, fetchImpl: broken, now: () => HOUR + 2000, force: true,
+    onError: (error) => { reason = error instanceof Error ? error.message : String(error); },
+  })).toBe("failed");
+  expect(reason).toMatch(/ECONNREFUSED/);
+});
+
+it("uploads on exit even when the interval has not elapsed", async () => {
+  const home = makeHome();
+  const { bodies, fetchImpl } = recorder();
+  recordRunUsage(home, { input: 10, output: 2, runs: 1 }, HOUR);
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR })).toBe("sent");
+  // A run that ends seconds before the terminal closes is still inside the
+  // 6 hour interval; the exit path must not drop it.
+  recordRunUsage(home, { input: 40, output: 5, runs: 1 }, HOUR + 5_000);
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR + 5_000 })).toBe("skipped");
+  expect(await flushUsageStatsOnExit({ home, settings, guardTests: false, fetchImpl, now: () => HOUR + 5_000 })).toBe("sent");
+  expect(bodies.at(-1)).toMatchObject({ input: 40, output: 5, runs: 1 });
+  const ledger = readUsageLedger(home);
+  expect(ledger.pending).toEqual({ input: 0, output: 0, runs: 0 });
+  expect(ledger.reported).toEqual({ input: 50, output: 7, runs: 2 });
+  // Nothing left to send: a second exit costs no request at all.
+  expect(await flushUsageStatsOnExit({ home, settings, guardTests: false, fetchImpl, now: () => HOUR + 6_000 })).toBe("skipped");
+});
+
+it("never uploads the same bucket twice, even with concurrent callers", async () => {
+  const home = makeHome();
+  const { bodies, fetchImpl } = recorder();
+  recordRunUsage(home, { input: 1, output: 1, runs: 1 }, HOUR);
+  await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR });
+  recordRunUsage(home, { input: 900, output: 90, runs: 3 }, HOUR + 1000);
+  const before = bodies.length;
+  const results = await Promise.all([
+    flushUsageStats({ home, settings, fetchImpl, now: () => HOUR + 1000, force: true }),
+    flushUsageStats({ home, settings, fetchImpl, now: () => HOUR + 1000, force: true }),
+    flushUsageStatsOnExit({ home, settings, guardTests: false, fetchImpl, now: () => HOUR + 1000 }),
+  ]);
+  expect(results[0]).toBe("sent");
+  expect(bodies.length - before).toBe(1);
+  expect(readUsageLedger(home).pending).toEqual({ input: 0, output: 0, runs: 0 });
+});
+
+it("keeps a run recorded while the upload is in flight", async () => {
+  const home = makeHome();
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    // A second run ends while the request is on the wire.
+    recordRunUsage(home, { input: 7, output: 1, runs: 1 }, HOUR + 1500);
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  recordRunUsage(home, { input: 100, output: 10, runs: 1 }, HOUR);
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR })).toBe("sent");
+  const ledger = readUsageLedger(home);
+  expect(ledger.reported).toEqual({ input: 100, output: 10, runs: 1 });
+  expect(ledger.pending).toEqual({ input: 7, output: 1, runs: 1 });
+  expect(calls).toBe(1);
+});
+
+it("skips while another process holds the ledger lock, and recovers a stale one", async () => {
+  const home = makeHome();
+  const { bodies, fetchImpl } = recorder();
+  const lock = `${usageLedgerPath(home)}.lock`;
+  recordRunUsage(home, { input: 12, output: 3, runs: 1 }, HOUR);
+  // A live uploader elsewhere: skip rather than double-count on the server.
+  writeFileSync(lock, "999999");
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR, force: true })).toBe("skipped");
+  expect(bodies).toHaveLength(0);
+  expect(readUsageLedger(home).pending).toEqual({ input: 12, output: 3, runs: 1 });
+  // A crashed uploader leaves the file behind; its age is the only signal.
+  utimesSync(lock, new Date(HOUR - 120_000), new Date(HOUR - 120_000));
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR, force: true })).toBe("sent");
+  expect(bodies.at(-1)).toMatchObject({ input: 12, output: 3 });
+  expect(readUsageLedger(home).pending).toEqual({ input: 0, output: 0, runs: 0 });
 });
