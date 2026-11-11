@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PNG } from "pngjs";
+import { detectTerminalCapabilities } from "./terminal-capabilities.js";
 import stringWidth from "string-width";
 import { resourceRoot } from "../runtime-env.js";
 import { activeThemeId, theme } from "./theme.js";
@@ -123,8 +124,11 @@ export function createMascotFrameWriter(image: MascotImage, trueColor = true) {
 /** A stream proxy keeps Ink's resize events, callbacks and terminal row-diff
  * adapter intact. Headless runs never pass through this wrapper. */
 export function mascotOutput(stdout: NodeJS.WriteStream, env = process.env): NodeJS.WriteStream {
+  // One source of truth for color support: over ssh this decides that the
+  // artwork is drawn in 256 colors instead of vanishing or turning to mush.
+  const capabilities = detectTerminalCapabilities(env, { isTTY: Boolean(stdout.isTTY) });
   if (!stdout.isTTY || env.LUBAN_MASCOT === "0" || env.INK_SCREEN_READER === "true"
-    || env.NO_COLOR !== undefined || env.FORCE_COLOR === "0" || env.TERM === "dumb") return stdout;
+    || capabilities.colorLevel === 0) return stdout;
   let image: PNG;
   try {
     // A SEA executable ships its artwork beside the binary; the dist and source
@@ -138,9 +142,7 @@ export function mascotOutput(stdout: NodeJS.WriteStream, env = process.env): Nod
     const file = candidates.find(candidate => candidate && existsSync(candidate)) ?? candidates[2]!;
     image = PNG.sync.read(readFileSync(file));
   } catch { return stdout; }
-  const trueColor = /^(truecolor|24bit)$/i.test(env.COLORTERM ?? "") || env.FORCE_COLOR === "3"
-    || Boolean(env.WT_SESSION) || /kitty|direct/i.test(env.TERM ?? "");
-  const transform = createMascotFrameWriter(image, trueColor);
+  const transform = createMascotFrameWriter(image, capabilities.trueColor);
   const write: NodeJS.WriteStream["write"] = (chunk: string | Uint8Array, ...args: unknown[]) => {
     const output = typeof chunk === "string" && activeThemeId() !== "contrast"
       ? transform(chunk, stdout.columns, stdout.rows) : chunk;

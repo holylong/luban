@@ -679,6 +679,14 @@ luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或在 OpenCode �
 
 Ollobot 复用 lasini 的透明四帧跳跃素材，在本地或 Mesh 任务执行时于进度文字上方播放。终端使用 4 列 × 2 行的细点阵轮廓绘制，避免半格色块并减少占用；这是字符画，无法还原原图五官细节。保留阶段、耗时和停滞提示；窗口小于 80 列或 28 行时只显示原有进度文字。设置 `LUBAN_ANIMATION=0` 可显示静态宠物，屏幕阅读器模式只显示名称。此功能目前用于终端工作台。
 
+### 远程终端（ssh）里的配色与刷新
+
+`ssh` 默认只转发 `TERM`，不转发 `COLORTERM`/`TERM_PROGRAM`。终端库因此常把远端会话判成 16 色甚至无色，于是本机看着有皮肤的工作台，`ssh ubuntu` 之后变成一片素色。luban 现在按自己的规则判定：`NO_COLOR`、`FORCE_COLOR`、`TERM=dumb` 仍然优先，命中 `truecolor`/`24bit` 用 24 位色，`*256color` 用 256 色，其余远端 TTY 一律按 256 色绘制（2020 年之后的虚拟终端都支持），本机终端保持保守推断。
+
+配色按色号而非 `FORCE_COLOR` 设置：给 `FORCE_COLOR` 传值时 color 库会直接跳到 24 位色，而只支持 256 色的终端会把 `38;2;r;g;b` 当成无色——正是「样式没传过来」的样子。排查时运行 `LUBAN_TERM_INFO=1 luban`，会先打印一行 `terminal: TERM=… COLORTERM=… ssh=… color=…`，说明当前判断依据。仍想强制：`FORCE_COLOR=3`（终端真支持 24 位色时）或 `NO_COLOR=1` 关闭颜色，`LUBAN_MASCOT=0` 单独关掉背景图。
+
+控制台闪烁来自每帧重画整个视口：一次按键原本要把 20 多行（每行含皮肤底色）重新写一遍，走 ssh 时肉眼可见。现在只重画内容真正变化的行，并每 120 帧自动全量重画一次兜底（窗口尺寸变化、外部日志写入会立即触发全量重画）。实测 41 行界面按一个键的输出从约 3.9 KB 降到 23 字节。
+
 ## 工作日报、周报、月报与年报
 
 在 TUI 输入 `/report daily`、`/report weekly`、`/report monthly` 或 `/report yearly`。可指定日期和输出文件，例如 `/report weekly 2026-10-20 reports/week.md`。默认汇总本机所有项目的 luban、Codex、Claude Code、OpenCode 会话，不限当前 session。

@@ -62,6 +62,34 @@ it("repairs stale composer rows even after cursor drift and shrinking a pasted d
   expect(update).not.toContain("\n"); // cannot scroll at the terminal's bottom
 });
 
+it("repaints only the rows that changed, so an ssh link is not repainting the screen", () => {
+  const write = createTerminalFrameWriter(() => ({ rows: 6, columns: 80 }));
+  const first = write("header\nbody\nfooter\nold input\nnotice\n");
+  // The first frame has nothing to compare against: every row is painted,
+  // plus the trailing status row.
+  expect([...first.matchAll(/\u001b\[\d+;1H/g)]).toHaveLength(6);
+  const second = write(erase(6) + "header\nbody\nfooter\nnew input\nnotice\n");
+  expect([...second.matchAll(/\u001b\[\d+;1H/g)].map(match => match[0])).toEqual(["\u001b[4;1H", "\u001b[6;1H"]);
+  expect(second).toContain("new input");
+  expect(second).not.toContain("header");
+  // An identical frame paints nothing but the trailing status row.
+  const third = write(erase(6) + "header\nbody\nfooter\nnew input\nnotice\n");
+  expect([...third.matchAll(/\u001b\[\d+;1H/g)].map(match => match[0])).toEqual(["\u001b[6;1H"]);
+});
+
+it("repaints the whole viewport after a resize", () => {
+  let rows = 6;
+  const write = createTerminalFrameWriter(() => ({ rows, columns: 80 }));
+  write("a\nb\nc\nd\ne\n");
+  rows = 4;
+  const resized = write(erase(4) + "a\nb\nc\n");
+  expect([...resized.matchAll(/\u001b\[\d+;1H/g)]).toHaveLength(4);
+  expect(resized.endsWith("\u001b[4;1H\u001b[K")).toBe(true);
+  // Ink 6 already wraps frames in DECSET 2026; tallied here so a change in that
+  // behaviour shows up as a test failure instead of silent tearing.
+  expect(resized).not.toContain("2026");
+});
+
 it("wraps TTY output on every platform and leaves redirected output untouched", () => {
   const stream = Object.assign(new PassThrough(), { isTTY: true }) as unknown as NodeJS.WriteStream;
   expect(terminalOutput(stream)).not.toBe(stream);
@@ -154,6 +182,14 @@ it("keeps the composer in place without frame erases while typing and after resi
     stdin.write("g");
     await expect.poll(() => raw.slice(afterResize)).toContain("abcdefg");
     expect(raw.slice(afterResize)).not.toContain("\u001b[2K");
+    // A keystroke repaints the rows it changed, not the whole viewport: that
+    // full-screen repaint per key is what flickers over ssh.
+    const beforeEdit = raw.length;
+    stdin.write("z");
+    await expect.poll(() => stripVTControlCharacters(raw.slice(beforeEdit))).toContain("abcdefgz");
+    const oneEdit = raw.slice(beforeEdit);
+    expect((oneEdit.match(/\u001b\[\d+;1H/g) ?? []).length).toBeLessThan(6);
+    expect(oneEdit.length).toBeLessThan(400);
   } finally {
     app.unmount();
     app.cleanup();

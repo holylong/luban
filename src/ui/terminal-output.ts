@@ -2,8 +2,13 @@
 // without DECSET 2026 show that empty frame, especially during reasoning streams.
 // Full workbench frames use absolute rows, repairing stale cells independently
 // of cursor drift. Smaller outputs retain Ink's standard trailing cursor model.
+/** Unchanged rows are still repainted this often, to heal anything that wrote over them. */
+const FULL_REPAINT_EVERY = 120;
+
 export function createTerminalFrameWriter(size?: () => { rows: number; columns: number }): (chunk: string) => string {
   let previous: string[] | undefined;
+  let paintedRows = -1;
+  let frames = 0;
   const erasePrefix = /^(?:\u001b\[2K\u001b\[1A)*\u001b\[2K\u001b\[G/;
   return (chunk) => {
     const prefix = erasePrefix.exec(chunk)?.[0] ?? "";
@@ -24,12 +29,22 @@ export function createTerminalFrameWriter(size?: () => { rows: number; columns: 
       // The workbench owns the viewport. Never trust a relative cursor origin:
       // autowrap, bottom scrolling and resize can leave it a row away from Ink's
       // model. Absolute row addresses also repair remnants of earlier frames.
-      // Paint every row, including blanks; a cached "unchanged" row may be stale
-      // on the terminal even when React's strings are identical.
+      //
+      // Only rows whose text changed are repainted. A keystroke that redraws one
+      // row used to cost a full-screen repaint; over ssh that is what makes the
+      // console flicker. Anything that can leave a row stale (external writes,
+      // binary output, a resize) clears `previous` or changes the frame height,
+      // and an unchanged frame is still fully repainted every FULL_REPAINT_EVERY
+      // frames as a safety net.
+      frames += 1;
+      const repaintAll = !old || old.length !== lines.length || lines.length !== paintedRows
+        || frames % FULL_REPAINT_EVERY === 0;
       let output = "";
       for (let row = 0; row < lines.length; row++) {
+        if (!repaintAll && old[row] === lines[row]) continue;
         output += `\u001b[${row + 1};1H${lines[row]}\u001b[K`;
       }
+      paintedRows = lines.length;
       return `${output}\u001b[${dimensions.rows};1H\u001b[K`;
     }
     const erasedRows = prefix.match(/\u001b\[2K/g)?.length ?? 0;

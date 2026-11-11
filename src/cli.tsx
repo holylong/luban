@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Must stay first: it fixes the color level before Ink (and chalk) load.
+import "./ui/terminal-boot.js";
 import "./runtime-env.js";
 import React from "react";
 import { spawn } from "node:child_process";

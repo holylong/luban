@@ -1,3 +1,10 @@
+## 2.3.12 — 2026-11-11
+
+- 修「ssh 到 Ubuntu 跑 luban，样式传不过去」：`ssh` 默认只转发 `TERM`，不转发 `COLORTERM`，颜色库据此把远端会话判成 16 色甚至无色。新增 `src/ui/terminal-capabilities.ts` 统一判定（`NO_COLOR`/`FORCE_COLOR`/`TERM=dumb` 优先，`truecolor`/`24bit` → 24 位色，`*256color` → 256 色，其余远端 TTY → 256 色，本机保持保守推断），并由 `src/ui/terminal-boot.ts` 在 Ink 加载前把色号直接设到 chalk：不能用 `FORCE_COLOR`，color 库对它的任何值都跳到 24 位色，只支持 256 色的终端会把 `38;2;r;g;b` 显示成无色。实测同一条 `<Text color="#7aa2f7">` 在 `TERM=xterm` 的远端会话下从无 SGR 变成 `38;5;111`。
+- 修「控制台闪烁」：整屏重画。`terminal-output.ts` 原来每帧把每一行（皮肤底色整行）重写一遍，一次按键约 3.9 KB；现在只重画内容变化的行，窗口尺寸变化/外部日志/二进制写入立即全量重画，另外每 120 帧全量重画兜底。实测 41 行界面按一个键从 ~3880 B 降到 23 B（2 行）。Ink 6 自己已经用 DECSET 2026 包帧，所以没有重复添加同步序列。
+- 新增 `LUBAN_TERM_INFO=1` 打印一行判定依据（`TERM`/`COLORTERM`/是否 ssh/最终色号），`LUBAN_MASCOT=0` 仍可单独关闭背景图；`chalk` 提升为显式依赖（5.6.2）。
+- 验证：`src/ui/terminal-capabilities.test.ts`（色号判定矩阵、远端兜底、`NO_COLOR=0` 例外）、`src/ui/terminal-output.test.tsx`（只重画变化行、尺寸变化全量重画、真实 TUI 一次按键 <6 行且 <400 B）；把 `repaintAll` 强制为 `true` 时这两条新断言会红，恢复后 8 passed。`npx tsc -p tsconfig.json --noEmit`、`tsc -p tsconfig.client.json --noEmit`、`npm run build` 通过。
+
 ## 2.3.11 — 2026-11-11
 
 - 修「刚跑完就退出，统计就少一截」：所有退出路径（TUI 退出、一次性 `--prompt` 跑完、`luban web`/`luban serve` 停机、desktop 关窗口时 `--parent-pid` 后端退出、`luban bot run` 停止）现在都会在给退出码之前强制补发一次待上报增量（新增 `flushUsageStatsOnExit`，`force` + 最长等 2 秒，超时的守卫定时器 `unref` 掉，不会拖着终端不关）。
