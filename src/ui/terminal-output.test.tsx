@@ -1,7 +1,7 @@
 import React from "react";
 import { PassThrough } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { render } from "ink";
@@ -75,6 +75,41 @@ it("repaints only the rows that changed, so an ssh link is not repainting the sc
   // An identical frame paints nothing but the trailing status row.
   const third = write(erase(6) + "header\nbody\nfooter\nnew input\nnotice\n");
   expect([...third.matchAll(/\u001b\[\d+;1H/g)].map(match => match[0])).toEqual(["\u001b[6;1H"]);
+});
+
+it("uses absolute rows for any frame that fits, not only the rows - 1 layout", () => {
+  const write = createTerminalFrameWriter(() => ({ rows: 8, columns: 80 }));
+  // Dialogs and short screens are not screen-sized; falling back to Ink's
+  // erase-and-repaint path for them is what made those screens flicker.
+  const painted = write(erase(4) + "modal\nrow two\nrow three\n");
+  expect(painted).not.toContain("\u001b[2K");
+  expect(painted).toContain("\u001b[1;1Hmodal");
+  expect(painted.endsWith("\u001b[8;1H\u001b[K")).toBe(true);
+});
+
+it("traces every write when LUBAN_TUI_TRACE names a file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "luban-tui-trace-"));
+  const file = join(dir, "tui.log");
+  const old = process.env.LUBAN_TUI_TRACE;
+  process.env.LUBAN_TUI_TRACE = file;
+  try {
+    const write = createTerminalFrameWriter(() => ({ rows: 4, columns: 80 }));
+    write("a\nb\nc\n");
+    write(erase(4) + "a\nx\nc\n");
+    write("\u001b[?25l");
+    write("cursor moved\u001b[3;5H");
+    const log = await readFile(file, "utf8");
+    expect(log).toContain("absolute rows=3/4 painted=3");
+    expect(log).toContain("absolute rows=3/4 painted=1");
+    expect(log).toContain("ink bytes=6 rows=0 erase2k=0 control");
+    // Anything that moves the cursor is reported without the control marker, so
+    // the log shows exactly which writes forced a full repaint.
+    expect(log).toMatch(/ink bytes=18 rows=0 erase2k=0$/m);
+  } finally {
+    if (old === undefined) delete process.env.LUBAN_TUI_TRACE;
+    else process.env.LUBAN_TUI_TRACE = old;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 it("repaints the whole viewport after a resize", () => {

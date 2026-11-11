@@ -62,9 +62,9 @@ it.each([60, 100, 160])("does not erase the frame while streaming reasoning at %
     expect(updates).not.toContain("\u001b[2K");
     expect(updates).not.toContain("\u001b[2J");
     expect(updates).not.toContain("Message luban");
-    // Absolute repaint resends unchanged transcript rows to repair stale cells.
-    // It must not scroll or clear the screen while doing so.
-    expect(updates).toContain("\u001b[1;1H");
+    // Streaming repaints the rows whose text changed, addressed absolutely, so
+    // a slow ssh link never sees an erased frame. Nothing may scroll.
+    expect(updates).toMatch(/\u001b\[\d+;1H/);
     expect(updates).not.toContain("\n");
   } finally {
     try {

@@ -1,3 +1,9 @@
+## 2.3.13 — 2026-11-11
+
+- 修「ssh 打开还是闪烁」里的可修部分：绝对行重画原先只在「帧高 = 终端行数 - 1」时启用，对话框、短画面等其它高度会退回 Ink 的「擦除整帧再重画」，正是闪的来源。现在只要帧放得下终端（`1 ≤ 帧高 ≤ 行数`）都按绝对行重画，并只重画内容变化的行。
+- 新增 `LUBAN_TUI_TRACE=/tmp/tui.log`：每次写入记一行，`absolute rows=3/24 painted=1 bytes=…` 表示按行重画 1 行，`ink bytes=… rows=… erase2k=…` 表示这次落入 Ink 原始路径，`erase2k>0` 或 `control` 标记能直接看出是哪类写入触发整屏擦除。上限 4000 行，写文件失败不影响界面。
+- 验证：`terminal-output.test.tsx` 新增「非 rows-1 高度也按绝对行重画（不含 `2K`）」与「trace 文件记录两类写入」两条；`npx tsc -p tsconfig.json --noEmit`、`npm run build`、`vitest src/ui/*` 全绿。
+
 ## 2.3.12 — 2026-11-11
 
 - 修「ssh 到 Ubuntu 跑 luban，样式传不过去」：`ssh` 默认只转发 `TERM`，不转发 `COLORTERM`，颜色库据此把远端会话判成 16 色甚至无色。新增 `src/ui/terminal-capabilities.ts` 统一判定（`NO_COLOR`/`FORCE_COLOR`/`TERM=dumb` 优先，`truecolor`/`24bit` → 24 位色，`*256color` → 256 色，其余远端 TTY → 256 色，本机保持保守推断），并由 `src/ui/terminal-boot.ts` 在 Ink 加载前把色号直接设到 chalk：不能用 `FORCE_COLOR`，color 库对它的任何值都跳到 24 位色，只支持 256 色的终端会把 `38;2;r;g;b` 显示成无色。实测同一条 `<Text color="#7aa2f7">` 在 `TERM=xterm` 的远端会话下从无 SGR 变成 `38;5;111`。
