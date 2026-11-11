@@ -729,7 +729,19 @@ export class MeshRuntime {
     this.activeJobs.set(id, controller);
     const working = await this.store.update(id, { status: "working" });
     if (working) this.emit({ type: "job", job: working });
-    const timeout = setTimeout(() => controller.abort(new Error(`TIMEOUT after ${this.config.mesh.jobTimeoutSeconds}s`)), this.config.mesh.jobTimeoutSeconds * 1000);
+    // The job timeout is a deadline signal, not a verdict. Aborting here used to
+    // end a healthy run with "TIMEOUT after Ns" and hand the phone a failure even
+    // though the turn was still producing work and would have reached its own
+    // result moments later. The deadline now only says so; the run keeps going
+    // and the job's status is whatever the runner finally reports. Cancellation
+    // still has real teeth through the two paths that mean it: a submitter asking
+    // for a cancel, and this node's worker lease expiring.
+    const timeoutSeconds = this.config.mesh.jobTimeoutSeconds;
+    const timeout = setTimeout(() => {
+      const message = `still running after ${timeoutSeconds}s (job_timeout_seconds); waiting for the final result instead of failing the job`;
+      void this.store.log(id, "warning", message).catch(() => undefined);
+      this.emit({ type: "job-log", id, level: "warning", message });
+    }, timeoutSeconds * 1000);
     let logWrites = Promise.resolve();
     try {
       const result = await this.runner(job, controller.signal, (level, message) => {
@@ -981,8 +993,11 @@ export class MeshRuntime {
       status: "working",
     });
     this.emit({ type: "job", job: origin });
-    const deadline = Date.now() + Math.max(30, Math.min(3600, timeoutSeconds)) * 1000;
+    // Waits below the tool's own 30s floor are allowed so a caller (and the
+    // tests) can watch the deadline path without sleeping through a real job.
+    const deadline = Date.now() + Math.max(1, Math.min(3600, timeoutSeconds)) * 1000;
     let pollFailures = 0;
+    let leftRunning = false;
     try {
       await this.rpc(peer, "job_submit", {
         job_id: id,
@@ -991,11 +1006,11 @@ export class MeshRuntime {
         source: this.config.mesh.nodeName,
         lease_seconds: HANDOFF_LEASE_SECONDS,
       }, 15_000, signal);
-      while (Date.now() < deadline) {
+      for (;;) {
         await wait(750, signal);
-        let poll: JsonObject;
+        let poll: { status: string; result: string; logs: string[] };
         try {
-          poll = await this.rpc(peer, "job_poll", { job_id: id }, 15_000, signal);
+          poll = await this.pollRemoteJob(peer, id, signal);
           pollFailures = 0;
         } catch (error) {
           // A slow or momentary network hiccup must not cancel a healthy remote job.
@@ -1004,33 +1019,84 @@ export class MeshRuntime {
           if (pollFailures >= 3) throw error;
           continue;
         }
-        for (const raw of Array.isArray(poll.log_tail) ? poll.log_tail : []) {
-          const line = record(raw);
-          logs.push(`[${String(line.level || "info")}] ${String(line.msg || "")}`);
-        }
-        // Replay the peer's structured events into this node's own stream, so
-        // local interfaces render the remote run the way they render a local one.
-        for (const raw of Array.isArray(poll.events) ? poll.events : []) {
-          const mirrored = (record(raw).event ?? undefined) as JobStreamEvent | undefined;
-          if (mirrored) this.recordJobEvent(id, mirrored);
-        }
-        const status = String(poll.status || "working");
-        if (terminal(status)) {
+        logs.push(...poll.logs);
+        if (terminal(poll.status)) {
           completed = true;
-          const result = String(poll.result || poll.error || "").trim();
+          const { status, result } = poll;
           await this.finishMirroredJob(origin, status, status === "failed" ? "" : result, status === "failed" ? result : "");
           return [`remote job ${id} on ${peer}: ${status}`, "--- peer logs ---", ...logs.slice(-300), "--- remote result ---", result].join("\n");
         }
+        if (Date.now() >= deadline) {
+          // Running past the wait is not a failure: the peer owns the job and is
+          // still making progress. Report the live status and stop waiting instead
+          // of cancelling the run and calling it failed. This node keeps following
+          // it quietly, which also keeps the peer's lease warm, and writes the
+          // peer's real terminal status into its own record when it lands.
+          leftRunning = true;
+          const note = `stopped waiting after ${timeoutSeconds}s; ${peer} keeps running it. Read the final status with mesh_poll_job (job_id ${id}) or mesh_get_jobs; this record follows whatever status the run ends with.`;
+          await this.store.log(id, "warning", note).catch(() => undefined);
+          void this.followRemoteJob(peer, id, origin);
+          return [`remote job ${id} on ${peer}: ${poll.status}`, "--- peer logs ---", ...logs.slice(-300), "--- still running ---", note].join("\n");
+        }
       }
-      throw new Error(`remote job ${id} on ${peer} timed out after ${timeoutSeconds}s`);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await this.finishMirroredJob(origin, "failed", "", reason);
       throw error;
     } finally {
-      if (!completed) await this.rpc(peer, "job_cancel", { job_id: id }, 5_000).catch(() => undefined);
+      if (!completed && !leftRunning) await this.rpc(peer, "job_cancel", { job_id: id }, 5_000).catch(() => undefined);
     }
   }
+
+  /** One poll of a remote job, with its log tail and events mirrored locally. */
+  private async pollRemoteJob(peer: string, id: string, signal?: AbortSignal): Promise<{ status: string; result: string; logs: string[] }> {
+    const poll = await this.rpc(peer, "job_poll", { job_id: id }, 15_000, signal);
+    const logs: string[] = [];
+    for (const raw of Array.isArray(poll.log_tail) ? poll.log_tail : []) {
+      const line = record(raw);
+      logs.push(`[${String(line.level || "info")}] ${String(line.msg || "")}`);
+    }
+    // Replay the peer's structured events into this node's own stream, so local
+    // interfaces render the remote run the way they render a local one.
+    for (const raw of Array.isArray(poll.events) ? poll.events : []) {
+      const mirrored = (record(raw).event ?? undefined) as JobStreamEvent | undefined;
+      if (mirrored) this.recordJobEvent(id, mirrored);
+    }
+    return { status: String(poll.status || "working"), result: String(poll.result || poll.error || "").trim(), logs };
+  }
+
+  /**
+   * Keep an eye on a job we stopped waiting for.
+   *
+   * Abandoning it outright would expire the peer's lease and get the job
+   * cancelled, which is the opposite of letting the work finish. Polling keeps
+   * the lease warm and lets the local record end on the peer's real status
+   * instead of a timeout we invented.
+   */
+  private async followRemoteJob(peer: string, id: string, origin: MeshJob): Promise<void> {
+    let failures = 0;
+    while (!this.stopping) {
+      await wait(2_000).catch(() => undefined);
+      if (this.stopping) return;
+      let poll: { status: string; result: string; logs: string[] };
+      try {
+        poll = await this.pollRemoteJob(peer, id);
+        failures = 0;
+      } catch {
+        failures += 1;
+        if (failures >= 5) {
+          await this.store.log(id, "warning", `no reply from ${peer} while following the job; its final status stays on the peer`).catch(() => undefined);
+          return;
+        }
+        continue;
+      }
+      if (!terminal(poll.status)) continue;
+      const { status, result } = poll;
+      await this.finishMirroredJob(origin, status, status === "failed" ? "" : result, status === "failed" ? result : "");
+      return;
+    }
+  }
+
 
   /** Settle a local record for a job another node ran, unless it already ended. */
   private async finishMirroredJob(job: MeshJob, status: MeshJob["status"], result: string, error: string): Promise<void> {
@@ -1048,7 +1114,9 @@ export class MeshRuntime {
       try {
         const result = await this.handoff(peer, instruction, project, timeoutSeconds, signal);
         const final = result.split("--- remote result ---").at(-1)?.trim() || result;
-        const status = result.split("\n", 1)[0]?.match(/: (done|paused|failed|cancelled)$/u)?.[1] || "unknown";
+        // "working" is a peer that outlived our wait; its final status is still
+        // pending, so a broadcast says so instead of calling it failed.
+        const status = result.split("\n", 1)[0]?.match(/: (done|paused|failed|cancelled|working)$/u)?.[1] || "unknown";
         return `  [${status}] ${peer}: ${final}`;
       } catch (error) {
         return `  [failed] ${peer}: ${error instanceof Error ? error.message : String(error)}`;

@@ -1,3 +1,45 @@
+## 2.3.9 — 2026-11-11
+
+- 统计服务整体搬出本仓库，独立成 https://github.com/holylong/luban-server （零依赖 ESM、自带 dashboard、`node --test`）：删掉 `src/stats/`、`deploy/luban-stats.service`、`scripts/deploy-stats.sh` 和 `stats:serve` 脚本；客户端协议（`POST /api/report`、`GET /api/stats`、`/health`）与 `usage_stats.url` 不变，线上 18080 继续收数。
+- 新仓库的看板重做：7/30/90 天区间、按区间补齐空白日期的柱状图（输入/输出两段）、按天明细只列有上报的日期、版本与平台分布、60 秒自动刷新、390px 手机单页不横向溢出（用 CDP 量 `scrollWidth == clientWidth` 确认，表格各自横向滚动而不是撑破页面）。
+- 补齐「连不上统计服务 / relay 也不能影响本地」的回归测试：`usage-stats` 新增一条「服务端接了连接却不回包 → 40 ms 超时后返回 failed、增量原样留在账本、failures=1」；新增 `src/web/tunnel-offline.test.ts`，对端不监听时 `TunnelClient.start()` 仍立即返回（<500 ms）、状态落到 offline 并打 `relay unavailable`，`stop()` 干净退出。
+- 验证：`npx vitest run src/core/usage-stats.test.ts src/web/tunnel-offline.test.ts`（10 passed）、`npm run build`、`npx tsc -p tsconfig.json --noEmit`；`grep` 确认仓库里已无 `src/stats` / `luban-stats` / `stats:serve` 残留。
+
+## 2.3.8 — 2026-11-11
+
+- 修手机 WebView 版里「会话记录一长，发送按钮就没了」：`.m-compose` 是 `display: grid` 却没写 `grid-template-columns`，隐式 `auto` 轨道按最宽子元素的 max-content 定宽，而底部那行摘要正好印着会话标题、工作区路径和模式 —— 标题一长，整个输入区被撑到 410px（屏宽 390px），右边的 ↑ 按钮被 `.m-app { overflow: hidden }` 切掉。现在 `.m-compose` 用 `minmax(0, 1fr)` 固定成屏宽，`.m-compose-summary` 补 `width: 100%; min-width: 0; overflow: hidden`，`.m-compose-box` 补 `max-width: 100%`。
+- 同一个截图里还有第二处超宽：会话标题 `<h3>` 没有换行规则，标题里带一段长路径/哈希时 `.m-main` 会横向滚动（实测内容 614px / 屏宽 390px）。`.m-main-inner` 的 `h1/h2/h3` 加 `overflow-wrap: anywhere`，标题按屏宽换行。
+- 验证：用 Chrome 在 390×844 下量同一段标记（`iframe` 固定 390px 宽，部署版 `mobile.css`），修复前 `.m-compose` scrollWidth 410、`.m-send` 右边缘 403（屏宽 390），修复后 390 / 371，`.m-main` 的 scrollWidth 从 614 回到 390；`src/web/client/mobile-layout.test.ts` 新增两条断言（换回旧 CSS 会红，已确认），`npx vitest run`（mobile-layout / collapse / session / continue 共 21 passed）通过。
+
+## 2.3.7 — 2026-11-11
+
+- 203.0.113.7 上的使用统计服务其实从来没装起来：没有 `luban-stats.service`、没有 `/opt/luban-stats`、`ss` 里 18080 也没有监听，所以客户端一直在往一个没人接的端口上报。现在按 `deploy/luban-stats.service` 装好并 `enable --now`，`POST /api/report` → `/var/lib/luban-stats/reports.jsonl` → `GET /api/stats` 全链路打通，`GET /` 看板 200。
+- 部署脚本在 macOS 上会把 `._server.js` 这类 AppleDouble 文件一起打进包里、落到 `/opt/luban-stats`；现在打包用 `COPYFILE_DISABLE=1` 加 `--exclude '._*'`。
+- 单元里的 `ExecStart=/usr/bin/node` 是写死的，这台机器上根本没有 `/usr/bin/node`（node 在 `/usr/local/bin/node`，systemd 直接 `status` 就起不来）：`deploy/luban-stats.service` 改成 `/usr/bin/env node` 并显式声明 `PATH`，`scripts/deploy-stats.sh` 安装时再把 `ExecStart` 改写成远端 `command -v node` 找到的绝对路径。
+- `docs/usage-stats.md` 补上「只有 sudo 普通用户、没有 root 直连」时的等价部署步骤（`203.0.113.7` 的 `deploy` 就是这种情况）。
+- 验证：`npm run build:server` 通过；`npx vitest run src/stats src/core/usage-stats.test.ts`（14 passed）；本机另起一份 `dist/stats/server.js` 跑通 health/report/stats/看板；远端 `systemd-analyze verify` 0、`is-enabled=enabled`、`is-active=active`、`curl http://127.0.0.1:18080/health` 返回 `{"ok":true}`，从外网 `curl http://203.0.113.7:18080/health` 也是 200（ufw 未启用、iptables INPUT ACCEPT、安全组已放行），测试上报的数据已从 `reports.jsonl` 清掉并重启确认统计归零。
+
+## 2.3.6 — 2026-11-11
+
+- 新增独立使用统计服务 `src/stats/server.ts`，部署在 203.0.113.7:18080，零依赖、只用 Node 内置模块：`POST /api/report` 收客户端增量，`GET /api/stats` 出汇总 JSON，`GET /` 是中文看板（安装数、7/30 天活跃、总 token、输入/输出分开、最近 30 天按天、按版本、按平台），`GET /health` 供 systemd/监控探活。数据是一个追加写入的 `reports.jsonl`，内存汇总，重启重放日志恢复；按 IP 限流 120 次/分钟，请求体上限 16 KB，可选 `LUBAN_STATS_TOKEN` 给看板加 Bearer 鉴权。
+- 客户端新增 `src/core/usage-stats.ts`：`~/.luban/usage-stats.json` 保存随机安装 id、待上报增量、已确认总量；agent 每轮结束在 `finally` 里按 `RunMetrics.requests[].usage` 累加（每次模型调用算一次，含 compaction/handoff，中断的运行也算已产生的部分），默认 6 小时最多上传一次，约 200 字节，空闲且无待报数据时完全不发请求。
+- 失败不丢数据也不风暴：上传失败保留增量、间隔按 2 的幂翻倍（最多 16 倍），恢复后一次性补发；全新安装会发一条 0 token 心跳把「装了」和「跑了」区分开。开关：`usage_stats.enabled` / `LUBAN_USAGE_STATS=off`，地址可配 `usage_stats.url` / `LUBAN_USAGE_STATS_URL`。
+- 新增 `src/core/usage-stats.test.ts`（8 条：记账、安装 id 稳定、心跳、间隔节流、成功后清零、失败退避、关闭后静默、坏文件恢复）与 `src/stats/server.test.ts`（6 条：去重安装数、输入输出分列、重启重放、坏请求拒绝、活跃窗口、看板与鉴权）；`docs/usage-stats.md` 写明上报字段、配置、接口与部署；`scripts/deploy-stats.sh` + `deploy/luban-stats.service` 一键部署（编译、校验 sha256、装服务、健康检查）。
+
+## 2.3.5 — 2026-11-11
+
+- Mesh 超时不再判失败：`job_timeout_seconds` 到点以前直接 abort 运行、把任务记成 `TIMEOUT after Ns`，手机和 TUI 都弹「任务失败」，一个只是需要更久的正常任务被当成坏了。现在它只在本机任务日志里写一条 `still running after Ns (job_timeout_seconds)` 并推到执行时间线，运行继续跑到自己的结果，`done` / `paused` / `failed` 由真实结果决定。
+- 等待远程任务的一边同样按最后状态判断：`mesh_handoff` / `mesh_ask_all` 等不到结束不再发 `job_cancel`、不再把本地镜像记录写成 `failed`，而是返回 `remote job <id> on <peer>: working` 加日志末尾几行和 `stopped waiting after Ns` 说明；发起方随后在后台继续轮询（顺带续着对方租约），对方真正结束后把最终状态与结果写回本地记录，广播行显示 `[working]` 而不是 `[failed]`。
+- 排队超时（`queue_timeout_seconds`）仍然算失败：任务根本没开始跑，没有结果可等。真正的中止依旧走明确的两条路径——提交方主动取消、提交方心跳租约过期。
+- 新增 `src/core/mesh/runtime.test.ts` 两条用例：运行超过 `job_timeout_seconds` 仍以真实结果收尾；等待超时后既不取消也不判失败，本地记录跟到对方的最终状态。`npx vitest run src/core/mesh`（43 passed / 1 skipped）、`tsc -p tsconfig.json --noEmit` 与 `npm run build` 通过；`docs/reference.md` 补上「超时只报状态，不判失败」一节，`mesh_handoff` / `mesh_ask_all` 的工具说明同步更新。
+
+## 2.3.4 — 2026-11-11
+
+- 修好手机「接续会话」只接一轮就断：打开一条历史会话，第一条指令正常追加，第二条却新建了一个 session，会话列表里凭空多出一条。原因是手机发完一轮为了看实时进度清掉了会话指针，而任务自己记录的 session id 从来没被读回来。现在「下一条指令写进哪个会话」由屏幕上的会话（或当前任务所属的会话）决定，连续派活都落在同一个会话里。
+- 会话还在执行时不再被并发派活：以前第二条指令会另起一个任务，同一个工作区被两轮同时改，还落在新会话里；现在直接提示「本轮还在执行，等它结束后再发下一条」，指令留在输入框，不会被吃掉。
+- 任务视图顶部补上「接续 · 会话名」，右侧「＋ 新会话」可以明确另起一个会话；输入框下方摘要也跟着显示真正的接续对象，而不是一律写「新会话」。
+- 新增 `src/web/client/mobile-continue.ts` 与五条单测（打开会话、任务所属会话、无会话时新建、会话标题回退到任务标题、接续沿用任务的项目），`tsc -p tsconfig.client.json` 与构建通过。
+
 ## 2.3.3 — 2026-11-10
 
 - 手机上选一台电脑后直接打开它最新的会话：以前不管那台电脑刚干了什么，进来都是一片空白的「让电脑帮你做什么？」，前一天的工作藏在 设置 → 会话 里。现在设备列表点进去、或在 设置里切换电脑，都会自动接上最新那条会话（按更新时间排第一），输入框变成「继续当前会话…」。

@@ -728,6 +728,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const mcpRaw = record(raw.mcp);
   const kevRaw = record(raw.kev);
   const historyRaw = record(raw.history);
+  const usageStatsRaw = record(raw.usage_stats ?? raw.usageStats);
   const codeIntelRaw = record(raw.code_intelligence ?? raw.codeIntel);
   const remoteRaw = record(raw.remote);
   return {
@@ -808,6 +809,12 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
       enabled: historyRaw.enabled === true || historyRaw.enabled === "true" || process.env.LUBAN_HISTORY === "1",
       directory: text(historyRaw.directory, ""),
       maxMessagesPerSession: Math.max(0, integer(historyRaw.max_messages_per_session ?? historyRaw.maxMessagesPerSession, 0)),
+    },
+    usageStats: {
+      enabled: !/^(0|off|false|no)$/i.test(String(process.env.LUBAN_USAGE_STATS ?? ""))
+        && usageStatsRaw.enabled !== false && usageStatsRaw.enabled !== "false" && usageStatsRaw.enabled !== 0,
+      url: text(usageStatsRaw.url, process.env.LUBAN_USAGE_STATS_URL, ""),
+      intervalHours: Math.max(1, Math.min(24 * 7, integer(usageStatsRaw.interval_hours ?? usageStatsRaw.intervalHours, 6))),
     },
     mesh: {
       enabled: options.mesh ?? true,

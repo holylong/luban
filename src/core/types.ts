@@ -152,6 +152,21 @@ export interface LubanConfig {
   mcpLazy: boolean;
   /** Queryable SQLite mirror of session messages; see `session-history.ts`. */
   history: HistorySettings;
+  /** Anonymous install/token statistics; see `core/usage-stats.ts`. */
+  usageStats: UsageStatsSettings;
+}
+
+/**
+ * `usage_stats` block of config.json. Reporting is on by default because these
+ * numbers are how the project measures its own adoption, but it is a single
+ * switch to turn off and it never sends prompts, paths or model output.
+ */
+export interface UsageStatsSettings {
+  enabled: boolean;
+  /** Collection endpoint; empty falls back to the built-in default. */
+  url: string;
+  /** Minimum delay between two upload attempts. */
+  intervalHours: number;
 }
 
 /**

@@ -836,7 +836,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       },
       {
         name: "mesh_handoff",
-        description: "Delegate a coding task to one peer and wait for its durable remote job result. Sync the project first when the peer lacks context.",
+        description: "Delegate a coding task to one peer and wait for its durable remote job result. Sync the project first when the peer lacks context. Running past timeout leaves the job running on the peer; report by its final status (mesh_poll_job) instead of calling it failed.",
         risk: "network",
         parameters: schema({
           peer: { type: "string" },
@@ -856,7 +856,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       },
       {
         name: "mesh_ask_all",
-        description: "Broadcast one task to every known mesh peer and collect all results.",
+        description: "Broadcast one task to every known mesh peer and collect all results. A peer still working at timeout is reported as working, not failed.",
         risk: "network",
         parameters: schema({
           instruction: { type: "string" },

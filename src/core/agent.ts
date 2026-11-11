@@ -1,4 +1,5 @@
 import { AgentInbox } from "./inbox.js";
+import { recordRunUsage, runUsage, scheduleUsageFlush } from "./usage-stats.js";
 import { finishAgent, registerAgent, updateAgentUsage } from "./agent-registry.js";
 import { parseUserQuestion, type AskUser } from "./question.js";
 import { randomUUID } from "node:crypto";
@@ -504,13 +505,19 @@ export class AgentRunner {
     const abort = () => controller.abort(signal.reason ?? new Error("aborted"));
     if (signal.aborted) abort();
     else signal.addEventListener("abort", abort, { once: true });
+    const metrics: RunMetrics = { modelMs: 0, toolMs: 0, approvalMs: 0, compactions: 0, requests: [] };
     try {
       repairToolHistory(messages);
       await persist();
-      const metrics: RunMetrics = { modelMs: 0, toolMs: 0, approvalMs: 0, compactions: 0, requests: [] };
       const result = await this.runLoop(messages, mode, controller.signal, onEvent, approve, persist, metrics);
       return { ...result, metrics };
     } finally {
+      // Token accounting happens here rather than per round-trip so every
+      // provider, compaction and handoff call is counted exactly once, and so
+      // an aborted run still reports what it spent before the abort.
+      const usage = runUsage(metrics);
+      recordRunUsage(this.config.home, usage);
+      if (usage.input > 0 || usage.output > 0) scheduleUsageFlush(this.config.home, this.config.usageStats);
       try {
         await this.inbox?.close();
         repairToolHistory(messages);

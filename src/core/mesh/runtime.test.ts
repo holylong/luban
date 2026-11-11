@@ -134,6 +134,72 @@ describe("MeshRuntime", () => {
     }
   }, 10_000);
 
+  it("lets a run outlive job_timeout_seconds and judges it by its real final status", async () => {
+    // Regression: the deadline used to abort the runner, so a healthy turn that
+    // simply needed longer was recorded as "TIMEOUT after Ns" and reported to the
+    // phone as a failure even though it produced its result a moment later.
+    const alpha = new MeshRuntime(config(await temporary("soft-timeout-a"), "alpha"));
+    const beta = new MeshRuntime(config(await temporary("soft-timeout-b"), "beta"));
+    beta.config.mesh.jobTimeoutSeconds = 0.05;
+    beta.setJobRunner(async () => {
+      await new Promise((resolveSlow) => setTimeout(resolveSlow, 250));
+      return { ok: true, text: "late but finished" };
+    });
+    await mkdir(beta.config.workspace, { recursive: true });
+    await writeFile(join(beta.config.workspace, "input.txt"), "task context");
+    try {
+      await Promise.all([alpha.start(), beta.start()]);
+      await alpha.addContact({ name: "beta", host: "127.0.0.1", port: beta.config.mesh.port, udpPort: beta.config.mesh.udpPort, note: "" });
+      const result = await alpha.handoff("beta", "slow work", "shared-project", 30);
+      expect(result).toContain(": done");
+      expect(result).toContain("late but finished");
+      const job = (await beta.jobs())[0]!;
+      expect(job.status).toBe("done");
+      expect(job.error).toBe("");
+      expect(job.result).toBe("late but finished");
+      // The missed deadline is still visible, but only as a notice.
+      expect(job.logs.some((line) => line.msg.includes("still running after"))).toBe(true);
+    } finally {
+      await Promise.all([alpha.stop(), beta.stop()]);
+    }
+  }, 15_000);
+
+  it("stops waiting on a slow peer without cancelling it or calling it failed", async () => {
+    const alpha = new MeshRuntime(config(await temporary("slow-wait-a"), "alpha"));
+    const beta = new MeshRuntime(config(await temporary("slow-wait-b"), "beta"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+    beta.setJobRunner(async () => {
+      await gate;
+      return { ok: true, text: "finished after the wait ended" };
+    });
+    await mkdir(beta.config.workspace, { recursive: true });
+    await writeFile(join(beta.config.workspace, "input.txt"), "task context");
+    try {
+      await Promise.all([alpha.start(), beta.start()]);
+      await alpha.addContact({ name: "beta", host: "127.0.0.1", port: beta.config.mesh.port, udpPort: beta.config.mesh.udpPort, note: "" });
+      const result = await alpha.handoff("beta", "slow work", "shared-project", 1);
+      const id = /remote job (\S+) on beta/.exec(result)?.[1];
+      expect(id).toBeTruthy();
+      // The wait ended, the job did not: no failure, no cancel, status still live.
+      expect(result).toContain(": working");
+      expect(result).toContain("stopped waiting after 1s");
+      const peerJob = (await beta.jobs())[0]!;
+      expect(peerJob.status).toBe("working");
+      const mirrored = await alpha.store.get(id!);
+      expect(mirrored).toMatchObject({ status: "working", error: "", result: "" });
+      // The peer keeps working and lands on its own final status...
+      release();
+      await expect.poll(async () => (await beta.store.get(peerJob.id))?.status).toBe("done");
+      expect((await beta.store.get(peerJob.id))?.result).toBe("finished after the wait ended");
+      // ...and the local record follows it instead of staying failed or stuck.
+      await expect.poll(async () => (await alpha.store.get(id!))?.status, { timeout: 8_000 }).toBe("done");
+      expect(await alpha.store.get(id!)).toMatchObject({ result: "finished after the wait ended", error: "" });
+    } finally {
+      await Promise.all([alpha.stop(), beta.stop()]);
+    }
+  }, 15_000);
+
   it("mirrors an outbound job's structured stream and keeps a local record", async () => {
     const alpha = new MeshRuntime(config(await temporary("mirror-a"), "alpha"));
     const beta = new MeshRuntime(config(await temporary("mirror-b"), "beta"));

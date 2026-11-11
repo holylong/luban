@@ -15,6 +15,7 @@ import { codexInvocation } from "./core/codex-command.js";
 import { announceHost, directedBroadcasts, MeshRuntime } from "./core/mesh/runtime.js";
 import { configureRemoteJobs } from "./core/mesh/agent-runner.js";
 import { SessionStore } from "./core/session-store.js";
+import { scheduleUsageFlush } from "./core/usage-stats.js";
 import { sharedHistory } from "./core/session-history.js";
 import { runHistory } from "./core/history-command.js";
 import { runMcp } from "./core/mcp-command.js";
@@ -773,6 +774,10 @@ async function main(): Promise<number> {
     seedDefaults: true,
   });
   traceBoot("config");
+  // One tiny heartbeat at startup is what turns "luban was installed" into a
+  // countable installation even when no model call ever succeeds; it is
+  // throttled by the same interval as token reports.
+  scheduleUsageFlush(config.home, config.usageStats);
   // Painted before the first frame: the whole UI reads one mutable palette, so
   // setting it here means the TUI never flashes the default scheme.
   const appliedTheme = applyTheme(config.theme, config.themeColors);

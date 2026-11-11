@@ -66,6 +66,20 @@ describe("mobile layout", () => {
     expect(source).not.toContain("defaultOpen");
   });
 
+  it("keeps the composer at screen width even with a long session title", () => {
+    // The composer is a grid, and an implicit `auto` track is sized by its
+    // widest child's max-content: the summary line prints the session title,
+    // so one long title stretched the composer to 410px on a 390px phone and
+    // the send button slid off the right edge. Measured in Chrome at 390px.
+    expect(css).toMatch(/\.m-compose \{[^}]*grid-template-columns: minmax\(0, 1fr\);/);
+    expect(css).toMatch(/\.m-compose-box \{[^}]*max-width: 100%;/);
+    expect(css).toMatch(/\.m-compose-summary \{[^}]*min-width: 0;[^}]*overflow: hidden;/);
+  });
+
+  it("wraps long titles instead of scrolling the transcript sideways", () => {
+    expect(css).toMatch(/\.m-main-inner h1, \.m-main-inner h2, \.m-main-inner h3 \{[^}]*overflow-wrap: anywhere;/);
+  });
+
   it("prevents status badges and names from shrinking into vertical text", () => {
     expect(css).toMatch(/\.m-chip\s*\{[^}]*flex-shrink: 0;[^}]*white-space: nowrap;/);
     expect(css).toMatch(/\.m-brand\s*\{[^}]*flex: none;/);

@@ -1,6 +1,7 @@
 import type { RelayDeviceStatus } from "./mobile-device";
 import { MobileDeviceCard } from "./mobile-device-card";
 import { MobileCollapse } from "./mobile-collapse";
+import { continuationForPrompt, type Continuation } from "./mobile-continue";
 import { pickDefaultSession } from "./mobile-session-pick";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setNodeScope } from "./api";
@@ -287,6 +288,9 @@ export function MobileApp(): React.ReactElement {
   const [node, setNode] = useState<NodeInfo | undefined>();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [continueSession, setContinueSession] = useState<SessionSummary | undefined>();
+  // The conversation the job on screen belongs to, remembered from the send that
+  // created it: a job only reports its session id once the node has written it.
+  const [sentSession, setSentSession] = useState<(Continuation & { jobId: string }) | undefined>();
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | undefined>();
   const [sessionError, setSessionError] = useState<string | undefined>();
   const [sessionListError, setSessionListError] = useState<string | undefined>();
@@ -762,11 +766,24 @@ export function MobileApp(): React.ReactElement {
     setJob(undefined);
     setEvents([]);
     setContinueSession(undefined);
+    setSentSession(undefined);
     setSessionDetail(undefined);
     void loadJob(id).catch(error => notify(error instanceof Error ? error.message : String(error), true));
     setTab("live");
     pinToBottom();
   }, [loadJob, notify, pinToBottom]);
+
+  // A follow-up instruction belongs to the conversation the reader is looking
+  // at: the opened session, or the session of the job that carries the previous
+  // turn. Sending used to clear that pointer, so the second instruction started
+  // a new session instead of appending to the one on screen.
+  const continuation = useMemo<Continuation | undefined>(() => {
+    const onScreen = continuationForPrompt({ picked: continueSession, job, sessions });
+    if (onScreen) return onScreen;
+    // The job just sent may still be in flight (or the node is offline), so its
+    // session has to survive until the job detail can name it itself.
+    return sentSession && sentSession.jobId === selectedId ? sentSession : undefined;
+  }, [continueSession, job, sessions, sentSession, selectedId]);
 
   const submit = useCallback(async () => {
     if (submittingRef.current || localStorage.getItem(PENDING_KEY)) {
@@ -779,14 +796,20 @@ export function MobileApp(): React.ReactElement {
       notify("请等待会话同步和电脑当前执行结束后再接续", true);
       return;
     }
+    // Continuing a session that is still running would be refused by the node;
+    // say so here instead of leaving the reader with a failed job.
+    if (continuation && job && ACTIVE_STATUS.has(job.status)) {
+      notify("本轮还在执行，等它结束后再发下一条（指令已留在输入框）", true);
+      return;
+    }
     localStorage.setItem(PENDING_KEY, JSON.stringify({ instruction, node: scope, project }));
     submittingRef.current = true;
     setSubmissionPending(true);
     setBusy(true);
     try {
       const reply = await api.submit({
-        instruction, project_id: project, mode, interaction: "on",
-        ...(continueSession ? { session_id: continueSession.id } : {}),
+        instruction, project_id: continuation?.project || project, mode, interaction: "on",
+        ...(continuation ? { session_id: continuation.id } : {}),
       });
       localStorage.setItem(JOB_KEY, reply.job_id);
       localStorage.removeItem(PENDING_KEY);
@@ -796,11 +819,12 @@ export function MobileApp(): React.ReactElement {
       setContinueSession(undefined);
       await refresh();
       selectJob(reply.job_id);
+      setSentSession(continuation ? { ...continuation, jobId: reply.job_id } : undefined);
       if (!reply.interactive) notify("服务器未启用交互审批：本任务按自动放行执行");
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), true);
     } finally { submittingRef.current = false; setBusy(false); }
-  }, [draft, project, mode, scope, continueSession, sessionDetail, sessionError, refresh, selectJob, notify]);
+  }, [draft, project, mode, scope, continueSession, sessionDetail, sessionError, continuation, job, refresh, selectJob, notify]);
 
   const cancel = useCallback(async () => {
     if (!selectedId) return;
@@ -840,6 +864,7 @@ export function MobileApp(): React.ReactElement {
     setEvents([]);
     setSessions([]);
     setContinueSession(undefined);
+    setSentSession(undefined);
     sessionPinned.current = false;
     setProject("");
     void refresh();
@@ -895,6 +920,7 @@ export function MobileApp(): React.ReactElement {
     setEvents([]);
     setSelectedId(undefined);
     localStorage.removeItem(JOB_KEY);
+    setSentSession(undefined);
     setTab("live");
     if (next) setProject(next.project);
   };
@@ -972,6 +998,15 @@ export function MobileApp(): React.ReactElement {
               )}
               {job && (
                 <>
+                  {/* The live view is one turn of a saved conversation: say so,
+                      and give the reader the way out of it. */}
+                  {!continueSession && continuation && (
+                    <div className="m-banner m-session-bar">
+                      <span className="m-session-tag">接续</span>
+                      <span className="m-session-title" title={continuation.title}>{continuation.title || "本会话"}</span>
+                      <button className="m-session-new" onClick={() => chooseSession(undefined)}>＋ 新会话</button>
+                    </div>
+                  )}
                   <div className="m-row">
                     {ACTIVE_STATUS.has(job.status) && <button className="m-btn danger" onClick={() => void cancel()}>取消任务</button>}
                     {job.status === "paused" && <button className="m-btn primary" onClick={() => void resume()}>继续任务</button>}
@@ -1296,7 +1331,7 @@ export function MobileApp(): React.ReactElement {
             value={draft}
             rows={1}
             aria-label="任务指令"
-            placeholder={continueSession ? "继续当前会话…" : job && ACTIVE_STATUS.has(job.status) ? "补充指令…" : "让电脑帮你做什么？"}
+            placeholder={job && ACTIVE_STATUS.has(job.status) ? "本轮执行中，结束后再发…" : continuation ? "继续当前会话…" : "让电脑帮你做什么？"}
             onChange={event => setDraft(event.target.value)}
             onKeyDown={event => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
@@ -1307,7 +1342,7 @@ export function MobileApp(): React.ReactElement {
         {/* Everything that shapes a request lives in 设置; this line is the way there. */}
         <button type="button" className="m-compose-summary" onClick={() => setTab("settings")}>
           <span className="m-compose-summary-main">
-            {continueSession ? `接续 · ${continueSession.title}` : "新会话"}
+            {continuation ? `接续 · ${continuation.title || "当前会话"}` : "新会话"}
             {" · "}{project || "当前工作区"}{" · "}{MODE_LABELS[mode]}
           </span>
           <span className="m-compose-summary-link">派活设置 ›</span>

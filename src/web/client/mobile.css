@@ -194,6 +194,9 @@ html[data-shell="android"] .m-head-bar { padding-right: 46px; }
 /* Main ----------------------------------------------------------------- */
 .m-main { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 10px 12px 14px; }
 .m-main-inner { min-width: 0; }
+/* A session title is the user's own instruction: one long path, hash or
+   URL-like token and the transcript scrolls sideways instead of wrapping. */
+.m-main-inner h1, .m-main-inner h2, .m-main-inner h3 { min-width: 0; overflow-wrap: anywhere; }
 .m-empty { padding: 44px 18px; text-align: center; color: var(--muted); }
 .m-empty h2 { margin: 0 0 8px; color: var(--fg); font-size: 19px; }
 .m-empty p { margin: 0; font-size: 14px; }
@@ -465,6 +468,11 @@ html[data-shell="android"] .m-head-bar { padding-right: 46px; }
   border-top: 1px solid var(--line);
   background: var(--panel);
   display: grid;
+  /* An implicit `auto` track is sized by the widest child's max-content, and
+     the summary line prints the session title: a long title widened the whole
+     composer and pushed the send button past the right edge (410px on a 390px
+     phone, clipped by .m-app). minmax(0, 1fr) keeps the track at screen width. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 .m-compose-box {
@@ -472,6 +480,7 @@ html[data-shell="android"] .m-head-bar { padding-right: 46px; }
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 8px;
+  max-width: 100%;
   padding: 6px 6px 6px 13px;
   border: 1px solid var(--input-line);
   border-radius: 18px;
@@ -506,6 +515,10 @@ html[data-shell="android"] .m-head-bar { padding-right: 46px; }
   align-items: center;
   gap: 8px;
   min-height: 26px;
+  /* Never let the printed title decide the composer's width. */
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
   padding: 0 2px;
   border: 0;
   background: transparent;
