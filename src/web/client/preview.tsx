@@ -107,7 +107,7 @@ export function SessionView({ session, compactTools = false }: { session: Sessio
           {session.model} · {session.mode} · 更新于 {relativeTime(Date.parse(session.updatedAt) / 1000)} · {session.messages.length} 条消息 · 编辑记录 {edits.length}
         </div>
       </div>
-      <div style={{ padding: "0 12px 20px" }}>
+      <div className="session-body">
         {edits.length > 0 && (
           <div style={{ marginTop: 10 }}>
             <div className="section">编辑记录</div>

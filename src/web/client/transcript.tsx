@@ -22,25 +22,24 @@ const ItemView = React.memo(function ItemView({ item }: { item: TimelineItem }):
     case "user":
       return (
         <div className="msg">
-          <Avatar kind="user" />
-          <div>
-            <div className="head">
-              <span>你</span>
-              {item.mode && <span className="tag">{item.mode}</span>}
-              <span className="tag">{formatClock(item.at)}</span>
-            </div>
-            <div className="body"><Markdown text={item.text} /></div>
+          <div className="head">
+            <Avatar kind="user" />
+            <span>你</span>
+            {item.mode && <span className="tag">{item.mode}</span>}
+            <span className="tag">{formatClock(item.at)}</span>
           </div>
+          <div className="body"><Markdown text={item.text} /></div>
         </div>
       );
     case "assistant":
       return (
         <div className="msg">
-          <Avatar kind="agent" />
-          <div>
-            <div className="head"><span>luban</span><span className="tag">{formatClock(item.at)}</span></div>
-            <div className="body"><Markdown text={item.text} /></div>
+          <div className="head">
+            <Avatar kind="agent" />
+            <span>luban</span>
+            <span className="tag">{formatClock(item.at)}</span>
           </div>
+          <div className="body"><Markdown text={item.text} /></div>
         </div>
       );
     case "thinking":

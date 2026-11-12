@@ -1,3 +1,11 @@
+## 2.3.17 — 2026-11-12
+
+- 桌面右侧 Agent 栏重排，解决「内容显示不全 + 头像在最左边留一条空边」：头像从独立左列挪进名字行（`<div class="head"><div class="avatar">Y</div>你…`），`.msg` 不再是 `26px 1fr` 网格，`.note`/`.thinking-block`/工具卡/结果卡/运行条都不再各自缩进，整个栏只有一个左边缘（实测正文 x=27→13，行宽 501→529）。
+- 历史会话的 `session-body` 之前在桌面栏里又补了 15px 内边距，和实时消息差 12px，形成两条左基线；现在统一为 `.desktop-agent .session-body { padding: 0 0 16px }`，banner 也回到同一条线。
+- Markdown 表格：外层 `.md-table` 横向滚动，单元格 `min-width: 96px`。之前父级 `overflow-wrap: anywhere` 让表的最大内容宽度塌缩，5 列表格被压到 39px/列、字挤成竖排；现在 5 列各 96–99px，8 列时容器 529px、内容 769px 可左右滚动，不再被右侧裁掉。
+- 新增 `src/web/client/desktop-agent-layout.test.tsx`：用 `renderToStaticMarkup` 断言头像在名字行内、`.msg` 没有头像网格列、`session-body` 单左边缘、表格最小列宽与可滚动。
+- 验证：`npx tsc -p tsconfig.client.json --noEmit`、`npm run build`、`npx vitest run src/web/client`（34 文件 / 218 用例通过）；CDP 探针在 554px 栏宽下复测左偏移、行宽、表格 5 列/8 列滚动，并确认会话区与输入框无重叠、页面无横向溢出。
+
 ## 2.3.16 — 2026-11-12
 
 - 修 `npm run release` 的 Electron 环节卡死：本机缓存里已有校验通过的 `electron-v44.4.5-darwin-x64.zip`（GitHub 地址的缓存目录），而脚本强制用 npmmirror 镜像，URL 不同→缓存键不同→又去重新下 134MB，180 秒超时后整条 release 失败。现在 `ensureElectron` 依次尝试：配置的镜像 → 直接从任意缓存目录里找校验通过的归档并解包（`seedElectronDist`，与 `electron/install.js` 写入 `dist/version`、`path.txt` 的方式一致）→ 官方地址。三者都不可用才报错，报错里带上缓存路径与实际缺的文件。

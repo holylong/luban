@@ -112,7 +112,14 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-agent .top { min-height: 54px; }
 .desktop-agent .top .pills { display: none; }
 .desktop-agent .thread { min-height: 0; flex: 1; }
-.desktop-agent .thread-inner { padding: 14px; }
+.desktop-agent .thread-inner { padding: 12px; }
+/* One left edge for the whole column: the banner, the saved transcript and the
+   live messages all start where the panel starts. */
+.desktop-agent .session-body { padding: 0 0 16px; }
+.desktop-agent .banner { padding: 8px 0; }
+.desktop-agent .msg { margin-bottom: 13px; }
+.desktop-agent .result { padding: 10px 12px; }
+.desktop-agent .md-table { margin: 6px 0; }
 .desktop-agent .composer-wrap { flex: none; padding: 8px; }
 .desktop-agent .composer-row .hint { display: none; }
 .desktop-agent .composer select { max-width: 45%; }

@@ -181,11 +181,15 @@ export const Markdown = React.memo(function Markdown({ text }: { text: string })
         rows.push(lines[index]!.trim().replace(/^\||\|$/gu, "").split("|").map(cell => cell.trim()));
         index += 1;
       }
+      // A table keeps its own readable width and scrolls sideways; squeezing it
+      // into a narrow panel left three characters per cell.
       blocks.push(
-        <table key={`b${key++}`}>
-          <thead><tr>{header.map((cell, i) => <th key={i}>{inline(cell, `th${i}`)}</th>)}</tr></thead>
-          <tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, i) => <td key={i}>{inline(cell, `td${rowIndex}-${i}`)}</td>)}</tr>)}</tbody>
-        </table>,
+        <div className="md-table" key={`b${key++}`}>
+          <table>
+            <thead><tr>{header.map((cell, i) => <th key={i}>{inline(cell, `th${i}`)}</th>)}</tr></thead>
+            <tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, i) => <td key={i}>{inline(cell, `td${rowIndex}-${i}`)}</td>)}</tr>)}</tbody>
+          </table>
+        </div>,
       );
       continue;
     }
