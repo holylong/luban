@@ -10,7 +10,7 @@ export interface Continuation {
 
 export interface ContinuationInput {
   /** The session the reader opened; it owns the transcript on screen. */
-  picked?: Pick<SessionSummary, "id" | "title">;
+  picked?: Pick<SessionSummary, "id" | "title" | "project">;
   /** The job in the live view; its session is the conversation it belongs to. */
   job?: Pick<MeshJob, "session_id" | "title" | "project_id">;
   /** Newest first, as `/api/sessions` returns them; may not know the job's session yet. */
@@ -27,7 +27,12 @@ export interface ContinuationInput {
  * that job is on screen has to stay in it.
  */
 export function continuationForPrompt({ picked, job, sessions }: ContinuationInput): Continuation | undefined {
-  if (picked) return { id: picked.id, title: picked.title };
+  // The session names its own project: the phone's current workspace can be
+  // another one, and a continuation that inherits it would run in the wrong
+  // directory while appending to this conversation.
+  if (picked) {
+    return { id: picked.id, title: picked.title, ...(picked.project ? { project: picked.project } : {}) };
+  }
   if (!job?.session_id) return undefined;
   const known = sessions.find(item => item.id === job.session_id);
   return {

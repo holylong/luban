@@ -35,6 +35,14 @@ describe("continuationForPrompt", () => {
   it("carries the job's project so the node can find the saved conversation", () => {
     expect(continuationForPrompt({ job: job({ session_id: "s1", project_id: "other" }), sessions: [] }))
       .toMatchObject({ id: "s1", project: "other" });
+  });
+
+  // The phone can be pointed at another workspace than the session it opened.
+  // Inheriting the phone's project ran the follow-up in the wrong directory
+  // while appending it to the conversation on screen.
+  it("carries the opened session's own project, not the phone's workspace", () => {
+    expect(continuationForPrompt({ picked: session("s1", "别的项目"), sessions: [] }))
+      .toMatchObject({ id: "s1", project: "luban" });
     expect(continuationForPrompt({ picked: { id: "s1", title: "t" }, sessions: [] })).not.toHaveProperty("project");
   });
 });

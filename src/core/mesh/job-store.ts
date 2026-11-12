@@ -92,7 +92,15 @@ export class MeshJobStore {
     }
   }
 
-  async list(limit = 50): Promise<MeshJob[]> {
+  /**
+   * Newest jobs first, optionally narrowed to one project.
+   *
+   * The job directory is per machine, not per workspace: a relay node serving
+   * one project used to list the sessions of every other project on this
+   * computer, which is how a phone ended up reading another workspace's turns.
+   * A job without a project predates the field and stays visible everywhere.
+   */
+  async list(limit = 50, project?: string): Promise<MeshJob[]> {
     await this.initialize();
     const entries = await readdir(this.directory);
     const rows = await Promise.all(entries.filter((name) => name.endsWith(".json")).map(async (name) => {
@@ -105,6 +113,7 @@ export class MeshJobStore {
       }
     }));
     return rows.filter((row): row is { mtime: number; job: MeshJob } => Boolean(row))
+      .filter(({ job }) => !project || !job.project_id || job.project_id === project)
       .sort((a, b) => b.mtime - a.mtime).slice(0, limit).map((row) => row.job);
   }
 

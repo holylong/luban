@@ -320,6 +320,10 @@ export function MobileApp(): React.ReactElement {
   const toastId = useRef(0);
   const selectedRef = useRef<string | undefined>(selectedId);
   selectedRef.current = selectedId;
+  // `refresh` never changes identity, so the workspace it asks for has to come
+  // from a ref: a stale closure would keep polling the project it mounted with.
+  const projectRef = useRef("");
+  projectRef.current = project;
   const ready = auth.state === "account" || auth.state === "legacy";
   // An account sign-in happens inside this page, so the Android shell learns
   // from here that the console is usable and can drop its connection notice.
@@ -403,7 +407,7 @@ export function MobileApp(): React.ReactElement {
   const refresh = useCallback(async () => {
     const requestNode = localStorage.getItem(NODE_KEY);
     try {
-      const [info, jobList] = await Promise.all([api.node(), api.jobs()]);
+      const [info, jobList] = await Promise.all([api.node(), api.jobs(projectRef.current || undefined)]);
       if (localStorage.getItem(NODE_KEY) !== requestNode) return;
       setNode(info);
       setConnected(true);
@@ -485,15 +489,18 @@ export function MobileApp(): React.ReactElement {
   // Landing on a device with an empty composer hid a day of work behind 设置.
   // The list is newest-first, so the newest session is what "open this device"
   // means; an explicitly chosen session or a running job keeps the live view.
+  // A job still loading counts as live: tapping a job used to clear the session
+  // pointer, and the auto-pick took the gap to adopt an unrelated session as
+  // the conversation the next instruction would be appended to.
   useEffect(() => {
     const next = pickDefaultSession({
       sessions,
       pinned: sessionPinned.current,
       current: continueSession,
-      jobSelected: Boolean(job),
+      jobSelected: Boolean(job) || jobs.some(item => item.id === selectedId),
     });
     if (next) setContinueSession(next);
-  }, [node?.name, sessions, continueSession, job]);
+  }, [node?.name, sessions, continueSession, job, jobs, selectedId]);
 
   const refreshRelayNodes = useCallback(async () => {
     try {

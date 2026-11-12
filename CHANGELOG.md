@@ -1,3 +1,11 @@
+## 2.3.15 — 2026-11-12
+
+- 查清「手机上一条消息接在了不相关的会话上、工作目录还是 /tmp/luban-phone」：本机一直留着一个 `luban web /tmp/luban-phone --relay` 的测试进程（11-11 08:11 起），手机仍钉在它上报的中继节点上，于是会话列表是那个临时目录的测试会话；而任务列表是整机范围的（`/api/jobs` 把 `~/.luban/jobs` 全量返回），所以 Conductor 会话里那句「你帮我看看第二个实验主要是做什么？」在这台手机上看起来像是接着那个测试会话。桌面侧其实是对的：该任务 `project_id=Conductor`、`session_id=20261109131529-vi33k3`、`workspace=/Users/me/Documents/Conductor`。已停掉该残留进程。
+- `GET /api/jobs` 支持 `?project=`（`MeshJobStore.list` / `MeshRuntime.jobs` 增加项目过滤；没有 `project_id` 的旧任务仍然可见）。不带参数仍是整机视图，桌面控制台行为不变；手机按当前工作区拉取任务，不再把别的项目的会话列进自己的任务流。
+- `continuationForPrompt` 现在把**被打开会话自己的 project** 带进接续请求（之前丢弃 project，`project_id` 回退成手机当前工作区）：手机停在一个工作区、看着另一个工作区的会话时，下一条指令不会再跑错目录。
+- 修一个自动选会话的抢跑：点了任务但任务详情还没回来时，`job` 是空的，自动选会话会趁机把一个无关会话设成「待接续」；现在任务列表里存在的选中任务也算「活动视图」。
+- 验证：新增 `src/web/jobs-scope.test.ts`（同一台机器上 conductor / luban-phone / 旧任务三种记录的过滤矩阵，去掉过滤时该用例变红）、`mobile-continue.test.ts`「带被打开会话自己的 project」；`npx tsc -p tsconfig.json --noEmit`、`npx tsc -p tsconfig.client.json --noEmit`、`npm run build`、`vitest src/web src/core/mesh`（383 passed，仅 `server.test.ts` 那个 macOS `/var` 与 `/private/var` 旧有失败）通过。
+
 ## 2.3.14 — 2026-11-12
 
 - 定位「ssh 里一直闪」的真正来源：手机远控的中继日志走 `console.error`，Ink 对 console 的处理是「擦掉整帧 + 写这行 + 整帧重画」，链路抖动时每 2～3 秒一次，远端看到的就是整屏闪一下。日志改为交给 TUI（`subscribeRelayLog`），在状态区占一行最多 8 秒，不再碰终端帧；无 TUI 时仍写 stderr。

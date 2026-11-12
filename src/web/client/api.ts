@@ -71,7 +71,7 @@ export const api = {
   node: () => request<NodeInfo>("/api/node"),
   peers: () => request<PeerView[]>("/api/peers"),
   inbox: (limit = 20) => request<InboxMessage[]>(`/api/inbox${query({ limit })}`),
-  jobs: () => request<MeshJob[]>("/api/jobs"),
+  jobs: (project?: string) => request<MeshJob[]>(`/api/jobs${query({ project })}`),
   job: (id: string) => request<MeshJob>(`/api/jobs/${encodeURIComponent(id)}`),
   jobStream: (id: string, since = 0) => request<{
     ok: boolean; job_id: string; next: number; complete: boolean;

@@ -1153,7 +1153,7 @@ export class MeshRuntime {
     return syncSummary("pull", peer, result);
   }
 
-  async jobs(limit = 50): Promise<MeshJob[]> {
-    return this.store.list(limit);
+  async jobs(limit = 50, project?: string): Promise<MeshJob[]> {
+    return this.store.list(limit, project);
   }
 }

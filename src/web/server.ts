@@ -397,7 +397,13 @@ export class LubanWebServer {
       })));
     }
     if (url.pathname === "/api/inbox") return json(res, await this.mesh.inbox(Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 50)))));
-    if (url.pathname === "/api/jobs") return json(res, await this.mesh.jobs(MAX_JOBS));
+    if (url.pathname === "/api/jobs") {
+      // The job folder is one per machine, so a console that names no project
+      // still sees every workspace (the desktop console wants that). The phone
+      // names the workspace it is showing: without it a session of another
+      // project read like a turn of the conversation on screen.
+      return json(res, await this.mesh.jobs(MAX_JOBS, url.searchParams.get("project") || undefined));
+    }
     const streamMatch = /^\/api\/jobs\/([^/]+)\/stream$/u.exec(url.pathname);
     if (streamMatch) {
       const id = decodeURIComponent(streamMatch[1]!);
