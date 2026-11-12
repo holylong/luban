@@ -685,6 +685,8 @@ Ollobot 复用 lasini 的透明四帧跳跃素材，在本地或 Mesh 任务执�
 
 配色按色号而非 `FORCE_COLOR` 设置：给 `FORCE_COLOR` 传值时 color 库会直接跳到 24 位色，而只支持 256 色的终端会把 `38;2;r;g;b` 当成无色——正是「样式没传过来」的样子。排查时运行 `LUBAN_TERM_INFO=1 luban`，会先打印一行 `terminal: TERM=… COLORTERM=… ssh=… color=…`，说明当前判断依据。仍想强制：`FORCE_COLOR=3`（终端真支持 24 位色时）或 `NO_COLOR=1` 关闭颜色，`LUBAN_MASCOT=0` 单独关掉背景图。
 
+手机远控的中继日志不再打印到终端：它以前走 `console.error`，Ink 为了写出这一行会擦掉整帧再重画，链路抖动时每两三秒闪一次。现在这类消息显示在状态区（`手机远控 …`）最多 8 秒，没有 TUI 时仍写 stderr。
+
 如果仍然闪，用 `LUBAN_TUI_TRACE=/tmp/tui.log luban` 启动，每次写入会记一行：`absolute rows=…/… painted=…` 表示按行重画、实际画了几行，`ink bytes=… erase2k=…` 表示这次写入走了 Ink 原始的「擦除整帧再重画」路径（`erase2k` 就是闪的来源）。
 
 控制台闪烁来自每帧重画整个视口：一次按键原本要把 20 多行（每行含皮肤底色）重新写一遍，走 ssh 时肉眼可见。现在只重画内容真正变化的行，并每 120 帧自动全量重画一次兜底（窗口尺寸变化、外部日志写入会立即触发全量重画）。实测 41 行界面按一个键的输出从约 3.9 KB 降到 23 字节。

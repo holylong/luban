@@ -30,7 +30,9 @@ it("falls back on resize and external logs, then resumes row updates", () => {
   const resized = erase(3) + "c\n";
   expect(write(resized)).toBe(resized);
   expect(write(erase(2) + "d\n")).not.toContain("\u001b[2K");
-  expect(write(erase(2))).toBe(erase(2));
+  // A bare line erase is what Ink emits before console output; it is dropped so
+  // the repaint that follows does not flash an empty screen.
+  expect(write(erase(2))).toBe("");
   expect(write("log\n")).toBe("log\n");
   expect(write("d\n")).toBe("d\n");
   expect(write(erase(2) + "e\n")).not.toContain("\u001b[2K");
@@ -85,6 +87,20 @@ it("uses absolute rows for any frame that fits, not only the rows - 1 layout", (
   expect(painted).not.toContain("\u001b[2K");
   expect(painted).toContain("\u001b[1;1Hmodal");
   expect(painted.endsWith("\u001b[8;1H\u001b[K")).toBe(true);
+});
+
+it("drops the frame erase that console output performs before its repaint", () => {
+  const write = createTerminalFrameWriter(() => ({ rows: 6, columns: 80 }));
+  write("header\nbody\nfooter\ninput\nnotice\n");
+  // Ink's patched console erases the whole frame, writes the line, then repaints.
+  // The erase only produces the flash; the repaint addresses every row anyway.
+  expect(write(erase(6))).toBe("");
+  const repaint = write(erase(6) + "header\nbody\nfooter\ninput\nnotice\n");
+  expect(repaint).not.toContain("\u001b[2K");
+  // Rows are forgotten by the swallowed erase, so the repaint is complete.
+  expect([...repaint.matchAll(/\u001b\[\d+;1H/g)]).toHaveLength(6);
+  // A screen clear is not a line erase and still reaches the terminal.
+  expect(write("\u001b[2J")).toBe("\u001b[2J");
 });
 
 it("traces every write when LUBAN_TUI_TRACE names a file", async () => {

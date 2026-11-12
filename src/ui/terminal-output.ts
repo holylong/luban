@@ -27,6 +27,17 @@ export function createTerminalFrameWriter(size?: () => { rows: number; columns: 
   const trace = tracer();
   const erasePrefix = /^(?:\u001b\[2K\u001b\[1A)*\u001b\[2K\u001b\[G/;
   return (chunk) => {
+    // Ink prints console output by erasing the frame, writing the line and
+    // repainting the whole frame. Erasing and re-sending 70+ rows is exactly
+    // what a slow ssh link shows as a flash, and the erase buys nothing: the
+    // repaint that follows addresses every row absolutely. Swallow the erase,
+    // forget the cached rows so that repaint is complete, and let the write
+    // itself through.
+    if (/\u001b\[2K/.test(chunk) && /^(?:\u001b\[[12]K|\u001b\[1A|\u001b\[G)+$/.test(chunk)) {
+      previous = undefined;
+      trace?.(`erase-only bytes=${chunk.length} swallowed`);
+      return "";
+    }
     const prefix = erasePrefix.exec(chunk)?.[0] ?? "";
     const frame = chunk.slice(prefix.length);
     // Only optimize plain Ink frames with SGR styling. Unknown cursor commands,

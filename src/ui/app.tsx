@@ -322,6 +322,9 @@ export interface AppProps {
   resume?: string;
   initialPrompt?: string;
   mobileLink?: string;
+  /** Relay reconnects arrive here instead of Ink's console, which would erase
+   * and repaint the whole frame (a visible flash on a remote terminal). */
+  subscribeRelayLog?: (listener: (message: string) => void) => () => void;
 }
 
 
@@ -727,7 +730,7 @@ export function SelectDialog({
   );
 }
 
-export function App({ config: initialConfig, mesh, resume, initialPrompt, mobileLink }: AppProps) {
+export function App({ config: initialConfig, mesh, resume, initialPrompt, mobileLink, subscribeRelayLog }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { stdin } = useStdin();
@@ -742,6 +745,21 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     onResize();
     return () => { stdout.off("resize", onResize); };
   }, [stdout]);
+  useEffect(() => {
+    if (!subscribeRelayLog) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = subscribeRelayLog((message) => {
+      setRelayNotice(oneLine(message, 96));
+      if (timer) clearTimeout(timer);
+      // A reconnect notice is transient: leaving "relay connected" on screen for
+      // the rest of the session would read as a stuck status row.
+      timer = setTimeout(() => setRelayNotice(""), 8000);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [subscribeRelayLog]);
   const [config, setConfig] = useState(initialConfig);
   const [mode, setMode] = useState<AgentMode>("auto");
   const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages(initialConfig.workspace, initialConfig.model.name, initialConfig.planning, initialConfig.kev?.mode, initialConfig.sandbox?.allowOutsideWorkspace === true));
@@ -834,6 +852,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // per-token path free of another state write; the one-second tick renders it.
   const lastOutputRef = useRef(0);
   const [notice, setNotice] = useState("Describe a goal, ask a question, or type / for commands.");
+  const [relayNotice, setRelayNotice] = useState("");
   const [runOutcome, setRunOutcome] = useState<RunOutcome | null>(null);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [questionRequest, setQuestionRequest] = useState<QuestionRequest | null>(null);
@@ -3174,6 +3193,16 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
             <Text color={theme.dim}>{running ? "esc 中断 · /queue 排队 · /pending 撤回" : "shift+tab 模式 · ctrl+p 模型 · esc/↓ 清空"}</Text>
           ) : null}
         </Box>
+        {relayNotice ? (
+          /* Relay reconnects land here, not on the console: a console line makes
+             Ink erase and repaint the whole frame, which flickers over ssh. */
+          <Box paddingX={2} height={1} overflow="hidden" flexShrink={0}>
+            <Text wrap="truncate-end">
+              <Text color={theme.dim}>手机远控 </Text>
+              <Text color={theme.muted}>{relayNotice}</Text>
+            </Text>
+          </Box>
+        ) : null}
         {notice !== defaultNotice ? (
           /* Command feedback gets a row of its own: appended behind the tips it
              was pushed off the edge on any narrow terminal, which made a command

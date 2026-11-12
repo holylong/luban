@@ -807,6 +807,7 @@ async function main(): Promise<number> {
   let remoteWeb: LubanWebServer | undefined;
   let remoteTunnel: TunnelClient | undefined;
   let mobileLink: string | undefined;
+  let subscribeRelayLog: ((listener: (message: string) => void) => () => void) | undefined;
   // The TUI keeps its own broker: approvals requested by a browser tab are
   // answered there, while in-terminal jobs keep prompting in the TUI itself.
   const approvals = new ApprovalBroker();
@@ -853,6 +854,22 @@ async function main(): Promise<number> {
       }
     }
     if (config.remote.enabled && !prompt) {
+      // Relay reconnects happen every few seconds while the link flaps. Ink
+      // routes console writes through log.clear() + a full repaint, which on a
+      // remote terminal shows as the whole screen flashing; hand them to the
+      // TUI, which shows them in a single status row.
+      const relayListeners = new Set<(message: string) => void>();
+      const relayLog = (message: string): void => {
+        if (relayListeners.size === 0) {
+          process.stderr.write(`手机远控：${message}\n`);
+          return;
+        }
+        for (const listener of relayListeners) listener(message);
+      };
+      subscribeRelayLog = (listener: (message: string) => void): (() => void) => {
+        relayListeners.add(listener);
+        return () => { relayListeners.delete(listener); };
+      };
       const relayUrl = config.remote.relayUrl.trim();
       const nodeToken = process.env[config.remote.nodeTokenEnv]?.trim()
         || readEnvFileValue(config.remote.nodeTokenFile, config.remote.nodeTokenEnv);
@@ -898,10 +915,7 @@ async function main(): Promise<number> {
           workspace: config.workspace,
           projects: mesh.projectMap(),
           relayCa,
-          // Ink patches console, so a background retry line is written above
-          // the frame and the TUI is redrawn. A raw stderr write would move the
-          // cursor behind Ink's back and flicker the whole screen.
-          log: (message) => console.error(`手机远控：${message}`),
+          log: relayLog,
         });
         mobileLink = `${normalizedRelayUrl}/login?token=${encodeURIComponent(phoneToken)}`;
         await remoteTunnel.start();
@@ -931,7 +945,7 @@ async function main(): Promise<number> {
     // trailing newline, so it redraws in place. terminalOutput turns fixed-height
     // frame erases into row updates on all TTYs, without requiring DECSET 2026.
     traceBoot("render");
-    const instance = render(React.createElement(App, { config, mesh, resume, mobileLink }), { stdout: mascotOutput(terminalOutput(process.stdout)), exitOnCtrlC: false, incrementalRendering: false });
+    const instance = render(React.createElement(App, { config, mesh, resume, mobileLink, subscribeRelayLog }), { stdout: mascotOutput(terminalOutput(process.stdout)), exitOnCtrlC: false, incrementalRendering: false });
     await instance.waitUntilExit();
     return 0;
   } catch (error) {
