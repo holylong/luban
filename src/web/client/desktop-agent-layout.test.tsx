@@ -36,7 +36,7 @@ describe("agent column layout", () => {
     // The saved transcript used to pad itself back out, leaving one column at
     // 27px and the live messages at 15px.
     expect(desktop).toContain(".desktop-agent .session-body { padding: 0 0 16px; }");
-    expect(desktop).toContain(".desktop-agent .banner { padding: 8px 0; }");
+    expect(desktop).toContain(".desktop-agent .banner { padding: 6px 0; }");
   });
 
   it("scrolls a table instead of collapsing its cells", () => {

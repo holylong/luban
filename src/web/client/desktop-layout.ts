@@ -20,7 +20,7 @@ export const MAX_EXPLORER_WIDTH = 520;
 export const DEFAULT_AGENT_RATIO = 0.33;
 export const MIN_AGENT_WIDTH = 240;
 export const MIN_CONSOLE_HEIGHT = 160;
-export const DEFAULT_CONSOLE_HEIGHT = 240;
+export const DEFAULT_CONSOLE_HEIGHT = 190;
 /** Opening the terminal grows a short console so more than a few rows show. */
 export const TERMINAL_CONSOLE_HEIGHT = 420;
 /** The code column never shrinks below this, whatever is dragged. */

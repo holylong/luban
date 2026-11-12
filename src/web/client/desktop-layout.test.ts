@@ -11,7 +11,7 @@ describe("desktop pane layout", () => {
     expect(layout.explorer).toBe(250);
     expect(layout.agent).toBeGreaterThanOrEqual(MIN_AGENT_WIDTH);
     expect(layout.explorer + layout.agent + MIN_CODE_WIDTH).toBeLessThan(1440);
-    expect(layout.console).toBe(240);
+    expect(layout.console).toBe(190);
   });
 
   it("clamps every dragged edge, including hostile stored values", () => {
