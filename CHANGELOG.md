@@ -1,3 +1,9 @@
+## 2.3.16 — 2026-11-12
+
+- 修 `npm run release` 的 Electron 环节卡死：本机缓存里已有校验通过的 `electron-v44.4.5-darwin-x64.zip`（GitHub 地址的缓存目录），而脚本强制用 npmmirror 镜像，URL 不同→缓存键不同→又去重新下 134MB，180 秒超时后整条 release 失败。现在 `ensureElectron` 依次尝试：配置的镜像 → 直接从任意缓存目录里找校验通过的归档并解包（`seedElectronDist`，与 `electron/install.js` 写入 `dist/version`、`path.txt` 的方式一致）→ 官方地址。三者都不可用才报错，报错里带上缓存路径与实际缺的文件。
+- `ensureElectron` 改为 async（`scripts/release.mjs`、`scripts/package-windows.mjs` 调用处加 `await`）；新增 `electronCacheRoot` / `electronArchiveName` / `findVerifiedArchive` / `cachedElectronArchive`，缓存目录扫描按名字排序，重试结果稳定。
+- 验证：`node --test scripts/release.test.mjs`（7 项通过，新增「不同镜像目录下的同一归档按 sha256 复用、校验不符不采用」）；`npm run release` 在原先失败的同一条命令下产出 2.3.16 的 mac x64 CLI ZIP 与 DMG。
+
 ## 2.3.15 — 2026-11-12
 
 - 查清「手机上一条消息接在了不相关的会话上、工作目录还是 /tmp/luban-phone」：本机一直留着一个 `luban web /tmp/luban-phone --relay` 的测试进程（11-11 08:11 起），手机仍钉在它上报的中继节点上，于是会话列表是那个临时目录的测试会话；而任务列表是整机范围的（`/api/jobs` 把 `~/.luban/jobs` 全量返回），所以 Conductor 会话里那句「你帮我看看第二个实验主要是做什么？」在这台手机上看起来像是接着那个测试会话。桌面侧其实是对的：该任务 `project_id=Conductor`、`session_id=20261109131529-vi33k3`、`workspace=/Users/me/Documents/Conductor`。已停掉该残留进程。

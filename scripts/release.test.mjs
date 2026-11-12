@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { artifactSignature, releasePlan, resolveArtifacts, versionProblem, writeChecksums } from "./release.mjs";
-import { releaseEnvironment } from "./lib/release-network.mjs";
+import { cachedElectronArchive, electronArchiveName, electronCacheRoot, findVerifiedArchive, releaseEnvironment } from "./lib/release-network.mjs";
 
 test("version scheme counts patches 1-20 and rolls the minor over", () => {
   assert.equal(versionProblem("2.2.3"), null);
@@ -94,5 +94,29 @@ test("checksums cover exactly selected nonempty artifacts", async () => {
     await assert.rejects(writeChecksums(dir, ["missing.zip"], "bad.txt"));
     await writeFile(join(dir, "empty.zip"), "");
     await assert.rejects(writeChecksums(dir, ["empty.zip"], "bad.txt"), /empty artifact/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+
+test("a verified Electron archive is reused whatever mirror downloaded it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "luban-electron-cache-"));
+  try {
+    const name = electronArchiveName("44.4.5", "darwin", "x64");
+    assert.equal(name, "electron-v44.4.5-darwin-x64.zip");
+    // Two mirrors means two directories; only the matching bytes count.
+    await mkdir(join(dir, "npmmirror-key"), { recursive: true });
+    await mkdir(join(dir, "github-key"), { recursive: true });
+    await writeFile(join(dir, "npmmirror-key", name), "half a download");
+    await writeFile(join(dir, "github-key", name), "abc");
+    const sha256abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    assert.equal(findVerifiedArchive(dir, name, sha256abc), join(dir, "github-key", name));
+    assert.equal(findVerifiedArchive(dir, name, "0".repeat(64)), null);
+    // Without published checksums the first directory (sorted) is used as-is.
+    assert.equal(findVerifiedArchive(dir, name), join(dir, "github-key", name));
+    assert.equal(findVerifiedArchive(join(dir, "absent"), name), null);
+    assert.equal(electronCacheRoot({ ELECTRON_CACHE: dir }), dir);
+    assert.ok(electronCacheRoot({}).startsWith("/"));
+    // Nothing cached for this host means no archive, not an exception.
+    assert.equal(cachedElectronArchive(join(dir, "no-node-modules")), null);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

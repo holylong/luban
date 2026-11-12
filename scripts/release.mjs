@@ -162,7 +162,7 @@ async function main() {
   // Electron 44 does not download its runtime during npm ci. CLI-only and
   // installer-only builds stay independent of Electron; desktop builds ensure
   // its native runtime.
-  if (plan.platform !== "windows" && (plan.kind === "all" || plan.kind === "desktop")) ensureElectron(root);
+  if (plan.platform !== "windows" && (plan.kind === "all" || plan.kind === "desktop")) await ensureElectron(root);
   const directory = join(root, "release");
   /** @type {Map<string, string|null>} */
   const before = new Map();

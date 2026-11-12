@@ -29,6 +29,7 @@ Windows 解压后运行 `luban.cmd` 或 `luban-desktop.cmd`。包内自带 Node.
 项目 `.npmrc` 默认使用 `https://registry.npmmirror.com/`，优先使用缓存，限制下载超时与重试。
 Windows 打包生产依赖先尝试 npm 离线缓存，缺失时才访问镜像；CLI 和 Desktop 的同一批依赖可复用 npm 缓存。
 Electron 安装器优先复用已安装的同版本运行时/下载缓存；下载默认使用 `https://npmmirror.com/mirrors/electron/`。
+镜像下载失败时不再直接失败：`scripts/lib/release-network.mjs` 会在整个 Electron 缓存目录里找同版本、sha256 与 `node_modules/electron/checksums.json` 一致的归档，自己解包成 `node_modules/electron/dist`（镜像不同、缓存键不同也能复用），再退回官方地址下载。
 不会关闭 TLS 或跳过 Electron 校验。镜像也可能不可达，首次安装不可能保证完全离线。
 
 可用环境变量 `ELECTRON_MIRROR` 覆盖 Electron 镜像，`LUBAN_NPM_REGISTRY` 覆盖 Windows 打包生产依赖源。

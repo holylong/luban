@@ -292,7 +292,7 @@ async function packageVariant(kind) {
 }
 
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")]);
-if (selection === "all" || selection === "desktop") ensureElectron(root);
+if (selection === "all" || selection === "desktop") await ensureElectron(root);
 if (selection === "all" || selection === "cli") await packageVariant("cli");
 if (selection === "all" || selection === "desktop") await packageVariant("desktop");
 if (selection === "exe") await packageSingleExe();
