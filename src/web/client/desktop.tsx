@@ -376,9 +376,9 @@ export function PetToggle(): React.ReactElement | null {
   return <button
     className={`desktop-pet-toggle${visible ? " on" : ""}`}
     aria-pressed={visible === true}
-    title={visible ? "隐藏造物主悬浮窗（也可从托盘菜单恢复）" : "显示造物主悬浮窗"}
+    title={visible ? "隐藏 Creator 悬浮窗（也可从托盘菜单恢复）" : "显示 Creator 悬浮窗"}
     onClick={() => void bridge.togglePet!().then(setVisible).catch(() => setVisible(undefined))}
-  >{visible ? "◍ 造物主 · 显示中" : "◌ 造物主 · 已隐藏"}</button>;
+  >{visible ? "◍ Creator · 显示中" : "◌ Creator · 已隐藏"}</button>;
 }
 
 export function DesktopApp(): React.ReactElement {

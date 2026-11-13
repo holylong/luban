@@ -20,12 +20,14 @@ if (!["all", "cli", "desktop", "creator"].includes(selection)) throw new Error("
 const APP_NAME = "luban";
 
 /** Electron bundles share the bundled Node runtime and CLI but keep their own
- * entry point, so luban.app and Luban Creator.app install side by side. */
-/** @typedef {{bundle: string, display: string, identifier: string, entry: string, title: string}} AppSpec */
+ * entry point, so luban.app and Creator.app install side by side — with their
+ * own names and their own icon colours, because two identical icons in the Dock
+ * are a guessing game. */
+/** @typedef {{bundle: string, display: string, identifier: string, entry: string, title: string, icon: string}} AppSpec */
 /** @type {Record<string, AppSpec>} */
 const APP_SPECS = {
-  desktop: { bundle: APP_NAME, display: APP_NAME, identifier: "com.luban.desktop", entry: "desktop", title: "luban" },
-  creator: { bundle: "Luban Creator", display: "造物主", identifier: "com.luban.creator", entry: "creator", title: "造物主" },
+  desktop: { bundle: APP_NAME, display: APP_NAME, identifier: "com.luban.desktop", entry: "desktop", title: "luban", icon: "luban-app-1024" },
+  creator: { bundle: "Creator", display: "Creator", identifier: "com.luban.creator", entry: "creator", title: "Creator", icon: "creator-app-1024" },
 };
 
 function run(label, command, args, cwd = root, capture = false) {
@@ -72,10 +74,10 @@ function copyRuntime(payload, kind) {
   run(`Smoke test ${kind} runtime`, join(payload, "node"), [join(app, "dist", "cli.js"), "--version"], payload, true);
 }
 
-function makeIcon(resources) {
-  // luban-app-1024.png is the pre-rounded, transparent-margin icon macOS expects;
-  // the square luban-512.png stays for tray, window and web use.
-  const rounded = join(root, "assets", "luban-app-1024.png");
+function makeIcon(resources, name = "luban-app-1024") {
+  // The *-app-1024.png files are pre-rounded with transparent margins, which is
+  // what macOS expects; the square luban-512.png stays for tray, window and web.
+  const rounded = join(root, "assets", `${name}.png`);
   const source = existsSync(rounded) ? rounded : join(root, "assets", "luban-512.png");
   if (!existsSync(source)) return false;
   const work = mkdtempSync(join(tmpdir(), "luban-icns-"));
@@ -131,7 +133,7 @@ function buildApp(payload, kind = "desktop") {
   plistSet(plist, "CFBundleIdentifier", spec.identifier);
   plistSet(plist, "CFBundleShortVersionString", version);
   plistSet(plist, "CFBundleVersion", version);
-  if (makeIcon(resources)) plistSet(plist, "CFBundleIconFile", "AppIcon");
+  if (makeIcon(resources, spec.icon)) plistSet(plist, "CFBundleIconFile", "AppIcon");
   // Electron loads Contents/Resources/app, so the CLI runtime moves beside it.
   movePath(join(payload, "node"), join(resources, "node"));
   movePath(join(payload, "app"), join(resources, "luban"));
@@ -164,7 +166,7 @@ function writeReadme(payload, kind) {
     kind === "cli"
       ? "Run ./luban from this folder, or add this folder to PATH."
       : kind === "creator"
-        ? `Drag "${bundle}" to /Applications (it also runs in place), then look for 造物主 in the menu bar. ./luban is the CLI the queue workers run.`
+        ? `Drag "${bundle}" to /Applications (it also runs in place), then look for Creator in the menu bar. ./luban is the CLI the queue workers run.`
         : "Drag \"luban.app\" to /Applications (it also runs in place), or start it with ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
     ...(spec ? [`The app carries its own Node.js runtime and CLI, so moving "${bundle}" elsewhere keeps working.`] : []),
     "Node.js is bundled; no local Node.js installation is required.",

@@ -1,5 +1,5 @@
 /**
- * 造物主 — the standalone, always-resident creator app.
+ * Creator — the standalone, always-resident creator app.
  *
  * It is deliberately *not* the workbench: no project, no editor, no browser
  * preview. It owns one thing — the durable task queue in ~/.luban/bot — and a
@@ -121,7 +121,7 @@ function createWindow() {
   const page = join(webUi(), "creator.html");
   win = new BrowserWindow({
     width: 980, height: 700, minWidth: 760, minHeight: 520,
-    show: false, backgroundColor: "#ffffff", title: "造物主",
+    show: false, backgroundColor: "#ffffff", title: "Creator",
     // A popover, not a document window: the traffic lights sit in the header row.
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
@@ -160,17 +160,17 @@ function createTray() {
   // Icon plus a short status word: a text-only item reads as an empty menu-bar
   // slot, and the words alone never showed which app they belonged to.
   tray = new Tray(trayImage());
-  if (process.platform === "darwin") tray.setTitle("造物主");
-  else tray.setToolTip("造物主");
+  if (process.platform === "darwin") tray.setTitle("Creator");
+  else tray.setToolTip("Creator");
   tray.on("click", toggleWindow);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "打开造物主", click: () => createWindow() },
+    { label: "打开 Creator", click: () => createWindow() },
     { label: "让后台开始干活", click: () => { bot.ensureWorker(home); refreshTray(); } },
     { type: "separator" },
     { label: "打开任务数据目录", click: () => { void shell.openPath(dataDirectory); } },
     { label: "允许的工具（permissions.json）", click: () => { void openPolicyFile(); } },
     { type: "separator" },
-    { label: "退出造物主（后台任务继续）", click: () => { quitting = true; app.quit(); } },
+    { label: "退出 Creator（后台任务继续）", click: () => { quitting = true; app.quit(); } },
   ]));
   refreshTray();
 }
@@ -178,9 +178,9 @@ function createTray() {
 function refreshTray() {
   if (!tray || tray.isDestroyed()) return;
   const status = bot.workerStatus(home);
-  const label = status.running ? (status.task ? "造物主 · 忙" : "造物主 · 待命") : "造物主 · 未启动";
-  if (process.platform === "darwin") tray.setTitle(label.replace("造物主 · ", ""));
-  tray.setToolTip(`造物主 — ${label}`);
+  const label = status.running ? (status.task ? "Creator · 忙" : "Creator · 待命") : "Creator · 未启动";
+  if (process.platform === "darwin") tray.setTitle(label.replace("Creator · ", ""));
+  tray.setToolTip(`Creator — ${label}`);
 }
 
 async function openPolicyFile() {
@@ -250,7 +250,7 @@ ipcMain.handle("creator:startWorker", () => {
   return { ...result, snapshot: snapshot() };
 });
 ipcMain.handle("creator:pickWorkspace", async () => {
-  const picked = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"], title: "选择造物主的工作区" });
+  const picked = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"], title: "选择 Creator 的工作区" });
   return picked.canceled ? undefined : picked.filePaths[0];
 });
 ipcMain.handle("creator:openPolicy", async () => { await openPolicyFile(); return { ok: true }; });

@@ -67,9 +67,9 @@ describe("desktop Creator overlay switch", () => {
   it("offers a hide control while the overlay is on screen", () => {
     vi.stubGlobal("window", { lubanDesktop: { togglePet: vi.fn().mockResolvedValue(false), petVisible: vi.fn() } });
     const html = renderToStaticMarkup(<PetToggle />);
-    expect(html).toContain("造物主");
+    expect(html).toContain("Creator");
     expect(html).toContain('aria-pressed="false"');
-    expect(html).toContain("显示造物主悬浮窗");
+    expect(html).toContain("显示 Creator 悬浮窗");
   });
 
   it("stays out of the browser workbench, which has no overlay", () => {

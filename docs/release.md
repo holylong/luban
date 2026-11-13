@@ -20,7 +20,7 @@
 - `npm run release`：当前平台 CLI + Desktop（macOS 另加造物主）；Windows 输出两个便携 ZIP 和 SHA256SUMS。
 - `npm run release -- --kind cli`：仅 CLI ZIP，不下载 Electron。
 - `npm run release -- --kind desktop`：仅 Desktop ZIP/DMG。
-- `npm run release -- --kind creator`：仅造物主 `Luban Creator.app`（`.dmg`，失败回退 `.zip`）。目前只有 macOS 打包脚本支持它，其他平台会明确报错。
+- `npm run release -- --kind creator`：仅造物主 `Creator.app`（`.dmg`，失败回退 `.zip`）。目前只有 macOS 打包脚本支持它，其他平台会明确报错。
 - `npm run release -- --dry-run`：查看计划。
 
 Windows 解压后运行 `luban.cmd` 或 `luban-desktop.cmd`。包内自带 Node.js，桌面包另带 Electron，使用者不需要安装 npm。

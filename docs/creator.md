@@ -1,6 +1,6 @@
-# 造物主（常驻后台任务）
+# Creator（造物主）—— 常驻后台任务
 
-造物主是一个**独立于桌面工作台**的常驻程序：菜单栏上一个入口，点开是一个只做一件事的窗口——派任务、看进度、看结果。它不打开项目、不带编辑器，也不依赖 `apps/desktop`。
+`Creator`（包内名 `Creator.app`，中文语境仍叫「造物主」）是一个**独立于桌面工作台**的常驻程序：菜单栏上一个入口，点开是一个只做一件事的窗口——派任务、看进度、看结果。它不打开项目、不带编辑器，也不依赖 `apps/desktop`。
 
 ```
 造物主（Electron 窗口 + 菜单栏）
@@ -20,7 +20,7 @@ luban bot run（串行 worker，独立进程）
 
 ```bash
 npm run build        # 造物主窗口在 dist/web-ui/creator.html
-npm run creator      # 启动造物主（菜单栏出现「待命 / 忙 / 未启动」）
+npm run creator      # 启动 Creator（菜单栏出现「Creator · 待命 / 忙 / 未启动」）
 ```
 
 窗口里：

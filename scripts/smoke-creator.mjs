@@ -109,7 +109,7 @@ if (png.length < 12_000) {
 // The window must show the queue it was handed, not just some dark pixels.
 const text = readFileSync(shot.replace(/\.png$/u, ".txt"), "utf8");
 const expected = [
-  "造物主",
+  "Creator",
   "检查禅道上本周新增的 bug",          // running row
   "每晚 23:00 汇总今天的工作区改动",     // queued row with a repeat interval
 ];

@@ -649,7 +649,7 @@ function App(): React.ReactElement {
   if (!bridge) {
     return (
       <div className="creator empty-bridge">
-        <h1>造物主</h1>
+        <h1>Creator</h1>
         <p>这是桌面端的界面。用 <code>npm run creator</code> 打开它。</p>
       </div>
     );
@@ -666,8 +666,8 @@ function App(): React.ReactElement {
       <aside className="side">
         <div className="side-top">
           <div className="brand">
-            <img src="./icon-192.png" alt="" />
-            <span>造物主</span>
+            <img src="./creator-icon.png" alt="" />
+            <span>Creator</span>
           </div>
           <button className="discover" onClick={() => { void bridge.openData(); }}>发现应用<i>⌄</i></button>
         </div>

@@ -1,3 +1,11 @@
+## 2.4.14 — 2026-11-13
+
+- 造物主改名 `Creator`，图标换成青绿，不再和 luban 长得一模一样。
+  - 之前 `.app` 显示名是「造物主」、包名 `Luban Creator`，和 luban 共用同一个 1024 图标（只是套了个默认色）——菜单栏/Dock 里两个图标并排分不出来。
+  - 现在：`Creator.app`（CFBundleDisplayName `Creator`，id `com.luban.creator` 不变，DMG 卷名 `Creator <version>`）、窗口标题 `Creator`、菜单栏文字 `Creator · 忙/待命/未启动`、右键菜单与工作区选择框也一起改名。
+  - 图标：新增 `assets/creator-app-1024.png`（青绿 #287F6D，图形保留 luban 的轮廓）→ `AppIcon.icns`；窗口左上角 logo 与菜单栏图标（18/36px）同步换成 `creator-icon.png` / `tray.png` / `tray@2x.png`。luban 本体仍是深蓝 #0D172A + 金色图形。
+  - 界面内的中文文案（「造物主，我帮你…」）不动：改的是应用名，不是产品口吻。
+
 ## 2.4.13 — 2026-11-13
 
 - 操控会话不再「所有指令都先截屏分析」：一句话进来先判断该用哪种手。
