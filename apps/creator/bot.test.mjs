@@ -111,3 +111,34 @@ test("a scheduled task keeps its absolute time", { skip: built ? false : "run np
     assert.equal(JSON.parse(readFileSync(join(root, "bot", "tasks", task.id, "request.json"), "utf8")).prompt, "日报");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("ships the menu-bar icon at both densities", () => {
+  // A text-only status item looked like an empty menu-bar slot, so the tray now
+  // loads this mark. Electron resolves tray@2x.png beside tray.png on macOS.
+  const art = join(dirname(fileURLToPath(import.meta.url)), "assets");
+  for (const [name, px] of [["tray.png", 18], ["tray@2x.png", 36]]) {
+    const png = readFileSync(join(art, name));
+    assert.equal(png.subarray(1, 4).toString("ascii"), "PNG");
+    assert.equal(png.readUInt32BE(16), px, `${name} width`);
+    assert.equal(png.readUInt32BE(20), px, `${name} height`);
+    // Alpha matters: a fully opaque square would paint a block over the menu bar.
+    assert.equal(png[25], 6, `${name} must be RGBA`);
+  }
+});
+
+test("runs the CLI under Node, never under Electron", () => {
+  const before = process.env.LUBAN_NODE_BIN;
+  try {
+    delete process.env.LUBAN_NODE_BIN;
+    assert.equal(bot.nodeBinary(), process.execPath);
+    // Inside Electron without a bundled runtime, ask the child to be plain Node.
+    if (process.versions.electron) assert.equal(bot.nodeEnv().ELECTRON_RUN_AS_NODE, "1");
+    process.env.LUBAN_NODE_BIN = "/opt/luban/node";
+    assert.equal(bot.nodeBinary(), "/opt/luban/node");
+    // With a bundled runtime the Electron hint must not leak into the worker.
+    assert.equal(bot.nodeEnv().ELECTRON_RUN_AS_NODE, undefined);
+  } finally {
+    if (before === undefined) delete process.env.LUBAN_NODE_BIN;
+    else process.env.LUBAN_NODE_BIN = before;
+  }
+});

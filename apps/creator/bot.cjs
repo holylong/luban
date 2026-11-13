@@ -26,8 +26,50 @@ function cliPath(repo = resolve(__dirname, "../..")) {
   return override && existsSync(override) ? override : join(repo, "dist", "cli.js");
 }
 
+/** The CLI runs under Node, never under Electron. A packaged app carries its own
+ * runtime and points LUBAN_NODE_BIN at it; in development process.execPath is the
+ * Electron binary, so the child has to be told to behave as plain Node. */
+function nodeBinary() {
+  return process.env.LUBAN_NODE_BIN || process.execPath;
+}
+
+function nodeEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  if (!process.env.LUBAN_NODE_BIN && process.versions.electron) env.ELECTRON_RUN_AS_NODE = "1";
+  return env;
+}
+
 function queueDirectory(home) {
   return join(home, "bot", "tasks");
+}
+
+/** `runs.jsonl` is written by the worker in `src/core/bot.ts`; this only reads it. */
+function runsPath(home, id) {
+  return join(queueDirectory(home), id, "runs.jsonl");
+}
+
+function countRuns(home, id) {
+  try {
+    const text = readFileSync(runsPath(home, id), "utf8");
+    return text.split("\n").filter(line => line.trim()).length;
+  } catch (error) {
+    if (error.code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
+/** Finished executions, newest last, capped so one long-lived task cannot stall the UI. */
+function taskRuns(home, id, limit = 30) {
+  if (!TASK_ID.test(String(id || ""))) throw new Error("无效的任务 id");
+  let text;
+  try { text = readFileSync(runsPath(home, id), "utf8"); }
+  catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  const runs = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try { runs.push(JSON.parse(line)); } catch { /* half-written tail line: keep what parses */ }
+  }
+  return runs.slice(-limit);
 }
 
 function readJson(path) {
@@ -65,6 +107,7 @@ function listTasks(home) {
       finishedAt: state.finishedAt,
       result: state.result,
       usage: state.usage,
+      runs: countRuns(home, id),
     });
   }
   return rows.sort((left, right) => (right.finishedAt || right.at) - (left.finishedAt || left.at));
@@ -101,8 +144,8 @@ function workerStatus(home, now = Date.now()) {
 function runCli(args, home) {
   const cli = cliPath();
   if (!existsSync(cli)) throw new Error(`找不到 ${cli}，先执行 npm run build`);
-  const result = spawnSync(process.execPath, [cli, ...args], {
-    env: { ...process.env, LUBAN_HOME: home },
+  const result = spawnSync(nodeBinary(), [cli, ...args], {
+    env: nodeEnv({ LUBAN_HOME: home }),
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -174,8 +217,8 @@ function ensureWorker(home) {
   const directory = join(home, "bot");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const log = openSync(join(directory, "worker.log"), "a", 0o600);
-  const child = spawn(process.execPath, [cli, "bot", "run"], {
-    env: { ...process.env, LUBAN_HOME: home },
+  const child = spawn(nodeBinary(), [cli, "bot", "run"], {
+    env: nodeEnv({ LUBAN_HOME: home }),
     detached: true,
     stdio: ["ignore", log, log],
   });
@@ -185,5 +228,6 @@ function ensureWorker(home) {
 }
 
 module.exports = {
-  addTask, cancelTask, cliPath, ensurePolicy, ensureWorker, homeDir, listTasks, permissionRequests, policyPath, workerStatus,
+  addTask, cancelTask, cliPath, ensurePolicy, ensureWorker, homeDir, listTasks, nodeBinary, nodeEnv, permissionRequests,
+  policyPath, taskRuns, workerStatus,
 };

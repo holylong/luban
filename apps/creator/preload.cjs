@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("creator", Object.freeze({
   snapshot: () => ipcRenderer.invoke("creator:snapshot"),
   add: input => ipcRenderer.invoke("creator:add", input),
   cancel: id => ipcRenderer.invoke("creator:cancel", id),
+  runs: (id, limit) => ipcRenderer.invoke("creator:runs", id, limit),
   startWorker: () => ipcRenderer.invoke("creator:startWorker"),
   pickWorkspace: () => ipcRenderer.invoke("creator:pickWorkspace"),
   openPolicy: () => ipcRenderer.invoke("creator:openPolicy"),

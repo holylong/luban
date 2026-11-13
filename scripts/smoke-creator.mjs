@@ -41,7 +41,15 @@ const seed = [
     id: "33333333-3333-4333-8333-333333333333",
     prompt: "每晚 23:00 汇总今天的工作区改动，写成日报",
     status: "queued",
-    at: now + 3600_000,
+    every: 86_400_000,
+    // Tonight at 23:00, so the schedule label reads 每天 23:00 like the prompt says.
+    at: (() => { const tonight = new Date(now); tonight.setHours(23, 0, 0, 0); return tonight.getTime() > now ? tonight.getTime() : tonight.getTime() + 86_400_000; })(),
+  },
+  {
+    id: "44444444-4444-4444-8444-444444444444",
+    prompt: "5 分钟后提醒我下班",
+    status: "queued",
+    at: now + 5 * 60_000,
   },
 ];
 
@@ -59,9 +67,22 @@ for (const task of seed) {
 }
 mkdirSync(join(home, "workspace"), { recursive: true });
 
+// Run history for the finished job: the 计划 drawer reads these rows, so seeding
+// them is what proves the drawer lists executions instead of only the last one.
+const runs = [
+  { from: now - 3 * 3600_000, to: now - 3 * 3600_000 + 240_000, status: "completed", nextAt: now - 2 * 3600_000,
+    usage: { input: 41_000, output: 3_200, calls: 7 },
+    result: "## 结论\n\n扫到 4 个新提交，其中一个修复了登录超时。已打 tag `v2.4.3`。" },
+  { from: now - 2 * 3600_000 - 60_000, to: now - 2 * 3600_000 + 180_000, status: "failed", nextAt: now - 3600_000,
+    usage: { input: 12_000, output: 400, calls: 2 },
+    result: "推送失败：远端返回 403，需要检查 token 权限。" },
+];
+writeFileSync(join(tasks, "22222222-2222-4222-8222-222222222222", "runs.jsonl"),
+  runs.map(row => JSON.stringify(row)).join("\n") + "\n");
+
 const electron = join(repo, "node_modules", "electron", "cli.js");
 const child = spawn(process.execPath, [electron, join(repo, "apps", "creator"), "--smoke", shot], {
-  env: { ...process.env, LUBAN_HOME: home },
+  env: { ...process.env, LUBAN_HOME: home, CREATOR_SMOKE_PLANS: "1" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
@@ -98,5 +119,27 @@ for (const needle of expected) {
     process.exit(1);
   }
 }
+// The 计划 drawer must list every job with its schedule, next fire and history.
+const plansShot = shot.replace(/\.png$/u, "-plans.png");
+const plans = JSON.parse(readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8"));
+const drawerText = readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8");
+const haystack = `${plans.title} ${drawerText}`;
+for (const needle of ["全部计划", "循环任务", "一次任务", "每天 23:00", "每 6 小时", "一次 · ", "次执行"]) {
+  if (!haystack.includes(needle)) {
+    console.error(`计划 抽屉里没有「${needle}」：\n${JSON.stringify(plans, null, 2).slice(0, 900)}`);
+    process.exit(1);
+  }
+}
+if (!plans.runs.length) {
+  console.error(`计划 抽屉没有列出执行记录：\n${JSON.stringify(plans, null, 2).slice(0, 700)}`);
+  process.exit(1);
+}
+if (!plans.drawer || plans.drawer.w < 320) {
+  console.error(`计划 抽屉没有展开：${JSON.stringify(plans.drawer)}`);
+  process.exit(1);
+}
+console.log(`plan drawer ok: ${plansShot} (${plans.plans.length} plans, ${plans.runs.length} runs, w=${plans.drawer.w})`);
+console.log(`  metas: ${plans.metas.slice(0, 3).join(" ‖ ")}`);
+console.log(`  runs:  ${plans.runs.slice(0, 2).join(" ‖ ")}`);
 console.log(`creator window ok: ${shot} (${png.length} bytes, ${expected.length} rows verified)`);
 console.log(`  window text: ${text.split("\n").filter(Boolean).join(" | ").slice(0, 220)}`);

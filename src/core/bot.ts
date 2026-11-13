@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 export interface BotTask {
@@ -21,6 +21,25 @@ export interface BotState {
   usage?: { input: number; output: number; calls: number };
 }
 export type BotExecute = (task: BotTask, signal: AbortSignal) => Promise<{ ok: boolean; text: string; usage?: BotState["usage"] }>;
+
+/**
+ * One execution, kept after the task moves on.
+ *
+ * `state.json` only remembers the newest run, which is useless for a repeating
+ * task — "did the 6:00 scan actually run, and what did it find?" needs the whole
+ * series. Every finished execution is therefore appended to `runs.jsonl`.
+ */
+export interface BotRun {
+  /** When the execution started. */
+  from: number;
+  /** When it finished. */
+  to: number;
+  status: BotState["status"];
+  /** Deadline of the next execution (`every` tasks) or the end of the series. */
+  nextAt: number;
+  usage?: BotState["usage"];
+  result?: string;
+}
 
 async function atomicJson(path: string, value: unknown) {
   const temporary = `${path}.${randomUUID()}.tmp`;
@@ -73,10 +92,42 @@ export class BotQueue {
   }
   async save(id: string, state: BotState) { await atomicJson(this.path(id, "state.json"), state); }
 
+  /** Append one finished execution. Rotated at 1 MB so a long-lived task cannot grow forever. */
+  async appendRun(id: string, state: BotState): Promise<void> {
+    const path = this.path(id, "runs.jsonl");
+    try { if ((await stat(path)).size > 1_000_000) await rename(path, this.path(id, "runs.1.jsonl")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const run: BotRun = {
+      from: state.startedAt ?? state.finishedAt ?? Date.now(),
+      to: state.finishedAt ?? Date.now(),
+      status: state.status,
+      nextAt: state.nextAt,
+      ...(state.usage ? { usage: state.usage } : {}),
+      ...(state.result ? { result: state.result } : {}),
+    };
+    await appendFile(path, `${JSON.stringify(run)}\n`, { mode: 0o600 });
+  }
+
+  /** Newest run last; unreadable lines are skipped rather than failing the whole view. */
+  async history(id: string, limit = 50): Promise<BotRun[]> {
+    let text: string;
+    try { text = await readFile(this.path(id, "runs.jsonl"), "utf8"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+    const runs: BotRun[] = [];
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      try { runs.push(JSON.parse(line)); } catch { /* a half-written tail line is not fatal */ }
+    }
+    return runs.slice(-limit);
+  }
+
   /** Interrupted work is never automatically replayed: it may already have side effects. */
   async recover() {
     for (const { task, state } of await this.list()) {
-      if (state.status === "running") await this.save(task.id, { ...state, status: "interrupted", finishedAt: Date.now(), result: "Worker stopped during execution; submit a new task after checking side effects." });
+      if (state.status !== "running") continue;
+      const interrupted: BotState = { ...state, status: "interrupted", finishedAt: Date.now(), result: "Worker stopped during execution; submit a new task after checking side effects." };
+      await this.save(task.id, interrupted);
+      await this.appendRun(task.id, interrupted);
     }
   }
   async tick(execute: BotExecute, shutdown: AbortSignal, now = Date.now()) {
@@ -91,22 +142,26 @@ export class BotQueue {
         void this.cancelled(task.id).then(cancelled => { if (cancelled) controller.abort(new Error("Task cancelled")); }).catch(() => controller.abort());
       }, 250);
       await this.save(task.id, { ...state, status: "running", startedAt: Date.now() });
+      let finished: BotState;
       try {
         const result = await execute(task, controller.signal);
         const cancelled = await this.cancelled(task.id);
         const interrupted = shutdown.aborted;
-        await this.save(task.id, {
+        finished = {
           status: cancelled ? "cancelled" : interrupted ? "interrupted" : controller.signal.aborted ? "failed" : result.ok && task.every ? "queued" : result.ok ? "completed" : "failed",
           nextAt: Date.now() + (task.every ?? 0), startedAt: now, finishedAt: Date.now(),
           result: controller.signal.aborted ? String(controller.signal.reason) : result.text,
           ...(result.usage ? { usage: result.usage } : {}),
-        });
+        };
       } catch (error) {
-        await this.save(task.id, { ...state, status: await this.cancelled(task.id) ? "cancelled" : shutdown.aborted ? "interrupted" : "failed", finishedAt: Date.now(), result: String(error) });
+        finished = { ...state, status: await this.cancelled(task.id) ? "cancelled" : shutdown.aborted ? "interrupted" : "failed", finishedAt: Date.now(), result: String(error) };
       } finally {
         clearTimeout(timer); clearInterval(cancelTimer);
         shutdown.removeEventListener("abort", abort);
       }
+      // State first, history second: a crash between them loses one line, never state.
+      await this.save(task.id, finished);
+      await this.appendRun(task.id, finished);
     }
   }
 }

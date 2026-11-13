@@ -45,8 +45,8 @@ function createWindow() {
   if (win && !win.isDestroyed()) { win.show(); win.focus(); return win; }
   const page = join(webUi(), "creator.html");
   win = new BrowserWindow({
-    width: 460, height: 700, minWidth: 380, minHeight: 460,
-    show: false, backgroundColor: "#0b0d11", title: "造物主",
+    width: 980, height: 700, minWidth: 760, minHeight: 520,
+    show: false, backgroundColor: "#ffffff", title: "造物主",
     // A popover, not a document window: the traffic lights sit in the header row.
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
@@ -75,10 +75,16 @@ function toggleWindow() {
   else createWindow();
 }
 
+/** 18pt luban mark for the menu bar; macOS picks up tray@2x.png beside it. */
+function trayImage() {
+  const file = join(__dirname, "assets", "tray.png");
+  return existsSync(file) ? nativeImage.createFromPath(file) : nativeImage.createEmpty();
+}
+
 function createTray() {
-  // Text-only status item: no icon asset to ship, and it stays legible in both
-  // menu-bar appearances on macOS.
-  tray = new Tray(nativeImage.createEmpty());
+  // Icon plus a short status word: a text-only item reads as an empty menu-bar
+  // slot, and the words alone never showed which app they belonged to.
+  tray = new Tray(trayImage());
   if (process.platform === "darwin") tray.setTitle("造物主");
   else tray.setToolTip("造物主");
   tray.on("click", toggleWindow);
@@ -125,6 +131,7 @@ ipcMain.handle("creator:cancel", (_event, id) => {
   refreshTray();
   return snapshot();
 });
+ipcMain.handle("creator:runs", (_event, id, limit) => bot.taskRuns(home, id, Number(limit) > 0 ? Number(limit) : 30));
 ipcMain.handle("creator:startWorker", () => {
   const result = bot.ensureWorker(home);
   refreshTray();
@@ -156,6 +163,52 @@ else {
           // Text beside the pixels: a screenshot proves it painted, not what it said.
           const text = await window.webContents.executeJavaScript("document.body.innerText");
           require("node:fs").writeFileSync(smokePath.replace(/\.png$/u, ".txt"), String(text));
+          // Geometry beside the text: layout regressions are invisible in a sentence.
+          const rects = await window.webContents.executeJavaScript(`(() => {
+            const box = (selector) => { const el = document.querySelector(selector); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+            const main = document.querySelector(".main");
+            return {
+              viewport: { w: innerWidth, h: innerHeight },
+              main: main ? { scrollH: main.scrollHeight, clientH: main.clientHeight } : null,
+              side: box(".side"), pane: box(".pane"), hero: box(".hero h1"), segmented: box(".segmented"),
+              quick: box(".quick"), composer: box(".composer"), meta: box(".composer-meta"),
+              suggest: box(".suggest"), disclaimer: box(".disclaimer"),
+              pills: [...document.querySelectorAll(".suggest button")].map(el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }),
+              queue: box(".queue"), tasks: [...document.querySelectorAll(".task")].map(el => Math.round(el.getBoundingClientRect().height)),
+            };
+          })()`);
+          require("node:fs").writeFileSync(smokePath.replace(/\.png$/u, ".rects.json"), JSON.stringify(rects, null, 2));
+          // The 计划 drawer is the "did it get booked" surface; smoke it on request so
+          // its schedule rows and run history are proven to render, not just to exist.
+          if (process.env.CREATOR_SMOKE_PLANS === "1") {
+            const plansPath = smokePath.replace(/\.png$/u, "-plans.png");
+            await window.webContents.executeJavaScript(`(() => {
+              const button = [...document.querySelectorAll(".side-nav button")].find(node => node.textContent.includes("计划"));
+              if (button) button.click();
+            })()`);
+            await new Promise(resolve => setTimeout(resolve, 400));
+            // Expand the finished job: that is the one with run history to show.
+            await window.webContents.executeJavaScript(`(() => {
+              const head = document.querySelector(".plan.completed .plan-head") || document.querySelector(".plan-head");
+              if (head) head.click();
+            })()`);
+            await new Promise(resolve => setTimeout(resolve, 700));
+            require("node:fs").writeFileSync(plansPath, (await window.webContents.capturePage()).toPNG());
+            const plans = await window.webContents.executeJavaScript(`(() => {
+              const box = (selector) => { const el = document.querySelector(selector); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+              return {
+                title: document.querySelector(".drawer h2")?.textContent ?? "",
+                drawer: box(".drawer"),
+                sections: [...document.querySelectorAll(".drawer-section")].map(el => el.textContent),
+                plans: [...document.querySelectorAll(".plan")].map(el => Math.round(el.getBoundingClientRect().height)),
+                rows: [...document.querySelectorAll(".plan-prompt")].map(el => el.textContent),
+                metas: [...document.querySelectorAll(".plan-meta")].map(el => el.textContent),
+                runs: [...document.querySelectorAll(".runs li")].map(el => el.textContent.slice(0, 120)),
+                scrollH: document.querySelector(".drawer-body")?.scrollHeight,
+              };
+            })()`);
+            require("node:fs").writeFileSync(plansPath.replace(/\.png$/u, ".rects.json"), JSON.stringify(plans, null, 2));
+          }
           quitting = true;
           app.quit();
         }, 1200);
