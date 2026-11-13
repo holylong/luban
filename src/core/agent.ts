@@ -310,7 +310,7 @@ export class AgentRunner {
   /** Registry id of the run in progress; usage events add to its token counters. */
   private agentId?: string;
 
-  /** See AgentRunnerOptions; the control session pins this to `computer`. */
+  /** See AgentRunnerOptions; a screen turn pins this to `computer`. */
   readonly toolset: "all" | "computer";
 
   constructor(readonly config: LubanConfig, client?: ModelClient, mesh?: MeshRuntime, private readonly depth = 0, options: AgentRunnerOptions = {}) {
@@ -570,13 +570,19 @@ export class AgentRunner {
     metrics: RunMetrics,
   ): Promise<RunResult> {
     signal.throwIfAborted();
+    // A narrow toolset is a promise, so re-apply it here: `delegate_task` and
+    // `ask_user` are registered after the constructor pruned, and a control
+    // session that still offers `delegate_task` will delegate instead of click.
+    if (this.toolset === "computer") keepComputerTools(this.tools);
     const handsOnly = this.toolset === "computer";
+    const canSeeScreen = this.tools.has("computer");
     if (!handsOnly) for (const tool of planTools(messages)) this.tools.set(tool.name, tool);
     for (const tool of attachImageTools(messages, this.config.workspace)) this.tools.set(tool.name, tool);
-    // Control sessions see what they just captured: a screenshot that needs a
-    // second `attach_image` call is two round trips per look, and the model
-    // spends them wondering whether the picture ever arrived.
-    if (handsOnly && !this.screenshotVision) {
+    // Whoever can take a screenshot sees what they just captured: a picture that
+    // needs a second `attach_image` call is two round trips per look, and the
+    // model spends them wondering whether the image ever arrived. This only fires
+    // when a screenshot was actually taken — ordinary turns still show no screen.
+    if (canSeeScreen && !this.screenshotVision) {
       this.screenshotVision = true;
       attachScreenshotsDirectly(this.tools, messages, this.config.workspace);
     }

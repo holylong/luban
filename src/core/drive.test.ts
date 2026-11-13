@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DRIVE_PROTOCOL, DriveSession, describeAction, screenshotPath, type DriveEvent } from "./drive";
+import { DRIVE_PROTOCOL, DriveSession, describeAction, screenIntent, screenshotPath, type DriveEvent } from "./drive";
 import type { AgentEvent, ChatMessage } from "./types";
 
 const homes: string[] = [];
@@ -67,10 +67,14 @@ describe("describeAction", () => {
     expect(DRIVE_PROTOCOL).toContain("windows");
     expect(DRIVE_PROTOCOL).toContain("点");
     expect(DRIVE_PROTOCOL).toContain("不是截图里的像素");
-    // One live run wasted 4 screenshots re-taking the picture it had already
-    // seen, and paid a round trip per digit button.
-    expect(DRIVE_PROTOCOL).toContain("不会互相改变布局");
-    expect(DRIVE_PROTOCOL).toContain("不要因为「我感觉没看到图」重复截图");
+    // A window you can talk to must not turn every request into screenshot
+    // analysis: documents use file tools, and a plain question uses nothing.
+    expect(DRIVE_PROTOCOL).toContain("read_file");
+    expect(DRIVE_PROTOCOL).toContain("直接回答，一个工具都不要调");
+    expect(DRIVE_PROTOCOL).toContain("不要截屏");
+    expect(DRIVE_PROTOCOL).toContain("不要改成 osascript");
+    // One live run wasted 4 screenshots re-taking the picture it had already seen.
+    expect(DRIVE_PROTOCOL).toContain("重复截同一块");
   });
 
   it("finds the screenshot path even when the result grew a sentence", () => {
@@ -79,6 +83,18 @@ describe("describeAction", () => {
     const result = `{\n  "path": ".luban/computer/shot-1.png",\n  "absolute": "/tmp/ws/.luban/computer/shot-1.png",\n  "bytes": 12\n}\n\n这张截图已经附在本次请求里：下一步的模型调用就能看到画面。`;
     expect(screenshotPath(result)).toBe("/tmp/ws/.luban/computer/shot-1.png");
     expect(screenshotPath("点击 (12, 34)")).toBeUndefined();
+  });
+
+  it("reserves eyes-and-hands for sentences about the screen", () => {
+    // Narrowing every turn to the computer tool is what turned a document
+    // request into screenshot analysis.
+    expect(screenIntent("在计算器里算 6*7")).toBe(true);
+    expect(screenIntent("帮我截个图看看屏幕上这个报错")).toBe(true);
+    expect(screenIntent("在访达里把那个文件夹拖到桌面")).toBe(true);
+    expect(screenIntent("把 meeting.md 整理成三条要点")).toBe(false);
+    expect(screenIntent("你叫什么名字？")).toBe(false);
+    expect(screenIntent("设个明天早上 8 点的闹钟叫我起床")).toBe(false);
+    expect(screenIntent("打开 README 看看写了什么")).toBe(false);
   });
 
   it("names non-computer tools by what they touch", () => {

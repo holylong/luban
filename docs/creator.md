@@ -35,7 +35,7 @@ npm run creator      # 启动造物主（菜单栏出现「待命 / 忙 / 未启
 
 ## 操控电脑（和派给后台任务不同）
 
-窗口最上面那个页签是**当下这一刻**的操控会话：一句自然语言 → 真的去点你的屏幕，跑完给你答案。它不是后台任务，也不排队，是一个 `luban drive` 子进程：
+窗口最上面那个页签是**当下这一刻**的操控会话：一句自然语言，它先判断该用哪种手，再动手。它不排队，是一个 `luban drive` 子进程：
 
 ```
 造物主窗口（输入框 / 动作时间线 / 截图缩略图 / 允许卡）
@@ -44,23 +44,21 @@ npm run creator      # 启动造物主（菜单栏出现「待命 / 忙 / 未启
 apps/creator/drive.cjs（派生子进程、逐行解析 JSON 事件）
         │
         ▼
-luban drive（只拿 computer / read_image / attach_image 的会话）
+luban drive（按句子分流：screenIntent ? 只有眼睛和手 : 全套工具）
         │
         ▼
 luban-computer 助手（CGEvent 点击、截屏）
 ```
 
-- **只有眼睛和手**：这个会话固定 `toolset: "computer"`，没有 `bash`、没有编辑器、也不加载 MCP 工具。实测反例：给足工具时模型会用 `bash` + `osascript` + PIL 猜坐标，一次都没点。
-- 先 `windows` 拿前台应用和每个窗口的 x/y/宽/高（单位是屏幕「点」），再 `screenshot`（结果里带 `origin`，屏幕坐标 = origin + 图内偏移），然后 `app` / `click` / `type` / `key`。
+- **不是每个指令都截屏**。分流规则（`screenIntent()`，有单测）：句子里在说屏幕上的东西（截屏/窗口/点击/计算器/访达/浏览器…）才走 `windows → screenshot → click`；其余走普通工具。
+  - 问一句「你叫什么名字」→ 一个工具都不调。
+  - 「把 meeting.md 整理成三条要点」→ 只用 `read_file` / `write_file`，0 张截图。
+  - 「设个明天早上 8 点的闹钟」→ 用 `osascript` 往「日历」「提醒事项」写，或者 `luban bot add --at …` 排后台任务；0 张截图。
+  - 屏幕任务这一轮**没有 bash**：给了 shell，模型会用 `osascript`、`pgrep`、PIL 量像素代替点击，一轮下来一次都没点。
+- 界面操作的顺序：`windows` 拿前台应用和每个窗口的 x/y/宽/高（屏幕「点」）→ `screenshot`（结果带 `origin`，屏幕坐标 = origin + 图内偏移）→ `app` / `click` / `type` / `key`。
 - 截图**自动**作为图片送进模型，不用再 `attach_image`；面板里每次 `screenshot` 都以缩略图贴在动作行下面。
 - 第一次动手前弹一张「允许」卡（覆盖本会话），之后不再逐次问；「停止」或 `⌘.` 立刻杀掉子进程。
 - 关窗口时子进程一起停；窗口重开时会把子进程已产生的事件重新读回来。
-
-菜单栏：
-
-- 点击 = 显示/隐藏窗口。
-- 「让后台开始干活」= 手动拉起 worker。
-- 「允许的工具（permissions.json）」= 打开策略文件；「退出造物主（后台任务继续）」= 只退窗口。
 
 ## 无人值守的边界
 

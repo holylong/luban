@@ -69,7 +69,7 @@ export async function runDrive(argv: string[]): Promise<number> {
 
   const session = new DriveSession({ home: config.home, workspace, model: options.model, emit: write });
   await session.open();
-  write({ type: "status", text: "会话已就绪，说一句话试试：打开计算器并截图" });
+  write({ type: "status", text: "会话已就绪：说一句话就行——整理文档、设个闹钟，或者让我去操作屏幕" });
 
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   await pumpCommands(session, write, input, { workspace, model: config.model.id });

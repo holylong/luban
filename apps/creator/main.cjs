@@ -326,6 +326,36 @@ else {
           // The control panel is the point of this window, and a panel that only
           // renders is not the same as one that drives the machine: run a real
           // turn through the same bridge the 输入框 uses, then capture it.
+          // Types into the real composer like a person would: "does the window
+          // answer me" is a question about the renderer, not about the bridge.
+          if (process.env.CREATOR_SMOKE_UI) {
+            const typed = String(process.env.CREATOR_SMOKE_UI);
+            const uiShot = smokePath.replace(/\.png$/u, "-ui.png");
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            const step = await window.webContents.executeJavaScript(`(async () => {
+              const box = document.querySelector(".drive-composer textarea");
+              if (!box) return { error: "窗口里没有输入框" };
+              box.focus();
+              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+              setter.call(box, ${JSON.stringify(typed)});
+              box.dispatchEvent(new Event("input", { bubbles: true }));
+              await new Promise(resolve => setTimeout(resolve, 250));
+              const button = [...document.querySelectorAll(".drive-composer button")].find(node => String(node.className).includes("send"));
+              if (!button) return { error: "没有发送按钮", typed: box.value };
+              button.click();
+              return { typed: box.value, disabled: button.disabled === true };
+            })()`);
+            const readLog = () => window.webContents.executeJavaScript("document.querySelector('.drive-log') ? document.querySelector('.drive-log').innerText : ''");
+            let logText = "";
+            for (let i = 0; i < 90; i++) {
+              await sleep(1000);
+              logText = await readLog();
+              if (/结束|没有正常结束/.test(logText)) break;
+            }
+            require("node:fs").writeFileSync(uiShot, (await window.webContents.capturePage()).toPNG());
+            require("node:fs").writeFileSync(uiShot.replace(/\.png$/u, ".txt"), String(logText));
+            require("node:fs").writeFileSync(uiShot.replace(/\.png$/u, ".json"), JSON.stringify({ step, logText }, null, 2));
+          }
           if (process.env.CREATOR_SMOKE_DRIVE) {
             const prompt = process.env.CREATOR_SMOKE_DRIVE === "1"
               ? "在计算器里算 6*7，把屏幕上的结果显示给我"

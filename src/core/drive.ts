@@ -134,6 +134,7 @@ export class DriveSession {
   private readonly approvalTimeoutMs: number;
   private config?: LubanConfig;
   private runner?: DriveRunner;
+  private runnerMode: "all" | "computer" = "all";
   private messages: ChatMessage[] = [];
   private readonly pending = new Map<string, PendingApproval>();
   private thinking = "";
@@ -222,7 +223,7 @@ export class DriveSession {
     if (!prompt) return;
     if (!this.config) throw new Error("会话还没打开");
     if (this.busy) throw new Error("上一个任务还在执行，先停止或等它结束");
-    const runner = this.ensureRunner();
+    const runner = this.ensureRunner(screenIntent(prompt) ? "computer" : "all");
     const id = `turn-${++this.turns}`;
     const controller = new AbortController();
     this.controller = controller;
@@ -256,8 +257,16 @@ export class DriveSession {
     };
   }
 
-  private ensureRunner(): DriveRunner {
-    if (this.runner) return this.runner;
+  private ensureRunner(mode: "all" | "computer" = "all"): DriveRunner {
+    if (this.runner && this.runnerMode === mode) return this.runner;
+    // Screen work and desk work want different hands, and the runner owns its
+    // tool map: "open the calculator" gets eyes and hands only (a shell there
+    // turns into osascript guessing), everything else keeps the full toolbox.
+    if (this.runner) {
+      try { this.runner.close(); } catch { /* a closed runner is the goal */ }
+      this.runner = undefined;
+    }
+    this.runnerMode = mode;
     const config = this.config;
     if (!config) throw new Error("会话还没打开");
     if (this.options.createRunner) {
@@ -267,11 +276,15 @@ export class DriveSession {
     // The window is the consent surface, so this session never inherits a
     // global "allow everything": clicks ask here even when the CLI is in AUTO.
     const sessionConfig = { ...config, permissionMode: "edits" as const, permissions: { allow: [], deny: config.permissions?.deny ?? [] } };
-    this.runner = new AgentRunner(sessionConfig, undefined, undefined, 0, { toolset: "computer" }) as unknown as DriveRunner;
+    this.runner = new AgentRunner(sessionConfig, undefined, undefined, 0, { toolset: mode }) as unknown as DriveRunner;
     return this.runner;
   }
 
+  /** MCP wiring是终端里的信息，不是「替我做这件事」的画面：窗口里不显示。 */
+  private static readonly QUIET_STATUS = /^(Connected \d+ MCP tools|MCP 工具已注册)/;
+
   private onAgentEvent(event: AgentEvent): void {
+    if (event.type === "status" && DriveSession.QUIET_STATUS.test(event.text)) return;
     if (event.type === "delta") { this.flushThinking(); this.emit({ type: "text", text: event.text }); return; }
     if (event.type === "thinking-delta") { this.pushThinking(event.text); return; }
     if (event.type === "status" && !event.progress) { this.emit({ type: "status", text: event.text }); return; }
@@ -378,21 +391,35 @@ const DRIVE_IDENTITY = "造物主 (the creator of this workspace)";
 const THINKING_HOLD_MS = 260;
 
 /**
- * The control session's whole job is eyes and hands, so say so in the prompt
- * too: the toolset already removed bash, but a model told to "operate the
- * computer" will still write a script in its head unless the loop is spelled
- * out — look, act, look again.
+ * A window you can talk to is not a screenshot pipeline. The model keeps the
+ * ordinary tools — files, documents, commands — and only reaches for the screen
+ * when the task is actually about what is on it. Earlier this session was pinned
+ * to the computer tool alone, and then "帮我整理这份文档" came back as a
+ * screenshot analysis, which is both slower and useless.
  */
+/**
+ * Does this sentence ask about what is on the screen? Only then is the turn
+ * narrowed to eyes and hands — "整理这份文档" wants files, "设个明早 8 点的
+ * 闹钟" wants a shell command, and neither should cost a screenshot.
+ */
+const SCREEN_TERMS = /(截屏|截图|屏幕|窗口|界面|光标|鼠标|点击|点一下|点开|双击|右键|拖动|滚动|按钮|菜单|弹窗|表单|输入框|计算器|日历|备忘录|提醒事项|访达|finder|safari|chrome|浏览器|微信|飞书|钉钉|系统设置|网易云|播放器|vscode|excel|word|numbers|pages|keynote|preview)/i;
+
+export function screenIntent(text: string): boolean {
+  return SCREEN_TERMS.test(text);
+}
+
 export const DRIVE_PROTOCOL = [
-  "这个会话用来「操控这台电脑」：你只有眼睛和手，没有终端，也没有编辑器。",
-  "每一步按这个循环做：",
-  "1. computer {action:\"windows\"} —— 看前台应用、屏幕上每个窗口的 x/y/宽/高，以及屏幕尺寸。",
-  "2. computer {action:\"screenshot\"} —— 看画面。截出来的图会自动附在本次请求里，你下一次就能直接看到，不用再调 attach_image。",
-  "3. 动手：app 打开应用、click 点按钮、type 往输入框写字、key 提交、scroll 滚动。",
-  "坐标已经算好、而且这些动作不会互相改变布局时（比如连点计算器的数字键），可以在同一条回复里连续发多个 computer，不必一次一个来回。拿不准就先做一个再看。",
-  "键盘不总是可靠：计算器这类用按钮的数字键盘，点按钮比 type 更准；type 适合文本框。",
-  "4. 做完再截一次图确认结果，然后才回答用户。",
-  "截图一定送到了：tool 结果后面写着「已经附在本次请求里」，你就已经看过这张图。不要因为「我感觉没看到图」重复截图——那只会拖慢自己；真的看不清就给 screenshot 加 region:{x,y,width,height} 放大一小块。",
-  "坐标规则：所有坐标都是屏幕「点」，不是截图里的像素。截图返回的 screen 是点尺寸，pixels 通常是它的 2 倍；windows 给的窗口位置和大小已经是点。",
-  "别猜坐标：先 windows 拿到窗口范围，再在范围内点；点偏了就看截图重新算。",
+  "你是造物主，坐在这台 Mac 前面替用户办事。先规划再动手：想清楚这件事该用什么手段，只调真正需要的那一个。",
+  "- 只是问一句、要个解释或意见：直接回答，一个工具都不要调。",
+  "- 文档、代码、文件、命令、查资料：用普通工具（read_file / write_file / bash 等），和终端里一样干活，不要截屏。",
+  "- 定时、提醒、闹钟：用命令把事排进系统，不要盯着屏幕看。例如「明天早上 8 点叫我」→ bash 执行 osascript 往「日历」或「提醒事项」里写一条带提醒的事件（到点系统自己弹），或者 luban bot add --at <ISO 时间> \"提醒我…\" 排一条后台任务；回答里写清你排了什么、几点响。",
+  "- 只有「屏幕上的东西」才用 computer：要打开某个应用去看、点按钮、在只有界面的地方操作。这时你只有眼睛和手。",
+  "真要操作界面时：",
+  "1. computer {action:\"windows\"} 拿前台应用和每个窗口的 x/y/宽/高（单位是屏幕「点」）。",
+  "2. computer {action:\"screenshot\"} 看画面。图会自动附在本次请求里，下一次就能看到，不用再 attach_image。",
+  "3. 动手：app 打开应用、click 点、type 写字、key 提交、scroll 滚动。坐标已经算好、动作之间又不改变布局时，可以在一条回复里连发多个动作。",
+  "4. 做完再截一次图确认结果，然后回答。",
+  "坐标规则：都用屏幕「点」，不是截图里的像素。截图结果里的 origin 是这张图左上角在屏幕上的位置，屏幕坐标 = origin + 图内偏移。",
+  "屏幕上要点的东西用 computer 点，不要改成 osascript / 截图量像素去猜。",
+  "截图一定送到了：不要因为「感觉没看到图」重复截同一块；看不清就用 screenshot 加 region 放大。",
 ].join("\n");
