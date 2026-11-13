@@ -1,3 +1,22 @@
+## 2.4.5 — 2026-11-13
+
+- 造物主变成独立常驻程序（`apps/creator/`，`npm run creator`），不再依附桌面工作台：菜单栏一个入口，点开是自己的窗口——派任务、看进度、看结果，没有项目树/编辑器/预览。
+  - `apps/creator/main.cjs`：Electron 托盘应用。工具栏文字形状态项（待命/忙/未启动）、关窗即隐藏、单实例、`app.dock.hide()`，窗口关闭不影响后台任务；菜单可手动拉起 worker、打开队列目录、打开 `permissions.json`、退出造物主。
+  - `apps/creator/bot.cjs`：只读队列（`request.json` / `state.json` / `cancel` 标记）+ 经 `luban bot add|cancel|permissions` 写入，绝不另造一套格式；`ensureWorker()` 在无 LaunchAgent 时以 `detached` 拉起 `luban bot run`，已有系统托管时不抢锁；`workerStatus()` 用锁目录 pid 判活、用 `status.json` 心跳判「卡住」。
+  - `src/web/client/creator.{html,tsx,css}`：Vite 第三个入口。`现在 / 定时 / 每隔 N 分钟` 派发，`进行中 / 结果 / 授权` 三个页签，结果用 Markdown 渲染（沿用 2.4.4 的分节规则），授权页列出被拒绝的调用与参数。
+  - `npm run smoke:creator`：真 Electron 渲染并截图，同时断言窗口文本里出现队列中的任务，防止「有像素没内容」。
+- 文档新增 `docs/creator.md`：构架、用法、无人值守的授权边界（精确 args 授权，`bash` 无法用一条授权覆盖，需要新增窄工具）、定时语义与失败不重放。
+- 新增 `apps/creator/bot.test.mjs`（5 例）：队列排序/无状态按排队/取消标记优先/worker 停-活-卡住/经 CLI 落盘与 60s 下限。
+
+## 2.4.4 — 2026-11-13
+
+- 修掉「桌面版右侧回复/结论就是一坨文字」：`src/web/client/markdown.tsx` 以前把整段合并成一个 `<p>`，现在按模型真实的写作习惯分块。
+  - `**契约**：正文` 这种加粗引导语识别成小节标题（`h3.md-lead`），正文另起一段——回复第一次有了主次；`**契约**（`path.ts`）：…` 里的括注渲染成标题旁的小字，不再孤立地悬在段首。
+  - 段落内换行遇到句末标点（。！？；…!?;:）就断开成新段落，所以「一句一行」的回答不再被拼成一行；加粗整句（如 `**是的，可以。**`）仍按强调处理，不会被误升级成标题。
+  - 折行拼接按语言决定空格：中文之间不加空格（以前是「修复了 A。 修复了 B。」这种夹着空格的一坨），英文单词之间仍保留空格。
+- 排版：`.md p` 行高 1.75（窄栏 1.8）、段间距 8px、`li` 行高 1.7；`.md-lead` 用主题主色、上间距 13px，标题与其正文之间收 2px。
+- 新增 `src/web/client/markdown.test.tsx`（7 例），用真实 job 结果里出现的写法覆盖上述规则；把 `markdown.tsx` 回退到上一版后其中 5 例变红。
+
 ## 2.4.3 — 2026-11-13
 
 - 修掉「终端里跑的任务弹 ask_user，手机上只看到提问、没法选也没法输入，两边一起卡住」：

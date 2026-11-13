@@ -127,6 +127,42 @@ function codeBlock(code: string, language: string, key: string): React.ReactElem
   );
 }
 
+/** Lines that open a block of their own; a paragraph never swallows them. */
+const BLOCK_START = /^\s*(?:```|#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\|)/u;
+
+/** A line ending like this finishes an idea, so the next line starts a block. */
+const ENDS_SENTENCE = /[。！？…；!?;:]\s*$/u;
+
+const CJK_CHAR = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]/u;
+
+/**
+ * `**契约**：正文` on one line. A bold lead-in is the section label a model uses
+ * where it would otherwise write a Markdown heading, so it renders as a heading
+ * with its prose underneath instead of bold text buried in a paragraph.
+ */
+function labelOf(line: string): [string, string, string] | null {
+  const match = /^\*\*([^*\n]{1,40})\*\*\s*[:：]?\s*(.*)$/u.exec(line);
+  if (!match) return null;
+  const label = (match[1] ?? "").trim();
+  // A bold sentence is emphasis, not a label.
+  if (!label || /[。！？!?，,]$/u.test(label)) return null;
+  let rest = (match[2] ?? "").trim();
+  // "**契约**（`path.ts`）：…" — the parenthetical qualifies the label, so it sits
+  // beside the heading and the prose below starts on its own sentence.
+  let note = "";
+  const aside = /^[（(]([^）)]{1,60})[）)]\s*[:：]?\s*/u.exec(rest);
+  if (aside) { note = (aside[1] ?? "").trim(); rest = rest.slice(aside[0].length).trim(); }
+  return [label, note, rest];
+}
+
+/** Join wrapped lines: Chinese needs no space, Latin words do. */
+function joinLines(left: string, right: string): string {
+  if (!left) return right;
+  const last = left.at(-1) ?? "";
+  const first = right[0] ?? "";
+  return CJK_CHAR.test(last) && CJK_CHAR.test(first) ? left + right : `${left} ${right}`;
+}
+
 /**
  * Render a bounded subset of Markdown as React elements.
  *
@@ -213,13 +249,33 @@ export const Markdown = React.memo(function Markdown({ text }: { text: string })
       continue;
     }
 
+    // A paragraph is a run of plain lines. Models write one idea per line and
+    // lead it with a bold label ("**契约**：…"), so a line that ends a sentence —
+    // or a line that opens a label — starts a new block. Joining all of it with
+    // spaces is what turned a whole answer into one grey block of text.
     const paragraph: string[] = [];
-    while (index < lines.length && lines[index]!.trim() && !/^\s*(```|#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\|)/u.test(lines[index]!)) {
-      paragraph.push(lines[index]!);
+    while (index < lines.length) {
+      const current = lines[index]!;
+      if (!current.trim() || BLOCK_START.test(current)) break;
+      if (paragraph.length && (ENDS_SENTENCE.test(paragraph.at(-1)!) || labelOf(current))) break;
+      paragraph.push(current);
       index += 1;
     }
-    if (paragraph.length) blocks.push(<p key={`b${key++}`}>{inline(paragraph.join(" "), `p${key}`)}</p>);
-    else { blocks.push(<p key={`b${key++}`}>{inline(line, `p${key}`)}</p>); index += 1; }
+    if (!paragraph.length) { paragraph.push(line); index += 1; }
+    const text = paragraph.reduce(joinLines, "");
+    const label = labelOf(text);
+    if (label) {
+      const [heading, note, rest] = label;
+      blocks.push(
+        <h3 className="md-lead" key={`b${key++}`}>
+          {inline(heading, `l${key}`)}
+          {note ? <span className="md-lead-note"> {inline(note, `n${key}`)}</span> : null}
+        </h3>,
+      );
+      if (rest) blocks.push(<p key={`b${key++}`}>{inline(rest, `p${key}`)}</p>);
+    } else {
+      blocks.push(<p key={`b${key++}`}>{inline(text, `p${key}`)}</p>);
+    }
   }
 
   return <div className="md">{blocks}</div>;

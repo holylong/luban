@@ -24,11 +24,13 @@ export default defineConfig({
     sourcemap: false,
     chunkSizeWarningLimit: 900,
     rollupOptions: {
-      // Two independent pages: the desktop workbench and the phone console.
+      // Independent pages: the desktop workbench, the phone console and 造物主.
       // They share the components they can, but neither has to carry the other.
       input: {
         main: resolve(root, "src/web/client/index.html"),
         mobile: resolve(root, "src/web/client/mobile.html"),
+        // 造物主: a resident tray app page, not part of the workbench.
+        creator: resolve(root, "src/web/client/creator.html"),
       },
       output: {
         entryFileNames: "assets/[name]-[hash].js",

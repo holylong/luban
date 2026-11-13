@@ -125,6 +125,11 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-agent .msg { margin-bottom: 11px; }
 .desktop-agent .result { padding: 10px 12px; }
 .desktop-agent .md-table { margin: 6px 0; }
+/* The right column is narrow: a label row plus roomier paragraph leading is what
+   keeps a five-section conclusion readable instead of one block of grey text. */
+.desktop-agent .md .md-lead { margin: 11px 0 3px; font-size: 13px; }
+.desktop-agent .md p { line-height: 1.8; }
+.desktop-agent .result .md-lead { color: var(--primary, var(--fg)); }
 .desktop-agent .composer-wrap { flex: none; padding: 6px 8px; }
 /* A 164px-tall empty composer ate a quarter of the column. One compact box: tighter
    text box, single chip row wrapping only when the column is narrow. */

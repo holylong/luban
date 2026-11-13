@@ -215,11 +215,17 @@ a { color: var(--blue); }
 /* Markdown ------------------------------------------------------------- */
 .md > *:first-child { margin-top: 0; }
 .md > *:last-child { margin-bottom: 0; }
-.md p { margin: 6px 0; }
+.md p { margin: 8px 0; line-height: 1.75; }
 .md h1, .md h2, .md h3, .md h4 { margin: 14px 0 6px; line-height: 1.3; }
 .md h1 { font-size: 19px; } .md h2 { font-size: 17px; } .md h3 { font-size: 15px; } .md h4 { font-size: 14px; }
+/* A bold lead-in ("**契约**：…") is the model's section label. Giving it a row of
+   its own is what turns a wall of prose into an answer with visible structure. */
+.md .md-lead { margin: 13px 0 4px; font-size: 13.5px; font-weight: 650; line-height: 1.4; color: var(--primary, var(--fg)); }
+.md .md-lead-note { color: var(--muted); font-weight: 400; font-size: 12px; }
+.md > .md-lead:first-child { margin-top: 0; }
+.md .md-lead + p { margin-top: 2px; }
 .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
-.md li { margin: 2px 0; }
+.md li { margin: 3px 0; line-height: 1.7; }
 .md blockquote { margin: 8px 0; padding: 2px 12px; border-left: 2px solid var(--line); color: var(--muted); }
 .md code.inline { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 4px; padding: 1px 5px; font: 12px var(--mono); }
 .md pre { margin: 8px 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: auto; }

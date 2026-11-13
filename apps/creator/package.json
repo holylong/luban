@@ -1,0 +1,6 @@
+{
+  "name": "luban-creator",
+  "private": true,
+  "productName": "造物主",
+  "main": "main.cjs"
+}

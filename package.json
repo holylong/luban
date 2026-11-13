@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.4.3",
+  "version": "2.4.5",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -27,8 +27,10 @@
     "build": "node scripts/build.mjs",
     "start": "node dist/cli.js",
     "desktop": "electron apps/desktop",
+    "creator": "electron apps/creator",
     "test": "vitest run",
     "smoke:desktop": "npm run build && node scripts/smoke-desktop-windows.cjs",
+    "smoke:creator": "node scripts/smoke-creator.mjs",
     "release": "node scripts/release.mjs",
     "test:release": "node --test scripts/release.test.mjs",
     "eval": "tsx src/evals/run.ts",
