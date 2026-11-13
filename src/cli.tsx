@@ -951,7 +951,7 @@ async function main(): Promise<number> {
     // trailing newline, so it redraws in place. terminalOutput turns fixed-height
     // frame erases into row updates on all TTYs, without requiring DECSET 2026.
     traceBoot("render");
-    const instance = render(React.createElement(App, { config, mesh, resume, mobileLink, subscribeRelayLog }), { stdout: mascotOutput(terminalOutput(process.stdout)), exitOnCtrlC: false, incrementalRendering: false });
+    const instance = render(React.createElement(App, { config, mesh, resume, mobileLink, subscribeRelayLog, questions, approvals }), { stdout: mascotOutput(terminalOutput(process.stdout)), exitOnCtrlC: false, incrementalRendering: false });
     await instance.waitUntilExit();
     return 0;
   } catch (error) {

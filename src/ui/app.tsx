@@ -9,6 +9,8 @@ import { AgentInbox } from "../core/inbox.js";
 import { probeMcpServer } from "../core/mcp.js";
 import { describeMcpFlags, describeMcpTransport, mcpServerEntries, patchMcpServer, removeMcpServer, type McpServerEntry } from "../core/mcp-settings.js";
 import type { UserQuestion } from "../core/question.js";
+import type { ApprovalBroker } from "../web/approval.js";
+import type { QuestionBroker } from "../web/question.js";
 import { planVerificationStatus, readPlan, readVerifications } from "../core/plan.js";
 import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
 import { isFreeTierError, isModelTimeoutError, isUpstreamUnavailableError } from "../core/model-errors.js";
@@ -330,6 +332,10 @@ export interface AppProps {
   /** Relay reconnects arrive here instead of Ink's console, which would erase
    * and repaint the whole frame (a visible flash on a remote terminal). */
   subscribeRelayLog?: (listener: (message: string) => void) => () => void;
+  /** Shared with the web server so a phone watching this session can answer a
+   * question or an approval the terminal is showing (see askUser/approveTool). */
+  questions?: QuestionBroker;
+  approvals?: ApprovalBroker;
 }
 
 
@@ -737,7 +743,7 @@ export function SelectDialog({
   );
 }
 
-export function App({ config: initialConfig, mesh, resume, initialPrompt, mobileLink, subscribeRelayLog }: AppProps) {
+export function App({ config: initialConfig, mesh, resume, initialPrompt, mobileLink, subscribeRelayLog, questions, approvals }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { stdin } = useStdin();
@@ -1591,20 +1597,37 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const approveTool = (tool: ToolDefinition, args: Record<string, unknown>): Promise<Approval> => new Promise((resolveApproval) => {
     // Approval always brings details forward so the user sees what is asked.
     setShowDetails(true);
-    setApproval({ tool, args, resolve: resolveApproval });
+    // Same bridge as ask_user: a phone watching this session gets the prompt and
+    // whichever side decides first closes the other.
+    const published = approvals?.open(sessionRef.current.id, tool, args);
+    void published?.decision.then(decision => finish(decision), () => undefined);
+    function finish(decision: Approval): void {
+      published?.close();
+      setApproval(null);
+      resolveApproval(decision);
+    }
+    setApproval({ tool, args, resolve: finish });
   });
 
   const askUser = (question: UserQuestion, signal: AbortSignal): Promise<string> => new Promise((resolveQuestion, rejectQuestion) => {
     if (signal.aborted) { rejectQuestion(new Error("question aborted")); return; }
     setShowDetails(true);
     setQuestionDraft("");
-    const abort = () => { setQuestionRequest(null); rejectQuestion(new Error("question aborted")); };
+    // A phone watching this session sees the same question through the web
+    // broker and can answer it; whichever side answers first closes the other,
+    // so a terminal left unattended is not a dead end.
+    const published = questions?.open(sessionRef.current.id, question, signal);
+    // `answer` rejects when the terminal answers first; that is the normal path.
+    void published?.answer.then(answer => finish(answer), () => undefined);
+    const abort = () => { published?.close(); setQuestionRequest(null); rejectQuestion(new Error("question aborted")); };
     const finish = (answer: string) => {
+      published?.close();
       signal.removeEventListener("abort", abort);
       setQuestionRequest(null);
       resolveQuestion(answer);
     };
     const reject = (error: Error) => {
+      published?.close();
       signal.removeEventListener("abort", abort);
       setQuestionRequest(null);
       rejectQuestion(error);

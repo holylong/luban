@@ -16,8 +16,17 @@ export interface ApprovalRequestView {
 
 interface Waiter {
   view: ApprovalRequestView;
-  timer: NodeJS.Timeout;
+  /** Only browser-owned requests time out; a terminal prompt closes itself. */
+  timer?: NodeJS.Timeout;
   resolve: (decision: ApprovalDecision) => void;
+}
+
+/** An approval published by a terminal that answers it in its own dialog. */
+export interface OpenApproval {
+  id: string;
+  decision: Promise<ApprovalDecision>;
+  /** Withdraw the browser copy, e.g. because the terminal answered. */
+  close(): void;
 }
 
 /**
@@ -33,22 +42,43 @@ export class ApprovalBroker {
   constructor(private readonly timeoutMs = 300_000) {}
 
   request(jobId: string, tool: ToolDefinition, args: Record<string, unknown>): Promise<ApprovalDecision> {
-    return new Promise<ApprovalDecision>((resolve) => {
-      const id = `ask-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-      const view: ApprovalRequestView = {
-        id, job_id: jobId, tool: tool.name,
-        description: tool.description || tool.name,
-        once_only: tool.approvalOnceOnly,
-        risk: tool.risk, args,
-        created_at: Date.now() / 1000,
-      };
-      const timer = setTimeout(() => this.settle(id, "deny"), this.timeoutMs);
-      timer.unref?.();
-      this.waiters.set(id, { view, timer, resolve });
-      const queue = this.byJob.get(jobId) ?? [];
-      queue.push(id);
-      this.byJob.set(jobId, queue);
-    });
+    const opened = this.open(jobId, tool, args);
+    const timer = setTimeout(() => this.settle(opened.id, "deny"), this.timeoutMs);
+    timer.unref?.();
+    const waiter = this.waiters.get(opened.id);
+    if (waiter) waiter.timer = timer;
+    else clearTimeout(timer);
+    return opened.decision;
+  }
+
+  /**
+   * Publish a prompt a terminal is already showing, so a phone watching the
+   * session can answer it. No timeout: the terminal's own dialog owns the
+   * lifetime, and `close()` takes the browser copy back.
+   */
+  open(jobId: string, tool: ToolDefinition, args: Record<string, unknown>): OpenApproval {
+    const id = `ask-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    const view: ApprovalRequestView = {
+      id, job_id: jobId, tool: tool.name,
+      description: tool.description || tool.name,
+      once_only: tool.approvalOnceOnly,
+      risk: tool.risk, args,
+      created_at: Date.now() / 1000,
+    };
+    let settleDecision: (decision: ApprovalDecision) => void = () => undefined;
+    const decision = new Promise<ApprovalDecision>((resolve) => { settleDecision = resolve; });
+    this.waiters.set(id, { view, resolve: settleDecision });
+    const queue = this.byJob.get(jobId) ?? [];
+    queue.push(id);
+    this.byJob.set(jobId, queue);
+    return {
+      id,
+      decision,
+      close: () => {
+        if (!this.waiters.has(id)) return;
+        this.settle(id, "deny");
+      },
+    };
   }
 
   pending(jobId?: string): ApprovalRequestView[] {
@@ -77,7 +107,7 @@ export class ApprovalBroker {
     const waiter = this.waiters.get(id);
     if (!waiter) return;
     this.waiters.delete(id);
-    clearTimeout(waiter.timer);
+    if (waiter.timer) clearTimeout(waiter.timer);
     const queue = this.byJob.get(waiter.view.job_id);
     if (queue) {
       const index = queue.indexOf(id);

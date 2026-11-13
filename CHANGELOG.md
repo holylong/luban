@@ -1,3 +1,13 @@
+## 2.4.3 — 2026-11-13
+
+- 修掉「终端里跑的任务弹 ask_user，手机上只看到提问、没法选也没法输入，两边一起卡住」：
+  - `QuestionBroker` 新增 `open(jobId, question, signal?)`，返回 `{ id, answer, close }`——终端保留自己的输入框，同时把同一个提问发布到 Web 广播；`request()` 改为基于它实现，行为不变。
+  - `ApprovalBroker` 同样新增 `open(jobId, tool, args)`（终端版不带 600s 超时，由终端弹窗决定生命周期），`request()` 依旧带超时。
+  - TUI 的 `askUser` / `approveTool` 现在优先广播：手机「交互」页出现同样的选项与「允许一次 / 本会话允许 / 拒绝」，**先回答的一方生效**，另一端的弹窗自动收起；终端作答时 `close()` 撤回手机那份，反之手机作答直接让终端那一轮继续跑。
+  - `cli.tsx` 把 TUI 已有的两个 broker 注入 `App`（Web/中继没开时传空，纯终端行为与之前一致）。
+- 新增 `src/ui/app-question-bridge.test.tsx`（真实 TUI + mock runner）：手机替终端回答 `ask_user` → 运行继续且广播清空；终端按 `1` 作答 → 手机那份同时被撤回；手机拒绝终端等待的审批 → 审批回调收到 `deny`。`src/web/question.test.ts` 增加 3 例（发布即出现在 `pending`、所有者先答时 `close()` 撤回、任务中断时自动移除）。
+- 文档：`docs/reference.md` 的 Web 工作台与 API 表补说明（`/api/questions`、终端任务可被手机接答）。
+
 ## 2.4.2 — 2026-11-13
 
 - 讲清并落实平台边界：电脑操控只做 macOS。新增 `computerSupported()`（`src/core/computer.ts`）作为唯一判断点——`begin()` / `act()` / `screenshot()` / `checkPermissions()` 在非 macOS 直接抛「只支持 macOS（当前是 linux）」这种一句话错误，不再让模型看到 `swiftc: command not found`；`createTools()` 在非 macOS **不注册** `computer` 工具；`POST /api/computer` 开启请求返回 400；TUI `/computer` 先说明原因再返回；客户端药丸本来就只在 `platform === "darwin"` 时渲染。

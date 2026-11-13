@@ -148,6 +148,7 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
 - Web 端交互审批：写文件、shell、网络工具会在此页面等待允许/拒绝，审批内容含工具名、风险与参数；`--web-port` 同时把审批带到浏览器。
 - `web`/`serve` 守护模式，或让 TUI 通过 `--web-port` 同进程提供 Web 服务。
 - 手机远控：同一局域网可直连电脑，异地可通过公网中继与节点拨出隧道；Android APK 或浏览器 `/m/` 控制台都能下发指令、看实时状态、审批与取消。
+- 终端里的任务也能被手机接答：TUI 弹 `ask_user` 或工具审批时，同一个提问会发布到 Web 的 `QuestionBroker` / `ApprovalBroker`，手机「交互」页立刻能看到并作答/批准，先答的一方生效、另一边的弹窗自动消失（不再出现“手机上只看到提问、没法点”的死等）。
 
 ### 桌面工作台
 
@@ -958,7 +959,8 @@ luban ./demo --web-port 8642
 | POST | `/api/ping`、`/api/status`、`/api/handoff` | 节点诊断和任务交接 |
 | GET | `/api/events` | SSE 事件流：job、job-log、job-event、peer、chat |
 | GET | `/api/jobs/:id/stream?since=N` | 结构化事件重放（每个事件带单调 `seq`） |
-| GET/POST | `/api/approvals` | 查询/答复浏览器交互审批 |
+| GET/POST | `/api/approvals` | 查询/答复浏览器交互审批（含终端里正在等待的审批） |
+| GET/POST | `/api/questions` | 查询/答复 `ask_user` 提问（含终端里正在等待的提问） |
 | GET | `/api/file`、`/api/file-versions` | 读取工作区文件与 Git HEAD 版本 |
 | GET | `/api/diff`、`/api/sessions`、`/api/sessions/:id` | Git 变更、会话列表与会话详情 |
 
