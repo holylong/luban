@@ -10,11 +10,12 @@ import { ensureElectron } from "./lib/release-network.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** @type {Record<string, string>} */
 const aliases = { linux: "linux", windows: "windows", win32: "windows", macos: "macos", mac: "macos", darwin: "macos" };
-const help = `Usage: npm run release -- [--platform auto|linux|windows|macos] [--kind all|cli|desktop|exe|setup] [--dry-run]
+const help = `Usage: npm run release -- [--platform auto|linux|windows|macos] [--kind all|cli|desktop|creator|exe|setup] [--dry-run]
 
-Defaults: current OS, CLI and Desktop. Outputs go to release/ with SHA-256 checksums.
+Defaults: current OS, CLI + Desktop (+ 造物主 on macOS). Outputs go to release/ with SHA-256 checksums.
 Windows defaults to portable ZIPs. Experimental EXE/setup builds require explicit --kind exe/setup.
-macOS Desktop prefers a .dmg image and falls back to a .zip when hdiutil fails.
+macOS Desktop and 造物主 prefer a .dmg image and fall back to a .zip when hdiutil fails.
+造物主 is macOS-only for now; other platforms build cli and desktop only.
 Build on the target OS using its native Node architecture; cross-compilation is not supported.
 Install dependencies with npm ci first. No git changes, tags, or uploads are performed.
 `;
@@ -64,14 +65,16 @@ export function releasePlan(args, host = process.platform, arch = process.arch, 
   }
   platform = platform === "auto" ? aliases[host] : aliases[platform];
   if (!platform || typeof platform !== "string") throw new Error("Unsupported platform; choose linux, windows, or macos");
-  if (!["all", "cli", "desktop", "exe", "setup"].includes(kind)) throw new Error("--kind must be all, cli, desktop, exe, or setup");
+  if (!["all", "cli", "desktop", "creator", "exe", "setup"].includes(kind)) throw new Error("--kind must be all, cli, desktop, creator, exe, or setup");
   if (platform !== aliases[host]) throw new Error(`Build ${platform} on a ${platform} host; cross-compilation is not supported`);
   if (!(platform === "windows" ? ["x64"] : ["x64", "arm64"]).includes(arch)) {
     throw new Error(`Unsupported architecture: ${platform}/${arch}`);
   }
   // The installer wraps the Windows single-file build, so it has no peer elsewhere.
   if (["exe", "setup"].includes(kind) && platform !== "windows") throw new Error("--kind exe/setup is Windows-only; use cli or desktop elsewhere");
-  const kinds = kind === "all" ? ["cli", "desktop"] : [kind];
+  // 造物主 is packaged by scripts/package-macos.mjs only; other platforms have no packager yet.
+  if (kind === "creator" && platform !== "macos") throw new Error("--kind creator is macOS-only for now; use cli or desktop on this platform");
+  const kinds = kind === "all" ? (platform === "macos" ? ["cli", "desktop", "creator"] : ["cli", "desktop"]) : [kind];
   /** @typedef {{name: string, fallback: string | null}} Artifact */
   /** @type {Artifact[]} */
   const selected = [];
@@ -86,7 +89,7 @@ export function releasePlan(args, host = process.platform, arch = process.arch, 
       selected.push({ name: `luban-${item}-${version}-win-${arch}.zip`, fallback: null });
 
     } else {
-      const extension = item === "desktop" ? "dmg" : "zip";
+      const extension = item === "desktop" || item === "creator" ? "dmg" : "zip";
       const name = `luban-${item}-${version}-mac-${arch}.${extension}`;
       // macOS Desktop is built as a DMG first; package-macos.mjs writes the zip
       // when the image cannot be created, so checksumming follows what exists.
@@ -162,7 +165,7 @@ async function main() {
   // Electron 44 does not download its runtime during npm ci. CLI-only and
   // installer-only builds stay independent of Electron; desktop builds ensure
   // its native runtime.
-  if (plan.platform !== "windows" && (plan.kind === "all" || plan.kind === "desktop")) await ensureElectron(root);
+  if (plan.platform !== "windows" && ["all", "desktop", "creator"].includes(plan.kind)) await ensureElectron(root);
   const directory = join(root, "release");
   /** @type {Map<string, string|null>} */
   const before = new Map();

@@ -19,9 +19,11 @@ function homeDir(env = process.env) {
   return resolve(env.LUBAN_HOME || join(homedir(), ".luban"));
 }
 
-/** The built CLI is the only writer. Source checkouts must build first. */
+/** The built CLI is the only writer. Source checkouts must build first; a packaged
+ * 造物主 app points LUBAN_CLI at the CLI it carries in its own bundle. */
 function cliPath(repo = resolve(__dirname, "../..")) {
-  return join(repo, "dist", "cli.js");
+  const override = process.env.LUBAN_CLI;
+  return override && existsSync(override) ? override : join(repo, "dist", "cli.js");
 }
 
 function queueDirectory(home) {

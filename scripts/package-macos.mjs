@@ -1,5 +1,5 @@
-/** Build self-contained macOS CLI and Desktop packages: Desktop prefers a DMG
- * image and falls back to a zip when the image cannot be created. */
+/** Build self-contained macOS CLI, Desktop and 造物主 packages: the two apps
+ * prefer a DMG image and fall back to a zip when the image cannot be created. */
 import { spawnSync } from "node:child_process";
 import {
   chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync,
@@ -15,9 +15,18 @@ const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).ver
 const architecture = { x64: "x64", arm64: "arm64" }[process.arch];
 const selection = process.argv[2] || "all";
 if (process.platform !== "darwin" || !architecture) throw new Error("package:macos requires macOS x64 or arm64");
-if (!["all", "cli", "desktop"].includes(selection)) throw new Error("choose all, cli, or desktop");
+if (!["all", "cli", "desktop", "creator"].includes(selection)) throw new Error("choose all, cli, desktop, or creator");
 
 const APP_NAME = "luban";
+
+/** Electron bundles share the bundled Node runtime and CLI but keep their own
+ * entry point, so luban.app and Luban Creator.app install side by side. */
+/** @typedef {{bundle: string, display: string, identifier: string, entry: string, title: string}} AppSpec */
+/** @type {Record<string, AppSpec>} */
+const APP_SPECS = {
+  desktop: { bundle: APP_NAME, display: APP_NAME, identifier: "com.luban.desktop", entry: "desktop", title: "luban" },
+  creator: { bundle: "Luban Creator", display: "造物主", identifier: "com.luban.creator", entry: "creator", title: "造物主" },
+};
 
 function run(label, command, args, cwd = root, capture = false) {
   process.stdout.write(`\n> ${label}\n`);
@@ -107,17 +116,19 @@ function movePath(from, to) {
 /** Desktop bundle: Electron runtime, the Electron entry in Resources/app, and the
  * bundled Node runtime plus CLI in Resources/node and Resources/luban. Nothing
  * lives outside the .app, so dragging it to /Applications keeps working. */
-function buildApp(payload) {
+function buildApp(payload, kind = "desktop") {
+  const spec = APP_SPECS[kind];
+  if (!spec) throw new Error(`unknown app kind: ${kind}`);
   const source = join(root, "node_modules", "electron", "dist", "Electron.app");
-  if (!existsSync(source)) throw new Error("Electron runtime missing; run `node node_modules/electron/install.js` before package:macos:desktop");
-  const bundle = join(payload, `${APP_NAME}.app`);
+  if (!existsSync(source)) throw new Error(`Electron runtime missing before package:macos:${kind}`);
+  const bundle = join(payload, `${spec.bundle}.app`);
   cpSync(source, bundle, { recursive: true, verbatimSymlinks: true });
   const contents = join(bundle, "Contents");
   const resources = join(contents, "Resources");
   const plist = join(contents, "Info.plist");
-  plistSet(plist, "CFBundleName", APP_NAME);
-  plistSet(plist, "CFBundleDisplayName", APP_NAME);
-  plistSet(plist, "CFBundleIdentifier", "com.luban.desktop");
+  plistSet(plist, "CFBundleName", spec.bundle);
+  plistSet(plist, "CFBundleDisplayName", spec.display);
+  plistSet(plist, "CFBundleIdentifier", spec.identifier);
   plistSet(plist, "CFBundleShortVersionString", version);
   plistSet(plist, "CFBundleVersion", version);
   if (makeIcon(resources)) plistSet(plist, "CFBundleIconFile", "AppIcon");
@@ -126,8 +137,8 @@ function buildApp(payload) {
   movePath(join(payload, "app"), join(resources, "luban"));
   const appDir = join(resources, "app");
   mkdirSync(appDir, { recursive: true });
-  cpSync(join(root, "apps", "desktop"), join(appDir, "desktop"), { recursive: true });
-  writeFileSync(join(appDir, "package.json"), `${JSON.stringify({ name: "luban-desktop", private: true, main: "main.cjs" }, null, 2)}\n`);
+  cpSync(join(root, "apps", spec.entry), join(appDir, spec.entry), { recursive: true });
+  writeFileSync(join(appDir, "package.json"), `${JSON.stringify({ name: `luban-${kind}`, private: true, main: "main.cjs" }, null, 2)}\n`);
   writeFileSync(join(appDir, "main.cjs"), [
     "// Electron entry point: hand the bundled Node runtime and CLI to luban.",
     'const { app } = require("electron");',
@@ -136,7 +147,7 @@ function buildApp(payload) {
     'const root = resolve(app.getAppPath(), "..");',
     "process.env.LUBAN_NODE_BIN ||= join(root, \"node\");",
     "process.env.LUBAN_CLI ||= join(root, \"luban\", \"dist\", \"cli.js\");",
-    'require(join(app.getAppPath(), "desktop", "main.cjs"));',
+    `require(join(app.getAppPath(), "${spec.entry}", "main.cjs"));`,
     "",
   ].join("\n"));
   // Replacing Resources invalidates Electron's signature; arm64 refuses unsigned
@@ -145,17 +156,21 @@ function buildApp(payload) {
 }
 
 function writeReadme(payload, kind) {
+  const spec = APP_SPECS[kind];
+  const bundle = spec ? `${spec.bundle}.app` : `${APP_NAME}.app`;
   writeFileSync(join(payload, "README.txt"), [
     `luban ${version} macOS ${architecture} ${kind}`,
     "",
     kind === "cli"
       ? "Run ./luban from this folder, or add this folder to PATH."
-      : "Drag \"luban.app\" to /Applications (it also runs in place), or start it with ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
-    ...(kind === "desktop" ? [`The app carries its own Node.js runtime and CLI, so moving "${APP_NAME}.app" elsewhere keeps working.`] : []),
+      : kind === "creator"
+        ? `Drag "${bundle}" to /Applications (it also runs in place), then look for 造物主 in the menu bar. ./luban is the CLI the queue workers run.`
+        : "Drag \"luban.app\" to /Applications (it also runs in place), or start it with ./luband (./luban-desktop is also supported). ./luban is the CLI. Add this folder to PATH to use luban and luband anywhere.",
+    ...(spec ? [`The app carries its own Node.js runtime and CLI, so moving "${bundle}" elsewhere keeps working.`] : []),
     "Node.js is bundled; no local Node.js installation is required.",
     "Configuration is read from ~/.luban/config.json.",
     "These builds are signed ad hoc, so Gatekeeper may refuse the first launch:",
-    `  xattr -dr com.apple.quarantine "${kind === "cli" ? "." : `${APP_NAME}.app`}"`,
+    `  xattr -dr com.apple.quarantine "${kind === "cli" ? "." : bundle}"`,
     "",
   ].join("\n"));
 }
@@ -191,11 +206,11 @@ function dmgPackage(source, output, folder, volumeName) {
 
 /** Drag-to-Applications volume: the self-contained app plus the usual alias.
  * The bundle is moved, not copied, so the image does not double disk use. */
-function stageDmg(payload, stageRoot) {
+function stageDmg(payload, stageRoot, bundleName = `${APP_NAME}.app`) {
   const dir = join(stageRoot, "dmg");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  movePath(join(payload, `${APP_NAME}.app`), join(dir, `${APP_NAME}.app`));
+  movePath(join(payload, bundleName), join(dir, bundleName));
   symlinkSync("/Applications", join(dir, "Applications"));
   return dir;
 }
@@ -210,8 +225,8 @@ function packageVariant(kind) {
   copyRuntime(payload, kind);
   copyFileSync(join(root, "packaging", "macos", "luban"), join(payload, "luban"));
   chmodSync(join(payload, "luban"), 0o755);
+  if (kind === "desktop" || kind === "creator") buildApp(payload, kind);
   if (kind === "desktop") {
-    buildApp(payload);
     for (const name of ["luband", "luban-desktop"]) {
       copyFileSync(join(root, "packaging", "macos", "luban-desktop"), join(payload, name));
       chmodSync(join(payload, name), 0o755);
@@ -219,12 +234,14 @@ function packageVariant(kind) {
   }
   writeReadme(payload, kind);
   mkdirSync(output, { recursive: true });
-  // The desktop app ships as a drag-to-Applications DMG; if the image cannot be
-  // created the same folder is zipped instead. A CLI folder is always a zip.
-  if (kind === "desktop") {
-    const volume = stageDmg(payload, stageRoot);
-    if (dmgPackage(volume, output, folder, `luban ${version}`)) return;
-    movePath(join(volume, `${APP_NAME}.app`), join(payload, `${APP_NAME}.app`));
+  // Both apps ship as drag-to-Applications DMGs; if an image cannot be created
+  // the same folder is zipped instead. A CLI folder is always a zip.
+  if (kind === "desktop" || kind === "creator") {
+    const app = APP_SPECS[kind];
+    const bundleName = `${app.bundle}.app`;
+    const volume = stageDmg(payload, stageRoot, bundleName);
+    if (dmgPackage(volume, output, folder, `${app.title} ${version}`)) return;
+    movePath(join(volume, bundleName), join(payload, bundleName));
     rmSync(volume, { recursive: true, force: true });
   }
   zipPackage(payload, output, folder, kind);
@@ -233,3 +250,4 @@ function packageVariant(kind) {
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")]);
 if (selection === "all" || selection === "cli") packageVariant("cli");
 if (selection === "all" || selection === "desktop") packageVariant("desktop");
+if (selection === "all" || selection === "creator") packageVariant("creator");

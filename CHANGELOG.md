@@ -1,3 +1,11 @@
+## 2.4.6 — 2026-11-13
+
+- `npm run release` 在 macOS 一次产出三个程序：CLI ZIP、`luban-desktop-<v>-mac-<arch>.dmg`、以及新的 `luban-creator-<v>-mac-<arch>.dmg`（`Luban Creator.app`，显示名「造物主」）。
+  - `scripts/package-macos.mjs`：`buildApp()` 改为按 `APP_SPECS` 生成 bundle（`com.luban.desktop` / `com.luban.creator`，入口 `apps/desktop` / `apps/creator`），两个 app 共用包内 Node 运行时和 CLI，DMG 失败同样回退 ZIP；新增 `packageVariant("creator")` 与 `npm run package:macos:creator`。
+  - `scripts/release.mjs`：新增 `--kind creator`；macOS 下 `--kind all` 默认三个产物并带 ZIP 回退，`--kind creator` 在其他平台直接报「macOS-only」，linux/windows 的默认行为保持两个产物不变。
+  - `apps/creator/bot.cjs`：`cliPath()` 优先使用 `LUBAN_CLI`，打包后的造物主用它自带的 CLI，而不是仓库路径。
+  - `scripts/release.test.mjs`：mac 矩阵断言三产物与三回退项，并断言非 macOS 的 `--kind creator` 报错。
+
 ## 2.4.5 — 2026-11-13
 
 - 造物主变成独立常驻程序（`apps/creator/`，`npm run creator`），不再依附桌面工作台：菜单栏一个入口，点开是自己的窗口——派任务、看进度、看结果，没有项目树/编辑器/预览。
