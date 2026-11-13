@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRunner, initialMessages } from "./agent.js";
+import { AgentRunner, keepComputerTools, initialMessages } from "./agent.js";
 import { SessionStore } from "./session-store.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolCall } from "./types.js";
 
@@ -16,6 +16,25 @@ function config(workspace: string): LubanConfig {
 
 describe("AgentRunner", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("gives a control session eyes and hands only", () => {
+    // A hands-on session that can still run bash will run bash: the real run
+    // spent nine tool calls on pgrep/osascript and never clicked once.
+    const tools = new Map<string, unknown>([
+      ["computer", {}], ["read_image", {}], ["attach_image", {}],
+      ["bash", {}], ["write_file", {}], ["edit_file", {}], ["delegate_task", {}], ["mcp_call", {}],
+    ]);
+    keepComputerTools(tools);
+    expect([...tools.keys()].sort()).toEqual(["attach_image", "computer", "read_image"]);
+  });
+
+  it("keeps every tool when the toolset is not restricted", () => {
+    const workspace = "/tmp/luban-toolset-all";
+    const runner = new AgentRunner(config(workspace));
+    expect(runner.toolset).toBe("all");
+    expect(runner.tools.has("bash")).toBe(true);
+    expect(runner.tools.has("computer")).toBe(true);
+  });
 
   it.each(["once", "always", "tool", "deny"] as const)("requires explicit single-command restart approval even with automatic trust: %s", async decision => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-restart-approval-"));

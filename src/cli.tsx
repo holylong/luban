@@ -24,6 +24,7 @@ import { runHistory } from "./core/history-command.js";
 import { runStats } from "./core/stats-command.js";
 import { runMcp } from "./core/mcp-command.js";
 import { runBot } from "./core/bot-command.js";
+import { runDrive } from "./core/drive-command.js";
 import { runReport } from "./core/report-command.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
 import { App } from "./ui/app.js";
@@ -1055,6 +1056,8 @@ const entry = command === "login" && process.argv[3] === "codex"
   ? runRelayLogin(process.argv.slice(4))
   : command === "bot"
   ? runBot(process.argv.slice(3))
+  : command === "drive"
+  ? runDrive(process.argv.slice(3))
   : command === "report"
   ? runReport(process.argv.slice(3))
   : command === "web"

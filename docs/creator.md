@@ -33,6 +33,29 @@ npm run creator      # 启动造物主（菜单栏出现「待命 / 忙 / 未启
 - 左栏 `计划（n）`（badge 就是任务总数）打开「全部计划」抽屉：按 `循环任务` / `一次任务` 分组列出每一条后台任务，二行摘要分别是排期和「下次 …· n 次执行」；展开一条能看到工作区、超时、间隔、取消按钮，以及**每次执行的历史**（`runs.jsonl` 逐条：时间区间、状态、调用次数/tokens、结果摘要，点开看完整结果）。这就是「6 点那次扫描到底跑没跑、扫到了什么」的回答处。
 - 页脚显示队列目录与「收起」；右上 `⌂` 打开数据目录。
 
+## 操控电脑（和派给后台任务不同）
+
+窗口最上面那个页签是**当下这一刻**的操控会话：一句自然语言 → 真的去点你的屏幕，跑完给你答案。它不是后台任务，也不排队，是一个 `luban drive` 子进程：
+
+```
+造物主窗口（输入框 / 动作时间线 / 截图缩略图 / 允许卡）
+        │  IPC：say · approve · stop
+        ▼
+apps/creator/drive.cjs（派生子进程、逐行解析 JSON 事件）
+        │
+        ▼
+luban drive（只拿 computer / read_image / attach_image 的会话）
+        │
+        ▼
+luban-computer 助手（CGEvent 点击、截屏）
+```
+
+- **只有眼睛和手**：这个会话固定 `toolset: "computer"`，没有 `bash`、没有编辑器、也不加载 MCP 工具。实测反例：给足工具时模型会用 `bash` + `osascript` + PIL 猜坐标，一次都没点。
+- 先 `windows` 拿前台应用和每个窗口的 x/y/宽/高（单位是屏幕「点」），再 `screenshot`（结果里带 `origin`，屏幕坐标 = origin + 图内偏移），然后 `app` / `click` / `type` / `key`。
+- 截图**自动**作为图片送进模型，不用再 `attach_image`；面板里每次 `screenshot` 都以缩略图贴在动作行下面。
+- 第一次动手前弹一张「允许」卡（覆盖本会话），之后不再逐次问；「停止」或 `⌘.` 立刻杀掉子进程。
+- 关窗口时子进程一起停；窗口重开时会把子进程已产生的事件重新读回来。
+
 菜单栏：
 
 - 点击 = 显示/隐藏窗口。
@@ -61,5 +84,6 @@ npm run creator      # 启动造物主（菜单栏出现「待命 / 忙 / 未启
 ```bash
 node --test apps/creator/bot.test.mjs     # 队列读取/取消标记/worker 状态/经 CLI 落盘
 npm run build && npm run smoke:creator    # 真 Electron 渲染 + 截图 + 窗口文本断言（含计划抽屉与执行历史）
+npm run smoke:creator:drive                # 真跑一轮操控：窗口里一个提示词 → 点屏幕 → 面板断言（动作/截图缩略图/审批）
 npx vitest run src/web/client/creator-schedule.test.ts   # 排期文案：每天/每周/每隔/一次 + 下次触发
 ```

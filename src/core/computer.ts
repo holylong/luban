@@ -40,6 +40,10 @@ export interface ComputerRequest {
   text?: string;
   key?: string;
   modifiers?: string[];
+  /** App name for the `app` action: launch it, or raise it if it is running. */
+  name?: string;
+  /** URL for the `open` action. */
+  url?: string;
   button?: string;
   count?: number;
   dy?: number;
@@ -87,6 +91,16 @@ const BINARY_NAME = "luban-computer";
 // The overlay that draws the rim for terminal runs (see glow.swift).
 const GLOW_SOURCE_NAME = "glow.swift";
 const GLOW_BINARY_NAME = "luban-glow";
+
+/** `{width,height}` out of a loose helper field, or undefined when unusable. */
+function sizeOf(value: unknown): { width: number; height: number } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as { width?: unknown; height?: unknown };
+  const width = Number(record.width);
+  const height = Number(record.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined;
+  return { width: Math.round(width), height: Math.round(height) };
+}
 
 export function computerHome(options: ComputerOptions = {}): string {
   return resolve(options.home ?? process.env.LUBAN_HOME ?? join(homedir(), ".luban"));
@@ -377,7 +391,15 @@ export class ComputerControl {
   }
 
   /** Capture the screen (or a region) into the workspace so it can be attached. */
-  async screenshot(region?: ComputerRequest["region"]): Promise<{ path: string; bytes: number; region?: ComputerRequest["region"] }> {
+  async screenshot(region?: ComputerRequest["region"]): Promise<{
+    path: string;
+    bytes: number;
+    region?: ComputerRequest["region"];
+    /** Screenshot size in pixels; `points` is what clicks use, so say both. */
+    pixels?: { width: number; height: number };
+    points?: { width: number; height: number };
+    scale?: number;
+  }> {
     await this.ensureRunning();
     const helper = await ensureHelper(this.home);
     const directory = join(this.workspace ?? this.home, this.workspace ? join(".luban", "computer") : "computer");
@@ -386,7 +408,47 @@ export class ComputerControl {
     const reply = await helperCall(helper, { action: "screenshot", path, region });
     this.notify?.({ event: "action", action: "screenshot" });
     await this.prune(directory);
-    return { path, bytes: Number(reply.bytes ?? 0), region };
+    const pixels = sizeOf(reply.pixels);
+    const screen = (reply.screen ?? {}) as { width?: unknown; height?: unknown; scale?: unknown };
+    const points = region
+      ? { width: Math.round(region.width), height: Math.round(region.height) }
+      : sizeOf(screen);
+    return {
+      path,
+      bytes: Number(reply.bytes ?? 0),
+      region,
+      ...(pixels ? { pixels } : {}),
+      ...(points ? { points } : {}),
+      ...(Number.isFinite(Number(screen.scale)) ? { scale: Number(screen.scale) } : {}),
+    };
+  }
+
+  /** Frontmost app, every on-screen window and the screen size, all in points. */
+  async windows(): Promise<{
+    front?: { name?: string; bundle?: string; pid?: number };
+    windows: Array<{ app: string; title: string; x: number; y: number; width: number; height: number }>;
+    screen?: { width: number; height: number; scale: number };
+  }> {
+    await this.ensureRunning();
+    const helper = await ensureHelper(this.home);
+    const reply = await helperCall(helper, { action: "windows" });
+    this.notify?.({ event: "action", action: "windows" });
+    const rows = Array.isArray(reply.windows) ? reply.windows : [];
+    return {
+      front: (reply.front ?? {}) as { name?: string; bundle?: string; pid?: number },
+      windows: rows.map(row => {
+        const item = (row ?? {}) as Record<string, unknown>;
+        return {
+          app: String(item.app ?? ""),
+          title: String(item.title ?? ""),
+          x: Math.round(Number(item.x ?? 0)),
+          y: Math.round(Number(item.y ?? 0)),
+          width: Math.round(Number(item.width ?? 0)),
+          height: Math.round(Number(item.height ?? 0)),
+        };
+      }),
+      ...(sizeOf(reply.screen) ? { screen: reply.screen as { width: number; height: number; scale: number } } : {}),
+    };
   }
 
   private async prune(directory: string): Promise<void> {
@@ -402,8 +464,12 @@ export class ComputerControl {
     if (action === "screenshot") {
       const shot = await this.screenshot(request.region);
       return {
-        summary: `已截屏 ${shot.path}（${shot.bytes} 字节${shot.region ? `，区域 ${shot.region.width}×${shot.region.height}` : "，全屏"}）`,
-        reply: { ok: true, path: shot.path, bytes: shot.bytes },
+        summary: `已截屏 ${shot.path}（${shot.bytes} 字节${shot.region ? `，区域 ${shot.region.width}×${shot.region.height}` : "，全屏"}${shot.points ? `，屏幕 ${shot.points.width}×${shot.points.height} 点` : ""}）`,
+        reply: {
+          ok: true, path: shot.path, bytes: shot.bytes,
+          ...(shot.pixels ? { pixels: shot.pixels } : {}),
+          ...(shot.points ? { screen: { ...shot.points, scale: shot.scale ?? 1 } } : {}),
+        },
       };
     }
     if (action === "status") {
@@ -432,6 +498,8 @@ export class ComputerControl {
       case "type": return `输入 ${JSON.stringify((request.text ?? "").slice(0, 60))}`;
       case "key": return `按键 ${[...(request.modifiers ?? []), request.key].filter(Boolean).join("+")}`;
       case "cursor": return `指针位置${at(Number(reply.x), Number(reply.y))}`;
+      case "app": return `打开 ${String(request.name ?? "应用")}`;
+      case "windows": return "查看屏幕上的窗口";
       default: return action;
     }
   }

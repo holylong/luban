@@ -18,7 +18,7 @@ import { parseToolArguments } from "./json-args.js";
 import { repairToolHistory } from "./history.js";
 import { cleanTitle, hasNameableContent, titlePrompt } from "./session-title.js";
 import { planTools, planVerificationStatus } from "./plan.js";
-import { attachImageTools } from "./vision.js";
+import { attachImageTools, attachScreenshotsDirectly } from "./vision.js";
 import { autoMergeWorktree, checkDiffApplies, createWorktree, disposeWorktree, isGitRepo, worktreeDiff } from "./worktree.js";
 import { attachInstructions, instructionSnapshot, scopedInstructions, toolPaths } from "./instructions.js";
 import { ToolOutputStore } from "./tool-output.js";
@@ -266,6 +266,26 @@ export interface TitleSuggestion {
   output: number;
 }
 
+/**
+ * Which toolset a runner exposes. `computer` is the control session's world:
+ * eyes and hands only. A model handed bash, an editor and 128 MCP tools will
+ * reach for them and never click anything, which is exactly the wrong answer
+ * for "open the calculator and type 12*34".
+ */
+export interface AgentRunnerOptions {
+  toolset?: "all" | "computer";
+}
+
+/** What a `computer` toolset keeps: the screen, and the way to show it to the model. */
+export const COMPUTER_TOOLSET: ReadonlySet<string> = new Set(["computer", "read_image", "attach_image"]);
+
+/** Drop everything a control session cannot use (bash, editors, MCP, delegation). */
+export function keepComputerTools(tools: Map<string, unknown>): void {
+  for (const name of [...tools.keys()]) {
+    if (!COMPUTER_TOOLSET.has(name)) tools.delete(name);
+  }
+}
+
 export class AgentRunner {
   /** Job-backed runs create a runner per instruction, so discovery notices are
    *  deduplicated here: a truncated schema budget is worth saying once, not on
@@ -276,6 +296,7 @@ export class AgentRunner {
   private readonly mcp: McpManager;
   private readonly outputs: ToolOutputStore;
   private mcpDiscovered = false;
+  private screenshotVision = false;
   private trustSession = false;
   private running = false;
   private inbox?: AgentInbox;
@@ -289,7 +310,11 @@ export class AgentRunner {
   /** Registry id of the run in progress; usage events add to its token counters. */
   private agentId?: string;
 
-  constructor(readonly config: LubanConfig, client?: ModelClient, mesh?: MeshRuntime, private readonly depth = 0) {
+  /** See AgentRunnerOptions; the control session pins this to `computer`. */
+  readonly toolset: "all" | "computer";
+
+  constructor(readonly config: LubanConfig, client?: ModelClient, mesh?: MeshRuntime, private readonly depth = 0, options: AgentRunnerOptions = {}) {
+    this.toolset = options.toolset ?? "all";
     this.tools = createTools(config, mesh);
     this.tools.set("read_files", {
       name: "read_files", risk: "read", description: "Read up to 8 independent text files in one request. Each file uses read_file and its normal path permissions and scoped instructions; results have separate execution records.",
@@ -303,6 +328,7 @@ export class AgentRunner {
     this.outputs = new ToolOutputStore(config.home);
     const outputTool = this.outputs.tool();
     this.tools.set(outputTool.name, outputTool);
+    if (this.toolset === "computer") keepComputerTools(this.tools);
     this.mcp = new McpManager(config);
     this.client = client ?? modelClientFor(config);
     if (depth < 2) {
@@ -544,9 +570,17 @@ export class AgentRunner {
     metrics: RunMetrics,
   ): Promise<RunResult> {
     signal.throwIfAborted();
-    for (const tool of planTools(messages)) this.tools.set(tool.name, tool);
+    const handsOnly = this.toolset === "computer";
+    if (!handsOnly) for (const tool of planTools(messages)) this.tools.set(tool.name, tool);
     for (const tool of attachImageTools(messages, this.config.workspace)) this.tools.set(tool.name, tool);
-    if (!this.mcpDiscovered) {
+    // Control sessions see what they just captured: a screenshot that needs a
+    // second `attach_image` call is two round trips per look, and the model
+    // spends them wondering whether the picture ever arrived.
+    if (handsOnly && !this.screenshotVision) {
+      this.screenshotVision = true;
+      attachScreenshotsDirectly(this.tools, messages, this.config.workspace);
+    }
+    if (!this.mcpDiscovered && !handsOnly) {
       this.mcpDiscovered = true;
       const discovered = await this.mcp.discoverNativeTools(signal);
       for (const tool of discovered.tools) this.tools.set(tool.name, tool);

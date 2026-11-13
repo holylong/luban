@@ -760,14 +760,15 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       // 电脑操控 session in the desktop app, and every action re-checks the abort
       // flag so ⌘. on the edge glow stops a running loop.
       name: "computer",
-      description: "Control the user's desktop: screenshot the screen, move the pointer, click, drag, scroll, type text and press shortcuts. Requires the user to switch on 「电脑操控」 in the desktop app first (the screen edge glows while it is on); the call fails with an explanation otherwise. Coordinates are screen points (top-left origin of the main display, same scale as the screenshot). Read the screenshot before clicking so you aim at what is actually on screen.",
+      description: "Control the user's desktop the way a person does: look at the screen, then click, type and scroll. Start with action=windows (front app, every on-screen window with its bounds, and the screen size in points), then screenshot, then act. Coordinates are screen points, not screenshot pixels: a Retina screenshot is 2x its point size (screenshot returns both), and window bounds from windows are already in points. Prefer this tool over bash/osascript for anything on screen. Requires the user to switch on 「电脑操控」 (the screen edge glows while it is on); the call fails with an explanation otherwise.",
       risk: "execute",
       parameters: schema({
         action: {
           type: "string",
-          enum: ["status", "screenshot", "cursor", "move", "click", "double_click", "right_click", "drag", "scroll", "type", "key"],
-          description: "status/screenshot/cursor are read-only; everything else changes the user's screen",
+          enum: ["status", "windows", "app", "screenshot", "cursor", "move", "click", "double_click", "right_click", "drag", "scroll", "type", "key"],
+          description: "status/windows/screenshot/cursor are read-only; everything else changes the user's screen. app launches or raises an application by name.",
         },
+        name: { type: "string", description: "App name for action=app, e.g. Calculator / Safari / 计算器" },
         x: { type: "number", description: "Screen x in points" },
         y: { type: "number", description: "Screen y in points" },
         text: { type: "string", description: "Text to type (use key for shortcuts)" },
@@ -801,6 +802,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
           region: regionArg(args.region),
           from: pointArg(args.from),
           to: pointArg(args.to),
+          name: typeof args.name === "string" ? args.name : undefined,
         };
         const control = computerControl({ workspace, home: config.home });
         const { summary, reply } = await control.act(action, request, { signal });
@@ -817,13 +819,29 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
               : "缺少 macOS 权限：需要在系统设置 › 隐私与安全性 里给 luban 打开「辅助功能」和「屏幕录制」",
           }, null, 2);
         }
+        if (action === "windows") {
+          // The model needs the rows, not a sentence about them: a summary here
+          // is what made one live run answer "the tool returned a placeholder".
+          return JSON.stringify({
+            screen: reply.screen,
+            front: reply.front,
+            windows: reply.windows,
+            note: "坐标都是屏幕「点」；窗口的 x/y/width/height 可以直接拿去点。",
+          }, null, 2);
+        }
         if (action === "screenshot") {
           const path = String(reply.path ?? "");
+          // `origin` is the crop's top-left corner on screen, in points: with it
+          // the model can add image-relative offsets instead of guessing where
+          // the picture sits, which was most of one live run's thinking.
+          const origin = request.region ? { x: request.region.x, y: request.region.y } : { x: 0, y: 0 };
           return JSON.stringify({
             path: relative(workspace, path) || path,
             absolute: path,
             bytes: reply.bytes,
-            note: "Use read_image on this path, then attach_image when the model needs to look at the pixels.",
+            screen: reply.screen,
+            origin,
+            note: "screen 是这张图的尺寸、单位是「点」（图里像素通常是它的 scale 倍）。origin 是这张图左上角在屏幕上的位置：屏幕坐标 = origin + 图内偏移。点击一律用点。截图会自动作为图片送给你，不用再 attach_image。",
           }, null, 2);
         }
         return summary;

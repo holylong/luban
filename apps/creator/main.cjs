@@ -10,10 +10,11 @@
  *   npm run build && npm run creator
  */
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } = require("electron");
-const { existsSync } = require("node:fs");
-const { dirname, join } = require("node:path");
+const { existsSync, readFileSync, writeFileSync, mkdirSync } = require("node:fs");
+const { dirname, isAbsolute, join, resolve } = require("node:path");
 
 const bot = require("./bot.cjs");
+const { DriveBridge } = require("./drive.cjs");
 
 const home = bot.homeDir();
 const dataDirectory = join(home, "bot");
@@ -24,6 +25,9 @@ const smokePath = smokeIndex > 0 ? process.argv[smokeIndex + 1] : undefined;
 let win;
 let tray;
 let quitting = false;
+let drive;
+/** Persisted 电脑操控 switch: the window may be closed and reopened mid-session. */
+let settings = { computer: false };
 
 function webUi() {
   return join(dirname(bot.cliPath()), "web-ui");
@@ -39,6 +43,77 @@ function snapshot() {
     tasks: bot.listTasks(home),
     requests: bot.permissionRequests(home),
   };
+}
+
+function settingsPath() {
+  return join(home, "creator.json");
+}
+
+function loadSettings() {
+  try { settings = { computer: false, ...JSON.parse(readFileSync(settingsPath(), "utf8")) }; }
+  catch { settings = { computer: false }; }
+  return settings;
+}
+
+function saveSettings() {
+  try {
+    mkdirSync(home, { recursive: true, mode: 0o700 });
+    writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), { mode: 0o600 });
+  } catch { /* a lost preference is not worth blocking the window */ }
+}
+
+/**
+ * Screenshots come back as paths; the renderer is sandboxed and cannot read
+ * files, so the thumbnail is inlined here. 520px wide is enough to recognise a
+ * window and small enough not to bloat every event.
+ */
+function thumbnail(path) {
+  try {
+    const image = nativeImage.createFromPath(path);
+    if (image.isEmpty()) return undefined;
+    const size = image.getSize();
+    const width = Math.min(520, size.width || 520);
+    const resized = width < size.width ? image.resize({ width }) : image;
+    return `data:image/png;base64,${resized.toPNG().toString("base64")}`;
+  } catch { return undefined; }
+}
+
+/** The child's stderr, kept beside the queue so a failed turn can be read later. */
+function logPath() {
+  return join(dataDirectory, "drive.log");
+}
+
+function appendLog(line) {
+  try {
+    mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+    const path = logPath();
+    const size = existsSync(path) ? require("node:fs").statSync(path).size : 0;
+    if (size > 2 * 1024 * 1024) writeFileSync(path, "", { mode: 0o600 });
+    require("node:fs").appendFileSync(path, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 });
+  } catch { /* logging must never take the turn down */ }
+}
+
+function send(channel, payload) {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+function ensureDrive() {
+  if (drive) return drive;
+  drive = new DriveBridge({
+    onEvent: event => {
+      // The session reports paths relative to its workspace; the window's own
+      // cwd is elsewhere, and a relative path there is simply a missing file.
+      const shotPath = event.screenshot
+        ? (isAbsolute(event.screenshot) ? event.screenshot : resolve(drive.workspace || home, event.screenshot))
+        : "";
+      const forwarded = event.type === "tool-result" && shotPath
+        ? { ...event, image: thumbnail(shotPath) }
+        : event;
+      send("creator:drive-event", forwarded);
+    },
+    onLog: line => { if (line) { appendLog(line); send("creator:drive-log", line); } },
+  });
+  return drive;
 }
 
 function createWindow() {
@@ -118,6 +193,43 @@ async function openPolicyFile() {
   if (error) void dialog.showMessageBox({ message: "打不开 permissions.json", detail: error, buttons: ["好"] });
 }
 
+ipcMain.handle("creator:settings", () => settings);
+
+ipcMain.handle("creator:drive", () => {
+  const bridge = ensureDrive();
+  return { ...bridge.snapshot(), settings, log: logPath() };
+});
+
+ipcMain.handle("creator:drive-start", (_event, input) => {
+  const bridge = ensureDrive();
+  const workspace = String(input?.workspace || "").trim() || home;
+  if (input?.computer === true && settings.computer !== true) {
+    settings = { ...settings, computer: true };
+    saveSettings();
+  }
+  bridge.start(workspace, { computer: settings.computer === true, model: input?.model });
+  return bridge.snapshot();
+});
+
+ipcMain.handle("creator:drive-stop", () => ensureDrive().stop());
+
+ipcMain.handle("creator:drive-say", (_event, text) => {
+  const bridge = ensureDrive();
+  const sent = bridge.say(text);
+  return { sent, snapshot: bridge.snapshot() };
+});
+
+ipcMain.handle("creator:drive-approve", (_event, id, allow) => ensureDrive().approve(id, allow));
+
+ipcMain.handle("creator:computer", (_event, on) => {
+  settings = { ...settings, computer: on === true };
+  saveSettings();
+  // Switching off closes the session: an open control process must never keep
+  // driving the desktop after the human turned the switch back.
+  if (!settings.computer) ensureDrive().stop();
+  return settings;
+});
+
 ipcMain.handle("creator:snapshot", () => snapshot());
 ipcMain.handle("creator:add", (_event, input) => {
   const result = bot.addTask(home, input || {});
@@ -150,6 +262,8 @@ else {
   app.on("second-instance", () => createWindow());
   app.whenReady().then(async () => {
     if (process.platform === "darwin" && app.dock) app.dock.hide();
+    loadSettings();
+    ensureDrive();
     createTray();
     const window = createWindow();
     // The resident promise: opening the app means the queue is being drained.
@@ -209,6 +323,50 @@ else {
             })()`);
             require("node:fs").writeFileSync(plansPath.replace(/\.png$/u, ".rects.json"), JSON.stringify(plans, null, 2));
           }
+          // The control panel is the point of this window, and a panel that only
+          // renders is not the same as one that drives the machine: run a real
+          // turn through the same bridge the 输入框 uses, then capture it.
+          if (process.env.CREATOR_SMOKE_DRIVE) {
+            const prompt = process.env.CREATOR_SMOKE_DRIVE === "1"
+              ? "在计算器里算 6*7，把屏幕上的结果显示给我"
+              : String(process.env.CREATOR_SMOKE_DRIVE);
+            const driveShot = smokePath.replace(/\.png$/u, "-drive.png");
+            const bridge = ensureDrive();
+            const approved = new Set();
+            bridge.start(process.env.CREATOR_SMOKE_WORKSPACE || join(home, "workspace"), { computer: true });
+            for (let i = 0; i < 40 && !bridge.snapshot().ready; i++) await new Promise(r => setTimeout(r, 300));
+            bridge.say(prompt);
+            const done = () => bridge.snapshot().events.some(event => event.type === "turn-end");
+            for (let i = 0; i < 500 && !done(); i++) {
+              for (const event of bridge.snapshot().events) {
+                if (event.type !== "approval" || approved.has(event.id)) continue;
+                approved.add(event.id);
+                bridge.approve(event.id, true);
+              }
+              await new Promise(r => setTimeout(r, 400));
+            }
+            await new Promise(r => setTimeout(r, 500));
+            require("node:fs").writeFileSync(driveShot, (await window.webContents.capturePage()).toPNG());
+            const driveText = await window.webContents.executeJavaScript("document.body.innerText");
+            require("node:fs").writeFileSync(driveShot.replace(/\.png$/u, ".txt"), String(driveText));
+            const driveRects = await window.webContents.executeJavaScript(`(() => {
+              const box = (selector) => { const el = document.querySelector(selector); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+              return {
+                viewport: { w: innerWidth, h: innerHeight },
+                log: box(".drive-log"),
+                acts: [...document.querySelectorAll(".act")].map(el => ({ text: el.textContent.slice(0, 90), cls: el.className })),
+                shots: [...document.querySelectorAll(".act-shot")].map(el => ({ w: Math.round(el.getBoundingClientRect().width), h: Math.round(el.getBoundingClientRect().height), src: String(el.getAttribute("src") || "").slice(0, 30) })),
+                asks: [...document.querySelectorAll(".ask")].map(el => el.textContent.slice(0, 120)),
+                scrollH: document.querySelector(".drive-log")?.scrollHeight,
+              };
+            })()`);
+            const driveSnapshot = bridge.snapshot();
+            require("node:fs").writeFileSync(driveShot.replace(/\.png$/u, ".rects.json"), JSON.stringify({
+              ...driveRects,
+              session: { running: driveSnapshot.running, ready: driveSnapshot.ready, error: driveSnapshot.error, events: driveSnapshot.events.length, types: driveSnapshot.events.slice(0, 12).map(event => event.type) },
+            }, null, 2));
+            bridge.stop();
+          }
           quitting = true;
           app.quit();
         }, 1200);
@@ -219,5 +377,5 @@ else {
   // macOS keeps the process alive without windows; that is the point.
   app.on("window-all-closed", () => undefined);
   app.on("activate", () => createWindow());
-  app.on("before-quit", () => { quitting = true; });
+  app.on("before-quit", () => { quitting = true; ensureDrive().stop(); });
 }

@@ -77,6 +77,51 @@ export async function resolveImageParts(workspace: string, images: AttachedImage
   return out;
 }
 
+/** Attach one workspace image to the latest user message. Returns its size. */
+export async function attachToRequest(messages: ChatMessage[], workspace: string, path: string): Promise<{ rel: string; mime: string; size: number }> {
+  const abs = await resolveInside(workspace, path);
+  const rel = relative(resolve(workspace), abs).split(sep).join("/");
+  const attached = toAttachedImage(rel);
+  if (!attached) throw new Error("attach_image supports png/jpg/gif/webp/bmp/avif");
+  const info = await stat(abs);
+  if (!info.isFile() || info.size > MAX_IMAGE_BYTES) throw new Error(`image is too large (${info.size} bytes, max 8 MB)`);
+  validateImageBytes(await readFile(abs), attached.mime, rel);
+  const target = [...messages].reverse().find((message) => message.role === "user");
+  if (!target) throw new Error("no user message to attach to");
+  target.images = [...(target.images ?? [])];
+  if (!target.images.some((item) => item.path === rel)) target.images.push(attached);
+  if (target.images.length > 8) target.images = target.images.slice(-8);
+  return { rel, mime: attached.mime, size: info.size };
+}
+
+/**
+ * A control session's loop is look → act → look: the screenshot is the answer,
+ * so hand the pixels over with it instead of making the model take a second
+ * tool call (and then doubt whether the picture ever arrived).
+ */
+export function attachScreenshotsDirectly(tools: Map<string, ToolDefinition>, messages: ChatMessage[], workspace: string): void {
+  const tool = tools.get("computer");
+  if (!tool) return;
+  const run = tool.execute.bind(tool);
+  tools.set("computer", {
+    ...tool,
+    async execute(args, signal) {
+      const result = await run(args, signal);
+      if (String(args?.action ?? "") !== "screenshot") return result;
+      let absolute = "";
+      try { absolute = String((JSON.parse(result) as { absolute?: unknown }).absolute ?? ""); } catch { return result; }
+      if (!absolute) return result;
+      try {
+        const rel = relative(resolve(workspace), absolute).split(sep).join("/");
+        await attachToRequest(messages, workspace, rel);
+        return `${result}\n\n这张截图已经附在本次请求里：下一步的模型调用就能看到画面，不需要再调用 attach_image。`;
+      } catch (error) {
+        return `${result}\n\n（截图未能自动附加：${error instanceof Error ? error.message : String(error)}。可以调用 attach_image。）`;
+      }
+    },
+  });
+}
+
 /** Model-initiated vision: appends to the latest user message in place, so no
  * tool-call pairing is disturbed and the next model turn carries the bytes. */
 export function attachImageTools(messages: ChatMessage[], workspace: string): ToolDefinition[] {
@@ -91,19 +136,8 @@ export function attachImageTools(messages: ChatMessage[], workspace: string): To
     async execute(args, signal) {
       signal.throwIfAborted();
       if (typeof args.path !== "string" || !args.path.trim()) throw new Error("path must be a string");
-      const abs = await resolveInside(workspace, args.path);
-      const rel = relative(resolve(workspace), abs).split(sep).join("/");
-      const attached = toAttachedImage(rel);
-      if (!attached) throw new Error("attach_image supports png/jpg/gif/webp/bmp/avif");
-      const info = await stat(abs);
-      if (!info.isFile() || info.size > MAX_IMAGE_BYTES) throw new Error(`image is too large (${info.size} bytes, max 8 MB)`);
-      validateImageBytes(await readFile(abs), attached.mime, rel);
-      const target = [...messages].reverse().find((message) => message.role === "user");
-      if (!target) throw new Error("no user message to attach to");
-      target.images = [...(target.images ?? [])];
-      if (!target.images.some((item) => item.path === rel)) target.images.push(attached);
-      if (target.images.length > 8) target.images = target.images.slice(-8);
-      return `attached ${rel} (${attached.mime}, ${info.size} bytes) to the current request; it will be sent as a native vision part on the next model call`;
+      const { rel, mime, size } = await attachToRequest(messages, workspace, args.path);
+      return `attached ${rel} (${mime}, ${size} bytes) to the current request; it will be sent as a native vision part on the next model call`;
     },
   }];
 }

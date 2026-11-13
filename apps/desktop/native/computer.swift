@@ -208,6 +208,87 @@ func typeText(_ text: String) {
     }
 }
 
+// MARK: - Windows and apps
+
+/// The main display in points. A model that only sees a 2x screenshot cannot
+/// divide its way to a clickable coordinate, so the helper always says both.
+func screenPoints() -> [String: Any] {
+    let screen = NSScreen.screens.first
+    let frame = screen?.frame.size ?? .zero
+    return ["width": Int(frame.width.rounded()), "height": Int(frame.height.rounded()),
+            "scale": Double(screen?.backingScaleFactor ?? 1)]
+}
+
+/// Every on-screen window, front to back, with bounds already in screen points.
+func windowList() -> [[String: Any]] {
+    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return [] }
+    var rows: [[String: Any]] = []
+    for item in info {
+        // Layer 0 is the normal app plane; menus, panels and the Dock live above it.
+        if let layer = item[kCGWindowLayer as String] as? Int, layer != 0 { continue }
+        guard let bounds = item[kCGWindowBounds as String] as? [String: Any],
+              let x = bounds["X"] as? Double, let y = bounds["Y"] as? Double,
+              let width = bounds["Width"] as? Double, let height = bounds["Height"] as? Double,
+              width >= 40, height >= 40 else { continue }
+        rows.append([
+            "app": item[kCGWindowOwnerName as String] as? String ?? "",
+            "title": item[kCGWindowName as String] as? String ?? "",
+            "x": Int(x.rounded()), "y": Int(y.rounded()),
+            "width": Int(width.rounded()), "height": Int(height.rounded()),
+        ])
+        if rows.count >= 24 { break }
+    }
+    return rows
+}
+
+func frontmost() -> [String: Any] {
+    let app = NSWorkspace.shared.frontmostApplication
+    return ["name": app?.localizedName ?? "", "bundle": app?.bundleIdentifier ?? "",
+            "pid": Int(app?.processIdentifier ?? 0)]
+}
+
+func runningApp(_ name: String) -> NSRunningApplication? {
+    let wanted = name.lowercased()
+    let bundleName = URL(fileURLWithPath: wanted).deletingPathExtension().lastPathComponent
+    return NSWorkspace.shared.runningApplications.first { app in
+        let local = (app.localizedName ?? "").lowercased()
+        let bundle = (app.bundleURL?.deletingPathExtension().lastPathComponent ?? "").lowercased()
+        return local == wanted || bundle == wanted || (!wanted.isEmpty && (local.contains(wanted) || bundle == bundleName))
+    }
+}
+
+/// Launch (or raise) an app by name. Opening the *window* is the point: a model
+/// that has to shell out to `open -a` has already left the "hands and eyes" loop.
+func openApp(_ name: String) {
+    if let app = runningApp(name) {
+        app.activate(options: [.activateAllWindows])
+        emit(["ok": true, "name": app.localizedName ?? name, "pid": Int(app.processIdentifier), "launched": false])
+        return
+    }
+    let roots = ["/Applications", "/System/Applications", "/Applications/Utilities", "/System/Applications/Utilities"]
+    let target = name.lowercased()
+    for root in roots {
+        let path = "\(root)/\(name).app"
+        if FileManager.default.fileExists(atPath: path) {
+            let url = URL(fileURLWithPath: path)
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, error in
+                if let error { emitError("open failed: \(error.localizedDescription)") }
+                emit(["ok": true, "name": app?.localizedName ?? name, "pid": Int(app?.processIdentifier ?? 0), "launched": true])
+            }
+            return
+        }
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: root),
+           let match = entries.first(where: { $0.lowercased() == "\(target).app" }) {
+            openApp(String(match.dropLast(4)))
+            return
+        }
+    }
+    emitError("没有找到应用：\(name)。可以用 windows 看一下屏幕，或用系统的中文名再试一次")
+}
+
 // MARK: - Screenshot
 
 func capture(path: String, region: [String: Any]?) {
@@ -222,7 +303,14 @@ func capture(path: String, region: [String: Any]?) {
         emitError("screen capture unavailable; grant Screen Recording to luban in System Settings › Privacy & Security › Screen Recording")
     }
     let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
-    emit(["ok": true, "path": path, "bytes": size])
+    // Pixels and points together: the screenshot is Retina-sized, clicks are not.
+    var pixels: [String: Any] = ["width": 0, "height": 0]
+    if let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any] {
+        pixels = ["width": properties[kCGImagePropertyPixelWidth as String] as? Int ?? 0,
+                  "height": properties[kCGImagePropertyPixelHeight as String] as? Int ?? 0]
+    }
+    emit(["ok": true, "path": path, "bytes": size, "pixels": pixels, "screen": screenPoints()])
 }
 
 // MARK: - Dispatch
@@ -250,6 +338,11 @@ func run(_ request: [String: Any]) {
     case "screenshot":
         guard let path = request["path"] as? String else { emitError("path required") }
         capture(path: path, region: request["region"] as? [String: Any])
+    case "windows":
+        emit(["ok": true, "screen": screenPoints(), "front": frontmost(), "windows": windowList()])
+    case "app":
+        guard let name = request["name"] as? String, !name.isEmpty else { emitError("name required") }
+        openApp(name)
     case "move":
         guard let x = request["x"] as? Double, let y = request["y"] as? Double else { emitError("x and y required") }
         relocate(point(x, y))

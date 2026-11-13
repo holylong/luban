@@ -1,22 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { parseSchedule } from "../../core/bot-schedule";
-import { clock, dayClock, everyLabel, nextRunLabel, scheduleLabel } from "./creator-schedule";
+import type { DriveEvent } from "../../core/drive-events";
+import { clock, dayClock, nextRunLabel, scheduleLabel } from "./creator-schedule";
 import { Markdown } from "./markdown";
 import "./creator.css";
 
-/* 造物主 — a resident assistant, not a workbench.
+/* 造物主 — 说一句话，AI 就替你操作电脑。
  *
- * Layout follows the WorkBuddy reference: a quiet left rail that owns the queue,
- * and one centred content column (hero → quick prompts → composer → suggestions)
- * on the right. The window only renders one durable queue and can enqueue, cancel
- * and read it; everything else belongs to the worker process and `luban bot`, so
- * this page can be reloaded at any time without disturbing a running task.
+ * This window is two things on one rail, in that order of importance:
  *
- * Scheduling is the point of the app: every task shows the schedule it was booked
- * with, when it will fire next, and — through the 计划 drawer — every execution it
- * has already had, because "did the 6:00 scan run and what did it find" is the
- * question this window exists to answer. */
+ *  操控 (default)  a conversation with a model that can see the screen and click.
+ *                 Every action it takes is announced as a line ("点击 720,430"),
+ *                 anything that changes the screen waits for 允许/拒绝, and 停止
+ *                 kills the child process mid-turn.
+ *  后台           the durable queue in ~/.luban/bot: scheduled scans, reminders,
+ *                 nightly reports. Unattended, deny-by-default, survives restarts.
+ *
+ * They are deliberately separate processes: a job that scans GitLab every hour
+ * must not be able to click, and a click must not need a queue task to exist. */
 
 export interface CreatorTask {
   id: string;
@@ -56,6 +58,33 @@ export interface CreatorSnapshot {
   requests: Array<{ id: string; taskId: string; workspace: string; tool: string; args: Record<string, unknown>; reason: string; createdAt: string }>;
 }
 
+export interface DriveComputer {
+  supported?: boolean;
+  enabled?: boolean;
+  accessibility?: boolean;
+  postEvent?: boolean;
+  screenRecording?: boolean;
+  note?: string;
+}
+
+/** A finished action, plus the inlined thumbnail the main process adds. */
+export interface ToolResultFrame {
+  type: "tool-result";
+  id: string;
+  name: string;
+  ok: boolean;
+  elapsedMs: number;
+  preview: string;
+  screenshot?: string;
+  image?: string;
+}
+
+/** Events the control child sends us: DriveEvent, with the two local variants. */
+export type DriveFrame =
+  | Exclude<DriveEvent, { type: "tool-result" }>
+  | ToolResultFrame
+  | { type: "exit"; code?: number | null; signal?: string };
+
 interface CreatorBridge {
   snapshot(): Promise<CreatorSnapshot>;
   add(input: { prompt: string; workspace?: string; at?: number; every?: number }): Promise<{ id?: string; snapshot: CreatorSnapshot }>;
@@ -66,6 +95,15 @@ interface CreatorBridge {
   openPolicy(): Promise<{ ok: boolean }>;
   openData(): Promise<{ ok: boolean }>;
   hide(): Promise<{ ok: boolean }>;
+  settings(): Promise<{ computer: boolean }>;
+  drive(): Promise<{ running: boolean; ready: boolean; computer: DriveComputer; events: DriveFrame[]; error: string; settings: { computer: boolean }; log: string }>;
+  driveStart(input: { workspace?: string; computer?: boolean; model?: string }): Promise<{ running: boolean; ready: boolean; computer: DriveComputer; events: DriveFrame[]; error: string }>;
+  driveStop(): Promise<unknown>;
+  driveSay(text: string): Promise<{ sent: boolean }>;
+  driveApprove(id: string, allow: boolean): Promise<boolean>;
+  setComputer(on: boolean): Promise<{ computer: boolean }>;
+  onDrive(handler: (event: DriveFrame) => void): () => void;
+  onDriveLog(handler: (line: string) => void): () => void;
 }
 
 declare global {
@@ -77,21 +115,23 @@ const STATUS_LABEL: Record<CreatorTask["status"], string> = {
   cancelled: "已取消", interrupted: "被中断", paused: "已暂停",
 };
 
-/** Quick prompts — the reference's chip row, but each one is a real dispatchable job. */
+/** Quick prompts for the control mode: each one is something a computer can do. */
 const QUICK = [
-  "写今天的日报",
-  "查 CI 最近的失败",
-  "分析错误日志",
-  "整理拖太久的待办",
+  "打开计算器并截图",
+  "把屏幕上的这段文字复制到备忘录",
+  "帮我点开浏览器，搜索今天的天气",
+  "整理桌面上的截图到一个文件夹",
 ];
 
-/** Suggestion pills under the composer: longer, concrete jobs, most of them scheduled. */
+/** Suggestion pills under the composer: longer, concrete jobs. */
 const SUGGESTIONS = [
-  "每晚 23:00 汇总今天的工作区改动，写成日报",
-  "每 6 小时扫一次 buglist，能复现的整理成清单",
-  "每天 6 点提醒我今天要做什么",
-  "5 分钟后提醒我下班",
+  "打开计算器，输入 12×34，把结果截图给我",
+  "在系统设置里把深色模式关掉",
+  "打开 Finder，把下载目录里超过 30 天的文件列出来",
+  "截一张当前屏幕，告诉我这个窗口是什么应用",
 ];
+
+const MINUTE = 60_000;
 
 function ago(at?: number, now = Date.now()): string {
   if (!at) return "";
@@ -110,6 +150,221 @@ function meta(task: CreatorTask, now: number): string {
   if (task.status === "queued") return task.at > now ? `${dayClock(task.at)} 执行` : "马上执行";
   if (task.status === "interrupted") return "worker 中断了这次执行，副作用需要人工确认";
   return STATUS_LABEL[task.status];
+}
+
+/* The transcript -------------------------------------------------------- */
+
+export type Item =
+  | { kind: "you"; text: string; at: number }
+  | { kind: "reply"; text: string; at: number; open?: boolean }
+  | { kind: "action"; id: string; label: string; name: string; ok?: boolean; elapsedMs?: number; preview?: string; image?: string; at: number }
+  | { kind: "ask"; id: string; label: string; reason: string; settled?: boolean; allow?: boolean; at: number }
+  | { kind: "note"; text: string; tone: "status" | "error"; at: number };
+
+/**
+ * Fold the event stream into the timeline a person reads: what they said, what
+ * the model answered, and — between those — every action it took, in order.
+ * Pure and cheap enough to recompute per frame; no incremental bookkeeping to
+ * get out of step with the stream.
+ */
+export function timeline(frames: DriveFrame[], fallback = Date.now()): Item[] {
+  const items: Item[] = [];
+  const actions = new Map<string, Extract<Item, { kind: "action" }>>();
+  const asks = new Map<string, Extract<Item, { kind: "ask" }>>();
+  let reply: Extract<Item, { kind: "reply" }> | undefined;
+  for (const frame of frames) {
+    if (frame.type === "turn-start") {
+      items.push({ kind: "you", text: frame.text, at: fallback });
+      reply = { kind: "reply", text: "", at: fallback, open: true };
+      items.push(reply);
+      continue;
+    }
+    if (frame.type === "text") {
+      if (!reply) { reply = { kind: "reply", text: "", at: fallback, open: true }; items.push(reply); }
+      reply.text += frame.text;
+      continue;
+    }
+    if (frame.type === "turn-end") {
+      if (reply) {
+        reply.open = false;
+        if (!reply.text.trim() && frame.text.trim()) reply.text = frame.text;
+      } else if (frame.text.trim()) {
+        items.push({ kind: "reply", text: frame.text, at: fallback });
+      }
+      if (!frame.ok) items.push({ kind: "note", text: frame.stopReason === "max_steps" ? "达到步数上限，先停在这里" : "这一轮没有正常结束", tone: "error", at: fallback });
+      reply = undefined;
+      continue;
+    }
+    if (frame.type === "tool") {
+      const item: Extract<Item, { kind: "action" }> = { kind: "action", id: frame.id, label: frame.label, name: frame.name, at: fallback };
+      actions.set(frame.id, item);
+      items.push(item);
+      continue;
+    }
+    if (frame.type === "tool-result") {
+      const item = actions.get(frame.id);
+      if (item) {
+        item.ok = frame.ok;
+        item.elapsedMs = frame.elapsedMs;
+        item.preview = frame.preview;
+        item.image = frame.image;
+      } else {
+        items.push({ kind: "action", id: frame.id, name: frame.name, label: frame.name, ok: frame.ok, elapsedMs: frame.elapsedMs, preview: frame.preview, image: frame.image, at: fallback });
+      }
+      continue;
+    }
+    if (frame.type === "approval") {
+      const item: Extract<Item, { kind: "ask" }> = { kind: "ask", id: frame.id, label: frame.label, reason: frame.reason, at: fallback };
+      asks.set(frame.id, item);
+      items.push(item);
+      continue;
+    }
+    if (frame.type === "approval-settled") {
+      const item = asks.get(frame.id);
+      if (item) { item.settled = true; item.allow = frame.allow; }
+      continue;
+    }
+    if (frame.type === "error") { items.push({ kind: "note", text: frame.text, tone: "error", at: fallback }); continue; }
+    if (frame.type === "status") { items.push({ kind: "note", text: frame.text, tone: "status", at: fallback }); continue; }
+    if (frame.type === "exit") items.push({ kind: "note", text: "操控会话已结束", tone: "status", at: fallback });
+  }
+  return items;
+}
+
+function ActionRow({ item }: { item: Extract<Item, { kind: "action" }> }): React.ReactElement {
+  const state = item.ok === undefined ? "running" : item.ok ? "ok" : "fail";
+  const isScreen = item.name === "computer";
+  return (
+    <div className={`act ${state}`}>
+      <span className="act-mark" aria-hidden="true">{isScreen ? "▣" : "◇"}</span>
+      <div className="act-main">
+        <p className="act-label">
+          {item.label}
+          {item.elapsedMs ? <em>{item.elapsedMs < 1000 ? `${item.elapsedMs}ms` : `${(item.elapsedMs / 1000).toFixed(1)}s`}</em> : null}
+        </p>
+        {item.image ? <img className="act-shot" src={item.image} alt="这一步看到的屏幕" /> : null}
+        {!item.image && item.ok === false && item.preview ? <pre className="act-fail">{item.preview.slice(0, 300)}</pre> : null}
+      </div>
+    </div>
+  );
+}
+
+function AskCard({ item, onAnswer }: { item: Extract<Item, { kind: "ask" }>; onAnswer: (allow: boolean) => void }): React.ReactElement {
+  if (item.settled) {
+    return (
+      <div className={`ask settled ${item.allow ? "allowed" : "denied"}`}>
+        <span className="ask-dot" />
+        <p>{item.label} · {item.allow ? "已允许" : "已拒绝"}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="ask">
+      <p className="ask-title">要执行：{item.label}</p>
+      <p className="ask-reason">{item.reason}</p>
+      <div className="ask-actions">
+        <button className="allow" onClick={() => onAnswer(true)}>允许</button>
+        <button className="deny" onClick={() => onAnswer(false)}>拒绝</button>
+      </div>
+    </div>
+  );
+}
+
+function DrivePane({
+  items, computer, running, ready, model, workspace, onSay, onStop, onToggleComputer, onPickWorkspace, onOpenPolicy, onAnswer, error,
+}: {
+  items: Item[]; computer: DriveComputer; running: boolean; ready: boolean; model: string; workspace: string;
+  onSay: (text: string) => void; onStop: () => void; onToggleComputer: (on: boolean) => void;
+  onPickWorkspace: () => void; onOpenPolicy: () => void; onAnswer: (id: string, allow: boolean) => void;
+  error?: string;
+}): React.ReactElement {
+  const [text, setText] = useState("");
+  const log = useRef<HTMLDivElement>(null);
+
+  // Follow the newest line, the way a chat does: the point of this pane is
+  // watching what happens next.
+  useEffect(() => {
+    const element = log.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [items.length]);
+
+  const submit = (): void => {
+    const value = text.trim();
+    if (!value || running) return;
+    setText("");
+    onSay(value);
+  };
+
+  const empty = items.length === 0;
+  const permissionNote = computer.supported === false
+    ? "这台机器不支持电脑操控（只有 macOS）"
+    : computer.enabled
+      ? (computer.accessibility && computer.screenRecording ? "可以截屏、点击、输入" : "权限不全：系统设置 › 隐私与安全性 里打开「辅助功能」与「屏幕录制」")
+      : "还没打开电脑操控：现在只能聊天和读写文件";
+
+  return (
+    <div className="drive">
+      <header className="drive-head">
+        <div className="drive-title">
+          <h1>操控电脑</h1>
+          <span className={`pill ${computer.enabled ? "on" : "off"}`}><span className="dot" />{computer.enabled ? "电脑操控已开启" : "电脑操控已关闭"}</span>
+          {model ? <span className="pill mute">{model}</span> : null}
+        </div>
+        <div className="drive-tools">
+          <button className="workspace" onClick={onPickWorkspace}><FolderGlyph />{workspace ? workspace.split("/").slice(-1)[0] : "选择工作空间"}<i>⌄</i></button>
+          <button className={`switch ${computer.enabled ? "on" : ""}`} onClick={() => onToggleComputer(!computer.enabled)} title="允许它动你的鼠标、键盘和屏幕">
+            <span className="knob" />{computer.enabled ? "开关已开" : "打开操控"}
+          </button>
+          {running ? <button className="stop" onClick={onStop}>停止 <em>⌘.</em></button> : null}
+        </div>
+      </header>
+
+      <div className="drive-log" ref={log}>
+        {empty ? (
+          <div className="drive-hero">
+            <h2>说一句话，我来动手</h2>
+            <p>{permissionNote}</p>
+            <div className="drive-quick">
+              {QUICK.map(example => (
+                <button key={example} onClick={() => setText(example)}>{example}</button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {items.map((item, index) => {
+          if (item.kind === "you") return <div className="you" key={`you-${index}`}><span>{item.text}</span></div>;
+          if (item.kind === "reply") {
+            return item.text
+              ? <div className={`reply${item.open ? " open" : ""}`} key={`reply-${index}`}><Markdown text={item.text} /></div>
+              : null;
+          }
+          if (item.kind === "action") return <ActionRow item={item} key={`act-${item.id}-${index}`} />;
+          if (item.kind === "ask") return <AskCard item={item} key={`ask-${item.id}`} onAnswer={allow => onAnswer(item.id, allow)} />;
+          return <p className={`note ${item.tone}`} key={`note-${index}`}>{item.text}</p>;
+        })}
+      </div>
+
+      <div className="drive-composer">
+        {error ? <p className="error">{error}</p> : null}
+        <textarea
+          value={text}
+          rows={2}
+          placeholder={running ? "它正在操作，先停止或等这一轮结束…" : "说一句话，例如「打开计算器，把结果截图给我」"}
+          onChange={event => setText(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); }
+            if (event.key === "." && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onStop(); }
+          }}
+        />
+        <div className="drive-row">
+          <button className="ghost-chip" onClick={onOpenPolicy}><ShieldGlyph />权限策略</button>
+          {!ready ? <span className="starting">正在启动会话…</span> : null}
+          <span className="spacer" />
+          {running ? <button className="send stop-round" title="停止" onClick={onStop}>■</button> : <button className="send" disabled={!text.trim()} onClick={submit}><ArrowGlyph /></button>}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function TaskRow({ task, now, onCancel }: { task: CreatorTask; now: number; onCancel: (id: string) => void }): React.ReactElement {
@@ -198,8 +453,8 @@ function Plans({ tasks, now, bridge, onClose, onCancel }: {
         <div className="plan-body">
           <p className="plan-facts">
             <span>工作区 {task.workspace}</span>
-            <span>超时 {Math.round(task.timeout / 60_000)} 分钟</span>
-            {task.every ? <span>间隔 {everyLabel(task.every)}</span> : null}
+            <span>超时 {Math.round(task.timeout / MINUTE)} 分钟</span>
+            {task.every ? <span>间隔 {nextRunLabel(task, now)}</span> : null}
           </p>
           {(task.status === "queued" || task.status === "running") ? (
             <button className="wide" onClick={() => onCancel(task.id)}>取消这个任务</button>
@@ -235,6 +490,7 @@ function Plans({ tasks, now, bridge, onClose, onCancel }: {
 function App(): React.ReactElement {
   const bridge = window.creator;
   const [snapshot, setSnapshot] = useState<CreatorSnapshot | undefined>();
+  const [view, setView] = useState<"drive" | "queue">("drive");
   const [prompt, setPrompt] = useState("");
   const [workspace, setWorkspace] = useState<string>("");
   const [when, setWhen] = useState<"now" | "at" | "every">("now");
@@ -247,6 +503,14 @@ function App(): React.ReactElement {
   const [plans, setPlans] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
 
+  // Control session
+  const [frames, setFrames] = useState<DriveFrame[]>([]);
+  const [computer, setComputer] = useState<DriveComputer>({});
+  const [driving, setDriving] = useState(false);
+  const [model, setModel] = useState("");
+  const [sayError, setSayError] = useState("");
+  const started = useRef(false);
+
   const refresh = useCallback(async () => {
     if (!bridge) return;
     try { setSnapshot(await bridge.snapshot()); }
@@ -258,8 +522,30 @@ function App(): React.ReactElement {
     const timer = setInterval(() => { void refresh(); }, 2000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  // Seed the transcript from whatever the child already produced, then follow it live.
   useEffect(() => {
-    if (snapshot && !workspace) setWorkspace(snapshot.tasks[0]?.workspace || "");
+    if (!bridge) return;
+    void bridge.drive().then(state => {
+      setFrames(state.events ?? []);
+      setComputer(state.computer ?? {});
+      setDriving(state.running);
+    }).catch(() => undefined);
+    const off = bridge.onDrive(event => {
+      setDriving(true);
+      if (event.type === "ready") {
+        setComputer((event as { computer?: DriveComputer }).computer ?? {});
+        setModel((event as { model?: string }).model ?? "");
+      }
+      if (event.type === "exit") setDriving(false);
+      setFrames(previous => [...previous, event].slice(-400));
+    });
+    const offLog = bridge.onDriveLog(line => { if (line.startsWith("error:")) setSayError(line.slice(6).trim()); });
+    return () => { off(); offLog(); };
+  }, [bridge]);
+
+  useEffect(() => {
+    if (snapshot && !workspace) setWorkspace(snapshot.tasks[0]?.workspace || snapshot.home);
   }, [snapshot, workspace]);
   useEffect(() => {
     if (!notice) return;
@@ -273,6 +559,49 @@ function App(): React.ReactElement {
   const blank = tasks.length === 0;
   /** A sentence like "每天 6 点提醒我" books itself; the chip shows the parse before dispatch. */
   const parsed = useMemo(() => (when === "now" ? parseSchedule(prompt) : null), [prompt, when]);
+  const items = useMemo(() => timeline(frames), [frames]);
+  const running = driving && !frames.slice().reverse().some(frame => frame.type === "turn-end" || frame.type === "exit");
+
+  const ensureSession = async (): Promise<void> => {
+    if (!bridge) return;
+    if (started.current) return;
+    started.current = true;
+    const state = await bridge.driveStart({ workspace: workspace || undefined, computer: computer.enabled === true });
+    setDriving(state.running);
+    if (state.computer) setComputer(state.computer);
+    if (state.events?.length) setFrames(state.events);
+  };
+
+  const say = async (text: string): Promise<void> => {
+    if (!bridge) return;
+    setSayError("");
+    try {
+      await ensureSession();
+      await bridge.driveSay(text);
+    } catch (cause) { setSayError(String((cause as Error).message || cause)); }
+  };
+
+  const stop = async (): Promise<void> => {
+    if (!bridge) return;
+    await bridge.driveStop();
+    started.current = false;
+    setDriving(false);
+    const ended: DriveFrame = { type: "exit", signal: "SIGTERM" };
+    setFrames(previous => [...previous, ended].slice(-400));
+  };
+
+  const toggleComputer = async (on: boolean): Promise<void> => {
+    if (!bridge) return;
+    const next = await bridge.setComputer(on);
+    setComputer(previous => ({ ...previous, enabled: next.computer }));
+    // A switch that only applies "next time" is a lie: restart the session now.
+    if (started.current) {
+      await bridge.driveStop();
+      started.current = false;
+      setDriving(false);
+      if (on) { await ensureSession(); }
+    }
+  };
 
   const submit = async (): Promise<void> => {
     if (!bridge || busy || !prompt.trim()) return;
@@ -333,7 +662,7 @@ function App(): React.ReactElement {
 
   return (
     <div className="creator">
-      {/* Left rail: brand, the three views, the queue itself, worker state. */}
+      {/* Left rail: brand, the two modes, then the queue and worker state. */}
       <aside className="side">
         <div className="side-top">
           <div className="brand">
@@ -343,49 +672,46 @@ function App(): React.ReactElement {
           <button className="discover" onClick={() => { void bridge.openData(); }}>发现应用<i>⌄</i></button>
         </div>
 
-        <button className="new-task" onClick={() => textarea.current?.focus()}>
+        <button className="new-task" onClick={() => { setView("drive"); }}>
           <PlusGlyph />新建任务
         </button>
 
         <nav className="side-nav">
-          <button className={tab === "active" ? "on" : ""} onClick={() => setTab("active")}>
-            <RingGlyph />进行中{count.active ? <b>{count.active}</b> : null}
+          <button className={view === "drive" ? "on" : ""} onClick={() => setView("drive")}>
+            <CursorGlyph />操控电脑{computer.enabled ? <b className="live">●</b> : null}
           </button>
-          <button className={tab === "done" ? "on" : ""} onClick={() => setTab("done")}>
-            <CheckGlyph />结果{count.done ? <b>{count.done}</b> : null}
-          </button>
-          <button className={tab === "approvals" ? "on" : ""} onClick={() => setTab("approvals")}>
-            <ShieldGlyph />授权{count.approvals ? <b className="warn">{count.approvals}</b> : null}
+          <button className={view === "queue" ? "on" : ""} onClick={() => setView("queue")}>
+            <ClockGlyph />后台任务{count.active ? <b>{count.active}</b> : null}
           </button>
           <button className={plans ? "on" : ""} onClick={() => setPlans(value => !value)}>
-            <ClockGlyph />计划{tasks.length ? <b>{tasks.length}</b> : null}
+            <ListGlyph />计划{tasks.length ? <b>{tasks.length}</b> : null}
           </button>
           <button onClick={() => { void bridge.openPolicy(); }}>
             <FileGlyph />权限策略
           </button>
         </nav>
 
-        <div className="side-label">任务（{tasks.length}）</div>
+        <div className="side-label">后台（{tasks.length}）</div>
         <div className="side-list">
           {tasks.length ? tasks.map(task => (
-            <button key={task.id} className={`side-task ${task.status}`} onClick={() => { setTab(["queued", "running", "paused"].includes(task.status) ? "active" : "done"); }}>
+            <button key={task.id} className={`side-task ${task.status}`} onClick={() => { setView("queue"); setTab(["queued", "running", "paused"].includes(task.status) ? "active" : "done"); }}>
               <span className={`dot ${task.status}`} />
               <span className="title">{task.prompt}</span>
               <span className="when">{task.every ? clock(task.at) : dayClock(task.at)}</span>
             </button>
-          )) : <p className="side-empty">暂无任务</p>}
+          )) : <p className="side-empty">暂无后台任务</p>}
         </div>
 
-        <div className="side-label">空间（{workspace ? 1 : 0}）</div>
+        <div className="side-label">空间</div>
         <div className="side-space" onClick={async () => { const picked = await bridge.pickWorkspace(); if (picked) setWorkspace(picked); }}>
           <FolderGlyph />
           <span>{workspace ? workspace.split("/").slice(-1)[0] : "选择工作空间"}</span>
         </div>
 
         <div className="side-foot">
-          <button className={`worker ${worker?.running ? (worker.task ? "busy" : "idle") : "off"}`} onClick={() => { void startWorker(); }}>
+          <button className={`worker ${computer.enabled ? "busy" : worker?.running ? "idle" : "off"}`} onClick={() => { void toggleComputer(!computer.enabled); }}>
             <span className="dot" />
-            {worker?.running ? (worker.task ? "后台忙" : "后台待命") : worker?.launchAgent ? "后台由系统托管" : "后台未启动"}
+            {computer.enabled ? "电脑操控已开启" : "电脑操控未开启"}
           </button>
           <div className="side-user">
             <span className="avatar">造</span>
@@ -395,118 +721,141 @@ function App(): React.ReactElement {
         </div>
       </aside>
 
-      {/* Right column: one centred pane, exactly like the reference. */}
-      <main className="main">
-        <div className={`pane${blank ? "" : " compact"}`}>
-          {blank ? (
-            <header className="hero">
-              <h1>造物主，我帮你</h1>
-              <div className="segmented">
-                {["办公", "开发", "设计"].map((label, index) => (
-                  <button key={label} className={index === 0 ? "on" : ""} onClick={() => { setPrompt(SUGGESTIONS[index + 1] ?? ""); textarea.current?.focus(); }}>{label}</button>
+      <main className={`main${view === "drive" ? " locked" : ""}`}>
+        {view === "drive" ? (
+          <DrivePane
+            items={items}
+            computer={computer}
+            running={running}
+            ready={driving}
+            model={model}
+            workspace={workspace}
+            onSay={text => { void say(text); }}
+            onStop={() => { void stop(); }}
+            onToggleComputer={on => { void toggleComputer(on); }}
+            onPickWorkspace={async () => { const picked = await bridge.pickWorkspace(); if (picked) setWorkspace(picked); }}
+            onOpenPolicy={() => { void bridge.openPolicy(); }}
+            onAnswer={(id, allow) => { void bridge.driveApprove(id, allow); }}
+            error={sayError}
+          />
+        ) : (
+          <div className={`pane${blank ? "" : " compact"}`}>
+            {blank ? (
+              <header className="hero">
+                <h1>后台替你跑</h1>
+                <p className="hero-sub">不需要你盯着的事：定时扫描、日报、提醒。无人值守，关掉窗口也照样跑。</p>
+              </header>
+            ) : null}
+
+            {blank ? (
+              <div className="quick">
+                {["每晚 23:00 汇总改动写日报", "每 6 小时扫一次 buglist", "每天早上 9 点提醒我今天的会", "5 分钟后提醒我下班"].map(text => (
+                  <button key={text} onClick={() => { setPrompt(text); textarea.current?.focus(); }}>{text}</button>
                 ))}
               </div>
-            </header>
-          ) : null}
-
-          {blank ? (
-            <div className="quick">
-              {QUICK.map(text => (
-                <button key={text} onClick={() => { setPrompt(text); textarea.current?.focus(); }}>{text}</button>
-              ))}
-            </div>
-          ) : null}
-
-          <section className="composer">
-            <textarea
-              ref={textarea}
-              value={prompt}
-              rows={blank ? 3 : 2}
-              placeholder="今天帮你做些什么？ 说「每天 6 点提醒我」也能直接排期"
-              onChange={event => setPrompt(event.target.value)}
-              onKeyDown={event => {
-                if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
-              }}
-            />
-            <div className="composer-row">
-              <button className="round" title="选择工作区" onClick={async () => { const picked = await bridge.pickWorkspace(); if (picked) setWorkspace(picked); }}><PlusGlyph /></button>
-              <select className="when" value={when} onChange={event => setWhen(event.target.value as "now" | "at" | "every")}>
-                <option value="now">现在</option>
-                <option value="at">定时</option>
-                <option value="every">每隔</option>
-              </select>
-              {when === "at" ? <input type="datetime-local" value={at} onChange={event => setAt(event.target.value)} /> : null}
-              {when === "every" ? (
-                <>
-                  <input className="num" type="number" min={1} value={minutes} onChange={event => setMinutes(event.target.value)} />
-                  <span className="unit">分钟</span>
-                </>
-              ) : null}
-              <span className="spacer" />
-              {prompt.trim() ? <span className="enter-hint">⏎</span> : null}
-              <button className="send" disabled={busy || !prompt.trim()} title="派发（Enter）" onClick={() => { void submit(); }}>
-                {busy ? "…" : <ArrowGlyph />}
-              </button>
-            </div>
-          </section>
-
-          <div className="composer-meta">
-            {parsed ? (
-              <span className="parsed" title="从这句话里识别到的排期">
-                <ClockGlyph />{parsed.label} · 首次 {dayClock(parsed.at)}
-              </span>
             ) : null}
-            <button onClick={async () => { const picked = await bridge.pickWorkspace(); if (picked) setWorkspace(picked); }}>
-              <FolderGlyph />{workspace ? workspace.split("/").slice(-1)[0] : "选择工作空间"}<i>⌄</i>
-            </button>
-            <button onClick={() => { void bridge.openPolicy(); }}><ShieldGlyph />默认权限<i>⌄</i></button>
-            <button onClick={() => setPlans(true)}><ClockGlyph />计划 {tasks.length}</button>
-          </div>
 
-          {error ? <p className="error">{error}</p> : null}
-          {notice ? <p className="notice">{notice}</p> : null}
-
-          {blank ? (
-            <div className="suggest">
-              {SUGGESTIONS.map(text => (
-                <button key={text} onClick={() => { setPrompt(text); textarea.current?.focus(); }}>{text}<span>↗</span></button>
-              ))}
-            </div>
-          ) : null}
-
-          {!blank ? (
-            <section className="queue">
-              <div className="queue-head">
-                <span>{tab === "active" ? "进行中" : tab === "done" ? "结果" : "授权"}</span>
-                <span className="count">{tab === "approvals" ? count.approvals : shown.length || "0"}</span>
-              </div>
-              {tab === "approvals" ? (
-                snapshot?.requests.length ? (
+            <section className="composer">
+              <textarea
+                ref={textarea}
+                value={prompt}
+                rows={blank ? 3 : 2}
+                placeholder="交给后台的事，说「每天 6 点提醒我」也能直接排期"
+                onChange={event => setPrompt(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
+                }}
+              />
+              <div className="composer-row">
+                <button className="round" title="选择工作区" onClick={async () => { const picked = await bridge.pickWorkspace(); if (picked) setWorkspace(picked); }}><PlusGlyph /></button>
+                <select className="when" value={when} onChange={event => setWhen(event.target.value as "now" | "at" | "every")}>
+                  <option value="now">现在</option>
+                  <option value="at">定时</option>
+                  <option value="every">每隔</option>
+                </select>
+                {when === "at" ? <input type="datetime-local" value={at} onChange={event => setAt(event.target.value)} /> : null}
+                {when === "every" ? (
                   <>
-                    {snapshot.requests.map(request => (
-                      <article className="request" key={request.id}>
-                        <p className="request-tool">{request.tool}</p>
-                        <p className="request-reason">{request.reason}</p>
-                        <pre>{JSON.stringify(request.args, null, 2)}</pre>
-                        <p className="request-meta">{request.workspace} · {request.createdAt}</p>
-                      </article>
-                    ))}
-                    <button className="wide" onClick={() => { void bridge.openPolicy(); }}>打开 permissions.json</button>
+                    <input className="num" type="number" min={1} value={minutes} onChange={event => setMinutes(event.target.value)} />
+                    <span className="unit">分钟</span>
                   </>
-                ) : <p className="hint">没有待授权的调用。</p>
-              ) : shown.length ? (
-                shown.map(task => (
-                  <TaskRow key={task.id} task={task} now={now}
-                    onCancel={id => { if (bridge) void bridge.cancel(id).then(setSnapshot); }} />
-                ))
-              ) : (
-                <p className="hint">{tab === "active" ? "没有在跑的任务。写一句要它做的事，派发后它会在后台执行。" : "还没有结果。跑完的任务会带着结论出现在这里。"}</p>
-              )}
+                ) : null}
+                <span className="spacer" />
+                {prompt.trim() ? <span className="enter-hint">⏎</span> : null}
+                <button className="send" disabled={busy || !prompt.trim()} title="派发（Enter）" onClick={() => { void submit(); }}>
+                  {busy ? "…" : <ArrowGlyph />}
+                </button>
+              </div>
             </section>
-          ) : null}
 
-          <p className="disclaimer">内容由 AI 生成，请核实重要信息</p>
-        </div>
+            <div className="composer-meta">
+              {parsed ? (
+                <span className="parsed" title="从这句话里识别到的排期">
+                  <ClockGlyph />{parsed.label} · 首次 {dayClock(parsed.at)}
+                </span>
+              ) : null}
+              <button onClick={async () => { const picked = await bridge.pickWorkspace(); if (picked) setWorkspace(picked); }}>
+                <FolderGlyph />{workspace ? workspace.split("/").slice(-1)[0] : "选择工作空间"}<i>⌄</i>
+              </button>
+              <button onClick={() => { void bridge.openPolicy(); }}><ShieldGlyph />默认权限<i>⌄</i></button>
+              <button onClick={() => setPlans(true)}><ClockGlyph />计划 {tasks.length}</button>
+            </div>
+
+            {error ? <p className="error">{error}</p> : null}
+            {notice ? <p className="notice">{notice}</p> : null}
+
+            {blank ? (
+              <div className="suggest">
+                {SUGGESTIONS.map(text => (
+                  <button key={text} onClick={() => { setPrompt(text); textarea.current?.focus(); }}>{text}<span>↗</span></button>
+                ))}
+              </div>
+            ) : null}
+
+            {!blank ? (
+              <section className="queue">
+                <div className="queue-head">
+                  <span>{tab === "active" ? "进行中" : tab === "done" ? "结果" : "授权"}</span>
+                  <span className="count">{tab === "approvals" ? count.approvals : shown.length || "0"}</span>
+                  <span className="segmented small">
+                    {([["active", "进行中"], ["done", "结果"], ["approvals", "授权"]] as Array<["active" | "done" | "approvals", string]>).map(([key, label]) => (
+                      <button key={key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>{label}</button>
+                    ))}
+                  </span>
+                </div>
+                {tab === "approvals" ? (
+                  snapshot?.requests.length ? (
+                    <>
+                      {snapshot.requests.map(request => (
+                        <article className="request" key={request.id}>
+                          <p className="request-tool">{request.tool}</p>
+                          <p className="request-reason">{request.reason}</p>
+                          <pre>{JSON.stringify(request.args, null, 2)}</pre>
+                          <p className="request-meta">{request.workspace} · {request.createdAt}</p>
+                        </article>
+                      ))}
+                      <button className="wide" onClick={() => { void bridge.openPolicy(); }}>打开 permissions.json</button>
+                    </>
+                  ) : <p className="hint">没有待授权的调用。</p>
+                ) : shown.length ? (
+                  shown.map(task => (
+                    <TaskRow key={task.id} task={task} now={now}
+                      onCancel={id => { if (bridge) void bridge.cancel(id).then(setSnapshot); }} />
+                  ))
+                ) : (
+                  <p className="hint">{tab === "active" ? "没有在跑的后台任务。派发一句，它会在后台执行。" : "还没有结果。跑完的任务会带着结论出现在这里。"}</p>
+                )}
+              </section>
+            ) : null}
+
+            {!blank ? <button className="worker-inline" onClick={() => { void startWorker(); }}>
+              <span className={`dot ${worker?.running ? (worker.task ? "busy" : "idle") : "off"}`} />
+              {worker?.running ? (worker.task ? "后台正在执行" : "后台待命") : worker?.launchAgent ? "后台由系统托管" : "后台未启动，点这里启动"}
+            </button> : null}
+
+            <p className="disclaimer">内容由 AI 生成，请核实重要信息</p>
+          </div>
+        )}
       </main>
 
       {plans ? (
@@ -526,12 +875,6 @@ function App(): React.ReactElement {
 function PlusGlyph(): React.ReactElement {
   return <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>;
 }
-function RingGlyph(): React.ReactElement {
-  return <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="5.4" fill="none" stroke="currentColor" strokeWidth="1.4" /><circle cx="8" cy="8" r="1.6" fill="currentColor" /></svg>;
-}
-function CheckGlyph(): React.ReactElement {
-  return <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3.4 8.6l3 3 6-6.8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
-}
 function ShieldGlyph(): React.ReactElement {
   return <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 2.4l4.6 1.7v4.1c0 2.6-1.9 4.4-4.6 5.4-2.7-1-4.6-2.8-4.6-5.4V4.1z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></svg>;
 }
@@ -543,6 +886,12 @@ function FolderGlyph(): React.ReactElement {
 }
 function ClockGlyph(): React.ReactElement {
   return <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M8 4.8V8l2.2 1.6" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>;
+}
+function ListGlyph(): React.ReactElement {
+  return <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 4.4h10M3 8h10M3 11.6h6.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>;
+}
+function CursorGlyph(): React.ReactElement {
+  return <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4.2 2.6l6.4 6.1-3.3.5L9 12.9l-1.5.8-1.6-3.6-2.5 2z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></svg>;
 }
 function ArrowGlyph(): React.ReactElement {
   return <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 12.4V4M4.3 7.4L8 3.7l3.7 3.7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;

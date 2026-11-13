@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openAiWireMessages } from "./openai.js";
-import { attachImageTools } from "./vision.js";
+import { attachImageTools, attachScreenshotsDirectly } from "./vision.js";
 import type { ChatMessage } from "./types.js";
 import { isImagePath, mimeOfImagePath, resolveImageParts } from "./vision.js";
 
@@ -71,5 +71,28 @@ describe("vision attachments", () => {
     expect(messages[0]?.images).toHaveLength(1);
     await expect(attach!.execute({ path: "main.ts" }, signal)).rejects.toThrow("supports png");
     await expect(attach!.execute({ path: "../outside.png" }, signal)).rejects.toThrow();
+  });
+
+  it("hands a control session its own screenshots without a second call", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-vision-shot-"));
+    await writeFile(join(root, "shot.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+    const messages: ChatMessage[] = [{ role: "user", content: "点一下计算器" }];
+    const calls: string[] = [];
+    const tools = new Map([["computer", {
+      name: "computer", risk: "execute" as const, description: "", parameters: {},
+      async execute(args: Record<string, unknown>) {
+        calls.push(String(args.action));
+        if (args.action === "click") return "点击 (1, 2)";
+        return JSON.stringify({ path: "shot.png", absolute: join(root, "shot.png"), bytes: 68 });
+      },
+    }]]);
+    attachScreenshotsDirectly(tools, messages, root);
+    const signal = new AbortController().signal;
+    const shot = await tools.get("computer")!.execute({ action: "screenshot" }, signal);
+    expect(shot).toContain("已经附在本次请求里");
+    expect(messages[0]?.images).toEqual([{ path: "shot.png", mime: "image/png" }]);
+    // Everything else keeps its plain result: only the capture is special-cased.
+    await expect(tools.get("computer")!.execute({ action: "click", x: 1, y: 2 }, signal)).resolves.toBe("点击 (1, 2)");
+    expect(calls).toEqual(["screenshot", "click"]);
   });
 });
