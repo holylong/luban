@@ -19,6 +19,7 @@ import { DASHBOARD_HTML, DOCS_HTML, webAssetPath, WEB_CONTENT_TYPES } from "./as
 import { ApprovalBroker, type ApprovalDecision } from "./approval.js";
 import { QuestionBroker } from "./question.js";
 import { AuthGate, clearCookie, rejectAuth, tokenCookie } from "./auth.js";
+import { checkPermissions, computerControl, computerSupported } from "../core/computer.js";
 
 const MAX_BODY = 1024 * 1024;
 const MAX_JOBS = 100;
@@ -397,6 +398,22 @@ export class LubanWebServer {
       })));
     }
     if (url.pathname === "/api/inbox") return json(res, await this.mesh.inbox(Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 50)))));
+    if (url.pathname === "/api/computer") {
+      // The switch's own status line: is a session open, and can the OS actually
+      // take synthetic input right now (macOS permissions change under us).
+      const control = computerControl({ home: this.config.home, workspace: this.config.workspace });
+      const status: Record<string, unknown> = { enabled: control.enabled, platform: process.platform };
+      try {
+        const permissions = await checkPermissions(this.config.home);
+        status.accessibility = permissions.accessible;
+        status.postEvent = permissions.postEvent;
+        status.screenRecording = permissions.screenRecording;
+        status.displayScale = permissions.displayScale;
+      } catch (error) {
+        status.error = error instanceof Error ? error.message : String(error);
+      }
+      return json(res, status);
+    }
     if (url.pathname === "/api/jobs") {
       // The job folder is one per machine, so a console that names no project
       // still sees every workspace (the desktop console wants that). The phone
@@ -631,6 +648,20 @@ export class LubanWebServer {
       this.config.mesh.projects = { ...this.config.mesh.projects, [name]: workspace };
       this.mesh.registerProject(name, workspace);
       return json(res, { ok: true, project: name, workspace, created: !rawPath });
+    }
+    if (url.pathname === "/api/computer") {
+      const control = computerControl({ home: this.config.home, workspace: this.config.workspace });
+      if (body.stop === true) {
+        await control.requestStop();
+        return json(res, { ok: true, enabled: false, stopped: true });
+      }
+      if (body.enabled === true) {
+        if (!computerSupported()) throw new HttpError(400, `电脑操控只支持 macOS（当前是 ${process.platform}）`);
+        await control.begin(typeof body.label === "string" ? body.label : undefined);
+        return json(res, { ok: true, enabled: true });
+      }
+      await control.end();
+      return json(res, { ok: true, enabled: false });
     }
     if (url.pathname === "/api/jobs") {
       const interaction = String(body.interaction || "auto");

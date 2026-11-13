@@ -12,6 +12,7 @@ import process from "node:process";
 import { Command } from "commander";
 import { render } from "ink";
 import { AgentRunner, initialMessages } from "./core/agent.js";
+import { beginFromEnvironment } from "./core/computer.js";
 import { loadConfig, savePreferredModel } from "./core/config.js";
 import { codexInvocation } from "./core/codex-command.js";
 import { announceHost, directedBroadcasts, MeshRuntime } from "./core/mesh/runtime.js";
@@ -787,6 +788,11 @@ async function main(): Promise<number> {
     seedDefaults: true,
   });
   traceBoot("config");
+  // Without an interactive switch, only an explicit environment flag may open
+  // a control session (see docs/computer-control.md).
+  if (await beginFromEnvironment(config.home, config.workspace)) {
+    process.stderr.write("电脑操控已开启（LUBAN_COMPUTER）：本次运行可以截屏、移动鼠标与键盘\n");
+  }
   // One tiny heartbeat at startup is what turns "luban was installed" into a
   // countable installation even when no model call ever succeeds; it is
   // throttled by the same interval as token reports.

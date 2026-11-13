@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, ipcMain, protocol, screen, shell, Tray } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, ipcMain, protocol, screen, shell, Tray, globalShortcut } = require("electron");
 const { preparePetTask } = require("./pet-task.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
@@ -169,6 +169,113 @@ function announcePet() {
     } catch { /* No document during navigation. */ }
   }
 }
+// ── Computer control: edge glow + abort ────────────────────────────────────
+// While the agent holds the pointer and keyboard the whole screen rim burns, so
+// control is never invisible and ⌘. always takes it back. The backend is a child
+// process, so it reports through a loopback endpoint instead of IPC.
+let glow;
+let glowToken;
+let glowServer;
+let glowUrl;
+const glowLabel = "luban 正在操控";
+
+function glowSend(state) {
+  if (!glow || glow.isDestroyed() || glow.webContents.isDestroyed()) return;
+  const send = () => glow?.webContents.executeJavaScript(`window.lubanGlow && window.lubanGlow(${JSON.stringify(state)})`).catch(() => undefined);
+  // The first state usually arrives while the document is still loading; the
+  // rim already animates by default, the badge shows up on finish.
+  if (glow.webContents.isLoading()) glow.webContents.once("did-finish-load", () => void send());
+  else void send();
+}
+
+function createGlow() {
+  if (glow && !glow.isDestroyed()) return glow;
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const { x, y, width, height } = display.bounds;
+  glow = new BrowserWindow({
+    x, y, width, height,
+    frame: false, transparent: true, backgroundColor: "#00000000", hasShadow: false,
+    alwaysOnTop: true, skipTaskbar: true, resizable: false, movable: false,
+    focusable: false, fullscreenable: false, show: false, roundedCorners: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false },
+  });
+  // A floating panel above full-screen apps, and never in the way of a click.
+  glow.setAlwaysOnTop(true, "screen-saver");
+  glow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  glow.setIgnoreMouseEvents(true, { forward: true });
+  glow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  glow.webContents.on("will-navigate", event => event.preventDefault());
+  glow.on("closed", () => { glow = undefined; });
+  void glow.loadFile(join(__dirname, "glow.html"));
+  return glow;
+}
+
+function showGlow(label) {
+  const win = createGlow();
+  // The agent may be driving a second display, so the rim follows the pointer
+  // instead of staying on the display that was active when the window was made.
+  const { x, y, width, height } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds;
+  if (win.getBounds().x !== x || win.getBounds().y !== y || win.getBounds().width !== width || win.getBounds().height !== height) {
+    win.setBounds({ x, y, width, height });
+  }
+  glowSend({ mode: "on", label: label || glowLabel });
+  if (!win.isVisible()) win.showInactive();
+  registerAbortShortcut();
+}
+
+function hideGlow() {
+  if (!glow || glow.isDestroyed()) return;
+  glowSend({ mode: "off" });
+  glow.hide();
+}
+
+function registerAbortShortcut() {
+  if (globalShortcut.isRegistered("CommandOrControl+.")) return;
+  // Registered while control is on, released after: ⌘. must reach luban even
+  // when the agent is mid-drag.
+  globalShortcut.register("CommandOrControl+.", () => { void stopComputerControl(); });
+}
+
+async function stopComputerControl() {
+  // The flag file is the part that outlives this process: the backend re-reads
+  // it before every action, so a running loop aborts at its next step.
+  try {
+    const dir = join(homedir(), ".luban", "computer");
+    require("node:fs").mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "stop"), String(Date.now()));
+  } catch { /* Best effort: the glow still turns off. */ }
+  glowSend({ mode: "stop" });
+  setTimeout(() => { hideGlow(); globalShortcut.unregister("CommandOrControl+."); }, 750);
+}
+
+/** Loopback endpoint the backend posts begin/action/end to. */
+function startGlowServer() {
+  if (glowServer) return;
+  glowToken = randomBytes(24).toString("base64url");
+  const http = require("node:http");
+  glowServer = http.createServer((request, response) => {
+    const finish = (status, body) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); };
+    if (request.method !== "POST") return finish(405, { ok: false });
+    if (request.headers["x-luban-glow-token"] !== glowToken) return finish(401, { ok: false });
+    let body = "";
+    request.on("data", chunk => { body += chunk; if (body.length > 8192) request.destroy(); });
+    request.on("end", () => {
+      let event = {};
+      try { event = JSON.parse(body || "{}"); } catch { return finish(400, { ok: false }); }
+      if (event.event === "begin") showGlow(event.label);
+      else if (event.event === "action") {
+        if (!glow || glow.isDestroyed() || !glow.isVisible()) showGlow(event.label);
+        else glowSend({ mode: "action", label: event.label || glowLabel });
+      } else if (event.event === "end") hideGlow();
+      finish(200, { ok: true });
+    });
+  });
+  glowServer.listen(0, "127.0.0.1", () => {
+    glowUrl = `http://127.0.0.1:${glowServer.address().port}/glow`;
+  });
+  glowServer.unref?.();
+}
+
 function createPet() {
   if (pet && !pet.isDestroyed()) { pet.show(); pet.focus(); announcePet(); return; }
   const area = screen.getPrimaryDisplay().workArea;
@@ -383,7 +490,12 @@ function startBackend(session, workspace) {
       "--parent-pid", String(process.pid)];
     if (remote) args.push("--remote");
     const child = spawn(node, args, {
-      env: { ...process.env, LUBAN_WEB_TOKEN: token }, stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        LUBAN_WEB_TOKEN: token,
+        ...(glowUrl ? { LUBAN_GLOW_URL: glowUrl, LUBAN_GLOW_TOKEN: glowToken } : {}),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
     });
     session.backend = child;
     let output = "";
@@ -649,8 +761,9 @@ app.whenReady().then(async () => {
       { type: "separator" }, { role: "quit", label: "退出" },
     ] },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
-    { label: "视图", submenu: [{ label: '显示桌宠', click: createPet }, { label: '打开主界面', click: showMain }, { role: "reload", label: "重新加载" }, { role: "togglefullscreen", label: "全屏" }] },
+    { label: "视图", submenu: [{ label: '显示桌宠', click: createPet }, { label: "停止电脑操控", click: () => { void stopComputerControl(); } }, { label: '打开主界面', click: showMain }, { role: "reload", label: "重新加载" }, { role: "togglefullscreen", label: "全屏" }] },
   ]));
+  startGlowServer();
   await openWorkspaceWindow(folderFromArgs(process.argv) || savedWorkspace() || homedir());
   if (liveSessions().some(session => session.backendAccess)) { startBot(); if (petPreference()) createPet(); }
 }).catch(error => { dialog.showErrorBox("luban", String(error)); app.quit(); });
@@ -670,6 +783,8 @@ app.on('before-quit', event => {
 });
 app.on("activate", showMain);
 app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
+  if (glowServer) { glowServer.close(); glowServer = undefined; }
   if (tray && !tray.isDestroyed()) tray.destroy();
   tray = undefined;
   stopBot();

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+<title>luban control glow</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; cursor: default; }
+  #rim { position: fixed; inset: 0; width: 100%; height: 100%; }
+  /* The badge sits at the top centre, out of the way of menus and the pointer. */
+  #badge {
+    position: fixed; top: 6px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 12px 5px 10px; border-radius: 999px;
+    border: 1px solid #4a8dff7a; background: #0a1220cc; color: #cfe2ff;
+    font: 12px/1.2 -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+    letter-spacing: .01em; white-space: nowrap;
+    box-shadow: 0 6px 22px #000a, 0 0 18px #3d7dff4d;
+    opacity: 0; transition: opacity .18s ease;
+  }
+  #badge.on { opacity: 1; }
+  #badge .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #6ea8ff;
+    box-shadow: 0 0 8px #6ea8ff, 0 0 16px #6ea8ff88;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  #badge .key { color: #8fb8ff; font-variant-numeric: tabular-nums; }
+  #badge.stop { border-color: #ff5f6d8c; color: #ffd9dd; box-shadow: 0 6px 22px #000a, 0 0 22px #ff5f6d66; }
+  #badge.stop .dot { background: #ff6b78; box-shadow: 0 0 10px #ff6b78; animation: none; }
+  @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { #badge .dot { animation: none; } }
+</style>
+</head>
+<body>
+<canvas id="rim"></canvas>
+<div id="badge"><span class="dot"></span><span id="label">luban 正在操控</span><span class="key">⌘. 停止</span></div>
+<script>
+(() => {
+  const canvas = document.getElementById("rim");
+  const context = canvas.getContext("2d");
+  const badge = document.getElementById("badge");
+  const label = document.getElementById("label");
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // State is pushed by the main process: { mode: "on"|"action"|"stop", label }.
+  let mode = "on";
+  let running = true;
+  let energy = 1;
+  let stopAt = 0;
+  let started = performance.now();
+
+  const resize = () => {
+    const scale = window.devicePixelRatio || 1;
+    canvas.width = Math.round(window.innerWidth * scale);
+    canvas.height = Math.round(window.innerHeight * scale);
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+  };
+  resize();
+  addEventListener("resize", resize);
+
+  /** Jagged bolt along one edge: the "burning arc" that reads as live current. */
+  function bolt(x1, y1, x2, y2, jitter, alpha, width) {
+    const steps = 14;
+    context.beginPath();
+    context.moveTo(x1, y1);
+    for (let step = 1; step <= steps; step += 1) {
+      const ratio = step / steps;
+      const wobble = (Math.random() - 0.5) * jitter * Math.sin(ratio * Math.PI);
+      context.lineTo(x1 + (x2 - x1) * ratio + wobble, y1 + (y2 - y1) * ratio + wobble);
+    }
+    context.strokeStyle = `rgba(150, 205, 255, ${alpha})`;
+    context.lineWidth = width;
+    context.lineCap = "round";
+    context.shadowColor = `rgba(90, 160, 255, ${alpha})`;
+    context.shadowBlur = 12;
+    context.stroke();
+    context.shadowBlur = 0;
+  }
+
+  function frame(now) {
+    if (!running) return;
+    requestAnimationFrame(frame);
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const time = (now - started) / 1000;
+    context.clearRect(0, 0, width, height);
+
+    const stopping = mode === "stop";
+    const accent = stopping ? [255, 96, 108] : [110, 168, 255];
+    const pulse = reduced ? 0.7 : 0.55 + 0.45 * Math.sin(time * 2.2);
+    const strength = (stopping ? Math.max(0, 1 - (now - stopAt) / 700) : 1) * energy;
+
+    // Soft rim: four gradient bands hugging each edge, never painting the middle.
+    const depth = 64;
+    const bands = [
+      [0, 0, width, depth, 0, 0, 0, depth],
+      [0, height - depth, width, depth, 0, height, 0, height - depth],
+      [0, 0, depth, height, 0, 0, depth, 0],
+      [width - depth, 0, depth, height, width, 0, width - depth, 0],
+    ];
+    for (const [x, y, w, h, gx1, gy1, gx2, gy2] of bands) {
+      const gradient = context.createLinearGradient(gx1, gy1, gx2, gy2);
+      gradient.addColorStop(0, `rgba(${accent[0]}, ${accent[1]}, ${accent[2]}, ${0.30 * pulse * strength})`);
+      gradient.addColorStop(1, `rgba(${accent[0]}, ${accent[1]}, ${accent[2]}, 0)`);
+      context.fillStyle = gradient;
+      context.fillRect(x, y, w, h);
+    }
+
+    // Hairline stroke around the whole screen: the "the machine is held" line.
+    context.strokeStyle = `rgba(${accent[0]}, ${accent[1]}, ${accent[2]}, ${0.55 * pulse * strength})`;
+    context.lineWidth = 1.5;
+    context.strokeRect(0.75, 0.75, width - 1.5, height - 1.5);
+
+    // Arcs travel around the rim; each pulse starts where the last one ended.
+    const travel = (time * (stopping ? 900 : 320)) % (2 * (width + height));
+    const segment = 190 + 60 * Math.sin(time * 1.7);
+    const pointAt = (distance) => {
+      const perimeter = 2 * (width + height);
+      const d = ((distance % perimeter) + perimeter) % perimeter;
+      if (d < width) return [d, 0, 1, 0];
+      if (d < width + height) return [width, d - width, 0, 1];
+      if (d < 2 * width + height) return [width - (d - width - height), height, -1, 0];
+      return [0, height - (d - 2 * width - height), 0, -1];
+    };
+    for (let index = 0; index < 3; index += 1) {
+      const [x, y, dx, dy] = pointAt(travel + index * 420);
+      const length = Math.min(segment + index * 70, dx !== 0 ? width : height);
+      const endX = x + dx * length;
+      const endY = y + dy * length;
+      bolt(x, y, endX, endY, 7, (0.55 - index * 0.12) * strength * (reduced ? 0.6 : 1), 1.6 - index * 0.3);
+    }
+
+    if (stopping && now - stopAt > 700) {
+      running = false;
+      context.clearRect(0, 0, width, height);
+    }
+  }
+
+  window.lubanGlow = (state) => {
+    const next = state?.mode || "on";
+    if (next === "stop") {
+      mode = "stop";
+      stopAt = performance.now();
+      badge.classList.add("stop", "on");
+      label.textContent = "已停止操控";
+      // The stop flash is a fixed 0.7s fade, then the window is hidden by main.
+      if (!running) { running = true; started = performance.now(); requestAnimationFrame(frame); }
+      return;
+    }
+    if (next === "off") {
+      running = false;
+      badge.classList.remove("on");
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    if (state?.label) label.textContent = state.label;
+    badge.classList.remove("stop");
+    badge.classList.add("on");
+    if (next === "action") { energy = 1.45; }
+    mode = next === "action" ? "on" : next;
+    if (!running) { running = true; started = performance.now(); requestAnimationFrame(frame); }
+  };
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

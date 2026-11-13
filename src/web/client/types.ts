@@ -202,3 +202,14 @@ export type TimelineItem =
   | { kind: "tool"; id: string; run: ToolRun; at: number }
   | { kind: "error"; id: string; text: string; at: number }
   | { kind: "result"; id: string; text: string; at: number; status: JobStatus };
+
+/** What the desktop's 「电脑操控」 switch can see of the OS right now. */
+export interface ComputerStatus {
+  enabled: boolean;
+  platform?: string;
+  accessibility?: boolean;
+  postEvent?: boolean;
+  screenRecording?: boolean;
+  displayScale?: number;
+  error?: string;
+}

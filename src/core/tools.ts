@@ -12,6 +12,7 @@ import { isInside, pathResolver, resolveInside } from "./paths.js";
 import { LubanBackend } from "./backend.js";
 import { callMcpTool, listMcpTools, searchMcpTools } from "./mcp.js";
 import { CheckpointStore } from "./checkpoint.js";
+import { computerControl, computerSupported, type ComputerRequest } from "./computer.js";
 import { createKevTool } from "./kev.js";
 import { editPreview } from "./edit-preview.js";
 import type { MeshRuntime } from "./mesh/runtime.js";
@@ -19,6 +20,29 @@ import type { LubanConfig, ToolDefinition } from "./types.js";
 import { guardTool } from "./tool-validation.js";
 
 const MAX_OUTPUT = 120_000;
+
+/** Optional numeric argument: undefined when absent, never NaN. */
+function optionalNumber(args: Record<string, unknown>, name: string): number | undefined {
+  const value = args[name];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return undefined;
+}
+
+function pointArg(value: unknown): { x: number; y: number } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const point = value as { x?: unknown; y?: unknown };
+  const x = Number(point.x);
+  const y = Number(point.y);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
+}
+
+function regionArg(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const area = value as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
+  const [x, y, width, height] = [area.x, area.y, area.width, area.height].map(Number);
+  return [x, y, width, height].every(Number.isFinite) ? { x: x!, y: y!, width: width!, height: height! } : undefined;
+}
 /**
  * Keep the agent responsive when a command is actually a server, watcher, or
  * other long-lived process. This mirrors the short blocking budget used by
@@ -728,6 +752,83 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
         return searchMcpTools(config, query, limit, signal);
       },
     },
+    // Offered only where it can work: on Linux/Windows the model must not see a
+    // tool that can only answer with "unsupported".
+    ...(computerSupported() ? [{
+      // The only tool that reaches outside the workspace and touches the OS:
+      // pointer, keyboard and screen. It refuses to act until a human opens the
+      // 电脑操控 session in the desktop app, and every action re-checks the abort
+      // flag so ⌘. on the edge glow stops a running loop.
+      name: "computer",
+      description: "Control the user's desktop: screenshot the screen, move the pointer, click, drag, scroll, type text and press shortcuts. Requires the user to switch on 「电脑操控」 in the desktop app first (the screen edge glows while it is on); the call fails with an explanation otherwise. Coordinates are screen points (top-left origin of the main display, same scale as the screenshot). Read the screenshot before clicking so you aim at what is actually on screen.",
+      risk: "execute",
+      parameters: schema({
+        action: {
+          type: "string",
+          enum: ["status", "screenshot", "cursor", "move", "click", "double_click", "right_click", "drag", "scroll", "type", "key"],
+          description: "status/screenshot/cursor are read-only; everything else changes the user's screen",
+        },
+        x: { type: "number", description: "Screen x in points" },
+        y: { type: "number", description: "Screen y in points" },
+        text: { type: "string", description: "Text to type (use key for shortcuts)" },
+        key: { type: "string", description: "Key name: return, tab, escape, up, down, left, right, a-z, 0-9, f1-f12" },
+        modifiers: { type: "array", items: { type: "string", enum: ["cmd", "shift", "alt", "ctrl"] } },
+        button: { type: "string", enum: ["left", "right", "middle"] },
+        count: { type: "integer", minimum: 1, maximum: 3, description: "Clicks to send (2 = double click)" },
+        dy: { type: "number", description: "Vertical scroll amount in pixels; negative scrolls up" },
+        dx: { type: "number", description: "Horizontal scroll amount in pixels" },
+        region: {
+          type: "object",
+          description: "Optional screenshot region in screen points",
+          properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" } },
+          required: ["x", "y", "width", "height"],
+        },
+        from: { type: "object", description: "Drag start point", properties: { x: { type: "number" }, y: { type: "number" } }, required: ["x", "y"] },
+        to: { type: "object", description: "Drag end point", properties: { x: { type: "number" }, y: { type: "number" } }, required: ["x", "y"] },
+      }, ["action"]),
+      async execute(args, signal) {
+        const action = stringArg(args, "action");
+        const request: ComputerRequest = {
+          x: optionalNumber(args, "x"),
+          y: optionalNumber(args, "y"),
+          text: typeof args.text === "string" ? args.text : undefined,
+          key: typeof args.key === "string" ? args.key : undefined,
+          modifiers: Array.isArray(args.modifiers) ? args.modifiers.filter((item): item is string => typeof item === "string") : undefined,
+          button: typeof args.button === "string" ? args.button : undefined,
+          count: optionalNumber(args, "count"),
+          dy: optionalNumber(args, "dy"),
+          dx: optionalNumber(args, "dx"),
+          region: regionArg(args.region),
+          from: pointArg(args.from),
+          to: pointArg(args.to),
+        };
+        const control = computerControl({ workspace, home: config.home });
+        const { summary, reply } = await control.act(action, request, { signal });
+        if (action === "status") {
+          const view = reply as { accessible?: boolean; postEvent?: boolean; screenRecording?: boolean };
+          const ready = view.accessible === true && view.screenRecording === true;
+          return JSON.stringify({
+            enabled: control.enabled,
+            accessibility: view.accessible === true,
+            postEvent: view.postEvent === true,
+            screenRecording: view.screenRecording === true,
+            note: ready
+              ? (control.enabled ? "电脑操控可用" : "权限齐全，但用户还没有打开「电脑操控」开关")
+              : "缺少 macOS 权限：需要在系统设置 › 隐私与安全性 里给 luban 打开「辅助功能」和「屏幕录制」",
+          }, null, 2);
+        }
+        if (action === "screenshot") {
+          const path = String(reply.path ?? "");
+          return JSON.stringify({
+            path: relative(workspace, path) || path,
+            absolute: path,
+            bytes: reply.bytes,
+            note: "Use read_image on this path, then attach_image when the model needs to look at the pixels.",
+          }, null, 2);
+        }
+        return summary;
+      },
+    } satisfies ToolDefinition] : []),
     {
       name: "read_image",
       description: "Inspect a local image for model input. Reports size and vision capability. To actually see the image, ask the user to @-attach the file path; TUI attachments are sent as native vision parts to vision-capable models.",

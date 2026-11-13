@@ -1,3 +1,4 @@
+import { ComputerToggle } from "./computer-control.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Inspector } from "./inspector";
 import { Sidebar } from "./sidebar";
@@ -120,6 +121,7 @@ export function TopBar({ store }: { store: ReturnType<typeof useWorkbench> }): R
     <header className="top">
       <span className="title">{store.job ? (store.job.title || store.job.id) : "New agent task"}</span>
       <div className="pills">
+        <ComputerToggle notify={store.notify} />
         {status && <span className={`pill ${tone}`}>{STATUS_LABELS[status] ?? status}</span>}
         {store.job?.interactive && <span className="pill warn" title="工具审批会在此页面等待你的决定">交互审批</span>}
         <span className="pill">{store.mode}</span>

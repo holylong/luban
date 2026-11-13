@@ -1,3 +1,39 @@
+## 2.4.2 — 2026-11-13
+
+- 讲清并落实平台边界：电脑操控只做 macOS。新增 `computerSupported()`（`src/core/computer.ts`）作为唯一判断点——`begin()` / `act()` / `screenshot()` / `checkPermissions()` 在非 macOS 直接抛「只支持 macOS（当前是 linux）」这种一句话错误，不再让模型看到 `swiftc: command not found`；`createTools()` 在非 macOS **不注册** `computer` 工具；`POST /api/computer` 开启请求返回 400；TUI `/computer` 先说明原因再返回；客户端药丸本来就只在 `platform === "darwin"` 时渲染。
+- `LUBAN_COMPUTER=1` 在非 macOS 只打印一行提示并忽略，无头运行不会因此失败。
+- 新增三个「其他平台」用例：`computerSupported` 只在 darwin 为真、非 darwin 的 `begin/act` 抛可读错误且不会真的开启、`createTools()` 在 linux 下少且只少 `computer` 一个工具（`read_image` 等仍在）。
+- 文档 `docs/computer-control.md` 增「平台支持」表：Linux/Windows 上除电脑操控外的功能（编译、测试、mesh、relay、手机端）都照常。
+
+## 2.4.1 — 2026-11-13
+
+- 修掉「CLI 里能操控但看不到光圈」：终端自己现在也会画燃弧。`ComputerControl.begin()` 在 macOS 上拉起 `apps/desktop/native/glow.swift`（按源码哈希编译进 `~/.luban/bin/luban-glow-<hash>`，约 5s，之后复用），`end()` / `requestStop()` / `Ctrl+C` 时关掉；徽标写明「luban 正在操控 · ⌘. 停止」。终端本身覆盖不了别的 App，这是唯一能在 CLI 里显示边框的路径（`~/bin` 里的 `glow.html` 只对 Electron 有效，勿再误用）。
+- 燃弧调亮：内圈描边 0.55→0.85 且加粗到 2px、新增 6px 处一圈暗线（0.30）、四条径向渐变带 0.30→0.42、火花带 0.55→0.80 且阴影 16px、徽标底 0.82→0.92。实测（3360×2100 真截屏对比）：边缘 `(23,23,23)→(69,87,112)`，四角 `(77,81,69)→(107,132,155)`，中心像素不变，约 6.5 万采样点变化。
+- 停止标志不再被系统事件污染：`glow.swift` 收到 SIGTERM/SIGINT/SIGHUP 或发现父进程消失时只退出，**不写** `~/.luban/computer/stop`；只有人按 `⌘.`（或开关关闭）才写。之前父进程正常结束会顺手写一个停止标志，导致下一会话的第一次操作报「用户已中止」。`stopRim()` 改为等子进程退出后再删标志。
+- 桌面端不重复画：检测到 `LUBAN_GLOW_URL`（桌面 App 自己那圈覆盖层）就不起 CLI 覆盖层；`LUBAN_GLOW=off` 可全局关掉；`LUBAN_GLOW_BINARY` 指定现成二进制（测试用）。
+- 新增 `src/core/computer.test.ts` 的 `rim overlay` 三例：会话开启就点亮、结束即熄灭且不留停止标志；桌面 App 在场时让位；glow 二进制缺失时操控照常可用。
+- 文档 `docs/computer-control.md` 补「终端里也有燃弧」一节，删掉「终端没有燃弧」的旧说法。
+
+## 2.3.20 — 2026-11-13
+
+- 电脑操控补齐非桌面入口（三条路共用同一个停止标志 `~/.luban/computer/stop`；开关本身是每进程的，只对自己那个 agent 放开）：
+  - **终端 TUI**：新增 `/computer [on|off|status]`（不带参数在开/关之间切换）。`status` 直接跑 helper 的 `check`，一行打印 `电脑操控：开 · 辅助功能 ✓ · 发送事件 ✓ · 屏幕录制 ✓ · 缩放 2×`；开启后标题栏出现红色 `⌁ 电脑操控`。终端覆盖不了别的 App，所以没有燃弧，靠标题栏 + 工具卡显示。
+  - **运行中 `Ctrl+C` / `Esc`** 在中断任务的同时收回电脑操控（写停止标志并置灰状态），和桌面 `⌘.` 语义一致。
+  - **无头**：`luban --prompt`、管道输入没有可点的开关，只有 `LUBAN_COMPUTER=1`（或 `on/true/yes`）显式打开，启动时在 stderr 说明；未设置时工具照旧报错。
+  - `luban web` / 浏览器工作台沿用桌面那套药丸 + `/api/computer`，无需改动。
+- 新增 `src/ui/app-computer.test.tsx`（真实 TUI：`/computer status` 如实报缺屏幕录制、`on` 后 `control.enabled === true` 且标题栏出现 `⌁ 电脑操控`、裸命令切回关闭）；`src/core/computer.test.ts` 增加 `beginFromEnvironment` 用例（未设置/`0` 不开启，`1` 开启）。现在共 8 + 1 + 2 + 5 个电脑操控用例。
+- 文档：`docs/computer-control.md` 增「三个入口」对照表。
+
+## 2.3.19 — 2026-11-13
+
+- 新增「电脑操控」：luban 现在可以截屏、移动指针、点击/双击/右键、拖拽、滚轮、打字和按快捷键，和 Codex 一样在需要时接管这台 Mac。所有输入都只经过一个编译型 helper（`apps/desktop/native/computer.swift`，`swiftc` 按源码哈希编译进 `~/.luban/bin`，也可用预编译产物/LUBAN_COMPUTER_HELPER 覆盖），Node 侧不直接注入事件。
+- 安全默认：工具在开关关闭时**直接报错**而不是静默无操作；桌面 Agent 栏顶部新增「电脑操控」药丸开关（只在 macOS 出现），开启后屏幕四边燃起蓝色燃弧 + 顶部徽标「luban 正在操控 ⌘. 停止」，`⌘.`（全局快捷键）中止：桌面写 `~/.luban/computer/stop`，后端每个动作前都重读该标志，失控循环在下一步立即中断；关掉后约 0.7s 就熄火。
+- Electron：新增透明全屏覆盖窗口 `apps/desktop/glow.html`（`setAlwaysOnTop("screen-saver")`、`setIgnoreMouseEvents`、不抢焦点、全屏/多桌面可见），用 Canvas 画边缘渐变 + 沿边游走的锯齿电弧，`prefers-reduced-motion` 降级；后端（子进程）通过 `LUBAN_GLOW_URL` 回环端点 + `x-luban-glow-token` 把 begin/action/end 事件推过来，不需要跨进程 IPC。
+- 权限如实上报：`check` 同时返回 AX、`CGPreflightPostEventAccess()` 与屏幕录制三项，前端缺权限时药丸显示虚线并提示「系统设置 → 隐私与安全性」；`cursor`/`screenshot` 只读，`status` 不要求开关。
+- 指针移动改为 `CGWarpMouseCursorPosition` + `.mouseMoved` 双保险：TCC 归属到 launcher 时 `post` 会被静默丢弃（实测 Node 子进程 move 不生效），warp 不依赖授权，所以移动始终精准，post 只负责让窗口感知 hover。
+- 新增 `src/core/computer.test.ts`（7 例：未开启拒绝、⌘. 中止与重开、截屏落 `.luban/computer` 且只留 20 张、权限探测、glow begin/action/end、双击/右键动词、helper 定位）、`src/web/computer-endpoint.test.ts`（2 例）、`src/web/client/computer-control.test.tsx`（5 例）。
+- 验证：`tsc`（server+client）干净；真实 helper 实测 `check` 全绿、`screenshot` 3360×2100 全屏 PNG、`move` 由 293→333 且可回位；Chrome 渲染 `glow.html` 采样边缘像素为蓝色 (49,74,112)、中心保持背景色；`npx vitest run src/web src/core/computer.test.ts` 59 文件 / 361 用例通过（唯一失败是既有的 macOS tmpdir 符号链接用例）。
+
 ## 2.3.18 — 2026-11-12
 
 - 桌面三栏整体收紧，把「很多空间用不上」的地方压回来（1680×1050 实测，只动桌面作用域，手机端不加改动）：

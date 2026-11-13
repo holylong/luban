@@ -69,6 +69,9 @@ export const api = {
   setModel: (model: string, effort?: import("./types").ReasoningEffort | null) =>
     post<{ ok: boolean }>("/api/model", { model, reasoning_effort: effort }),
   node: () => request<NodeInfo>("/api/node"),
+  computer: () => request<import("./types").ComputerStatus>("/api/computer"),
+  setComputer: (input: { enabled?: boolean; stop?: boolean }) =>
+    post<{ ok: boolean; enabled: boolean; stopped?: boolean }>("/api/computer", input),
   peers: () => request<PeerView[]>("/api/peers"),
   inbox: (limit = 20) => request<InboxMessage[]>(`/api/inbox${query({ limit })}`),
   jobs: (project?: string) => request<MeshJob[]>(`/api/jobs${query({ project })}`),

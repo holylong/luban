@@ -27,6 +27,7 @@ import { liveSessions, type LiveSessionSnapshot } from "../core/live-session.js"
 import { toJobStreamEvent } from "../core/mesh/agent-runner.js";
 import { exportWorkReport, type ReportPeriod } from "../core/work-report.js";
 import { summarizeToolArgs } from "../core/tools.js";
+import { checkPermissions, computerControl, computerSupported } from "../core/computer.js";
 import type {
   AgentEvent,
   AgentMode,
@@ -144,6 +145,7 @@ const COMMANDS = [
   ["/details", "expand / collapse execution details"],
   ["/diff", "review code changes"],
   ["/mesh", "switch local conversation / mesh activity"],
+  ["/computer", "computer control · on / off / status"],
   ["/help", "keyboard and commands"],
   ["/exit", "save and quit"],
 ] as const;
@@ -155,6 +157,8 @@ const RUN_IMMEDIATE_COMMANDS = new Set([
   "/models", "/mode", "/settings", "/permissions",
   "/token",
   "/plan", "/theme", "/skin", "/details", "/mesh", "/help", "/diff", "/verify",
+  // /computer only touches the session flag; it never needs the model.
+  "/computer",
   // /pending is the withdraw list: a wrongly queued task is noticed mid-run.
   "/pending",
   // /mcp only reads the config files; a toggle lands on the next start anyway.
@@ -171,6 +175,7 @@ const COMMAND_USAGE: Record<string, string> = {
   "/permissions": "/permissions ask|edits|allow",
   "/queue": "/queue <task> — current task finishes first",
   "/pending": "/pending — 待处理消息列表：↑↓ 选择，Enter 撤回，Esc 关闭",
+  "/computer": "/computer [on|off|status] — 允许/收回电脑操控（截屏、鼠标、键盘）；不带参数在开/关之间切换，运行中 Ctrl+C 也会收回",
   "/mcp": "/mcp — MCP 服务列表：↑↓ 选择，Enter 试连，e 启停，t 信任，x 删除（再按一次确认），Esc 关闭",
   "/export": "/export [文件名|路径] — markdown transcript (默认 luban-export-<项目>-<sessionId>.md)",
   "/ping": "/ping <peer>",
@@ -545,7 +550,7 @@ function VerifyDialog({ records, gate }: { records: VerificationRecord[]; gate: 
   </Box>;
 }
 
-function Header({ config, mode, sessionTitle, mesh }: { config: LubanConfig; mode: AgentMode; sessionTitle: string; mesh?: MeshRuntime }) {
+function Header({ config, mode, sessionTitle, mesh, computerOn }: { config: LubanConfig; mode: AgentMode; sessionTitle: string; mesh?: MeshRuntime; computerOn?: boolean }) {
   const directory = basename(config.workspace);
   const online = mesh?.peers().filter((peer) => peer.online).length || 0;
   return (
@@ -554,6 +559,7 @@ function Header({ config, mode, sessionTitle, mesh }: { config: LubanConfig; mod
       <Box flexShrink={0}>
         <Text color={modeColor(mode)} bold>{modeLabel(mode)}</Text>
         <Text color={theme.primary} bold> · {directory}</Text>
+        {computerOn ? <Text color={theme.red} bold> · ⌁ 电脑操控</Text> : null}
         <Text color={theme.dim}> · v{VERSION}</Text>
       </Box>
       <Box marginLeft={2} flexShrink={1} overflow="hidden">
@@ -574,6 +580,7 @@ function HelpPanel() {
       <Text color={theme.muted}>↑↓ 历史 · PgUp/PgDn 翻页 · Ctrl+J 换行 · @ 文件补全</Text>
       <Text color={theme.muted}>Ctrl+Y 复制上次回答 · 输出区拖选即复制（Shift+拖选走终端原生）· 点击链接用浏览器打开 · /copy 复制回答与工具记录</Text>
       <Text color={theme.muted}>Ctrl+C 运行中中断任务 / 空闲复制回答 · Ctrl+D 保存并退出 · /exit 退出</Text>
+      <Text color={theme.muted}>/computer on|off 允许电脑操控（截屏、鼠标、键盘）；终端里没有燃弧，Ctrl+C 运行中会一并收回</Text>
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /usage /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
       <Text color={theme.muted}>直接输入任务，!command 执行 shell，/ 命令补全（含参数用法）</Text>
@@ -766,6 +773,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const [input, setInput] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
   const [running, setRunning] = useState(false);
+  // Mirrors the computer session this terminal opened; the tool itself re-reads
+  // the stop flag, so this is only what the header and /computer report.
+  const [computerOn, setComputerOn] = useState(() => computerControl({ home: initialConfig.home, workspace: initialConfig.workspace }).enabled);
   const [showPlan, setShowPlan] = useState(true);
   // Reads/searches start collapsed; edits always retain their inline diffs.
   const [showDetails, setShowDetails] = useState(false);
@@ -852,6 +862,14 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // per-token path free of another state write; the one-second tick renders it.
   const lastOutputRef = useRef(0);
   const [notice, setNotice] = useState("Describe a goal, ask a question, or type / for commands.");
+  /** An interrupt is also a withdrawal: the flag makes the next action refuse. */
+  const stopComputerControl = useCallback((): void => {
+    const control = computerControl({ home: config.home, workspace: config.workspace });
+    if (!control.enabled) return;
+    void control.requestStop();
+    setComputerOn(false);
+    setNotice("已中止电脑操控 · /computer on 重新开启");
+  }, [config.home, config.workspace]);
   const [relayNotice, setRelayNotice] = useState("");
   const [runOutcome, setRunOutcome] = useState<RunOutcome | null>(null);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
@@ -2153,6 +2171,47 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       setNotice(`主题 ${applied.id} · ${applied.label} · ${applied.mode === "light" ? "亮色" : "暗色"} · ${applied.description} · 已保存`);
       return;
     }
+    if (command === "/computer") {
+      // The terminal has no way to glow over other apps, so the switch lives in
+      // a command here and the desktop app's pill is the same session flag.
+      const control = computerControl({ home: config.home, workspace: config.workspace });
+      if (!computerSupported()) {
+        setComputerOn(false);
+        setNotice(`电脑操控只支持 macOS（当前是 ${process.platform}）：Linux/Windows 还没有截图与指针注入的原生实现`);
+        return;
+      }
+      const action = argument.trim().toLowerCase() || (control.enabled ? "off" : "on");
+      if (action === "on") {
+        await control.begin("终端");
+        setComputerOn(true);
+        setNotice("电脑操控已开启：luban 可以截屏、移动鼠标、点击和打字；/computer off 收回，运行中 Ctrl+C 也会收回");
+        return;
+      }
+      if (action === "off") {
+        await control.end();
+        setComputerOn(false);
+        setNotice("电脑操控已关闭");
+        return;
+      }
+      if (action === "status") {
+        try {
+          const permissions = await checkPermissions(config.home);
+          setComputerOn(control.enabled);
+          setNotice([
+            `电脑操控：${control.enabled ? "开" : "关"}`,
+            `辅助功能 ${permissions.accessible ? "✓" : "✗"}`,
+            `发送事件 ${permissions.postEvent ? "✓" : "✗"}`,
+            `屏幕录制 ${permissions.screenRecording ? "✓" : "✗"}`,
+            `缩放 ${permissions.displayScale}×`,
+          ].join(" · "));
+        } catch (error) {
+          setNotice(`电脑操控：${control.enabled ? "开" : "关"} · helper 不可用：${error instanceof Error ? error.message : String(error)}`);
+        }
+        return;
+      }
+      setNotice("用法：/computer [on|off|status]");
+      return;
+    }
     if (command === "/permissions") {
       if (!["ask", "edits", "allow"].includes(argument)) {
         setNotice(`Permissions: ${config.permissionMode} · use /permissions ask|edits|allow`);
@@ -2759,6 +2818,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     if (!dialog && !approval && key.ctrl && (character === "c" || character === "\u0003")) {
       if (running) {
         abortRef.current?.abort(new Error("cancelled by user"));
+        stopComputerControl();
         return;
       }
       void copyLastToClipboard();
@@ -2800,6 +2860,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     }
     if (running && key.escape) {
       abortRef.current?.abort(new Error("cancelled by user"));
+      stopComputerControl();
       return;
     }
     if (!running && key.escape && !dialog && !approval && !showHelp) {
@@ -3001,7 +3062,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     // Ink treat the output as fullscreen and emit ESC[2J/ESC[3J before every
     // repaint, which erases the screen on each keystroke and shows up as flicker.
     <Box flexDirection="column" height={Math.max(1, rows - 1)} backgroundColor={theme.background}>
-      <Header config={config} mode={activeMode} sessionTitle={sessionRef.current.title} mesh={mesh} />
+      <Header config={config} mode={activeMode} sessionTitle={sessionRef.current.title} mesh={mesh} computerOn={computerOn} />
       <Box height={1} flexShrink={0} paddingX={2} overflow="hidden">
         <Text color={showMesh ? theme.accent : theme.muted} wrap="truncate-end">
           {showMesh ? "Mesh | /mesh: Local" : "Local | /mesh: Mesh"}
