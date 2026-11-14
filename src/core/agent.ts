@@ -277,7 +277,7 @@ export interface AgentRunnerOptions {
 }
 
 /** What a `computer` toolset keeps: the screen, and the way to show it to the model. */
-export const COMPUTER_TOOLSET: ReadonlySet<string> = new Set(["computer", "read_image", "attach_image"]);
+export const COMPUTER_TOOLSET: ReadonlySet<string> = new Set(["computer", "read_image", "attach_image", "schedule"]);
 
 /** Drop everything a control session cannot use (bash, editors, MCP, delegation). */
 export function keepComputerTools(tools: Map<string, unknown>): void {

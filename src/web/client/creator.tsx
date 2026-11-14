@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { parseSchedule } from "../../core/bot-schedule";
 import type { DriveEvent } from "../../core/drive-events";
 import { clock, dayClock, nextRunLabel, scheduleLabel } from "./creator-schedule";
 import { Markdown } from "./markdown";
@@ -27,6 +26,8 @@ export interface CreatorTask {
   model?: string;
   at: number;
   every?: number;
+  /** `notify` tasks only show a desktop notification; they never call a model. */
+  kind?: "agent" | "notify";
   timeout: number;
   status: "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "paused";
   nextAt?: number;
@@ -87,7 +88,7 @@ export type DriveFrame =
 
 interface CreatorBridge {
   snapshot(): Promise<CreatorSnapshot>;
-  add(input: { prompt: string; workspace?: string; at?: number; every?: number }): Promise<{ id?: string; snapshot: CreatorSnapshot }>;
+  add(input: { prompt: string; workspace?: string; at?: number; every?: number; remind?: boolean }): Promise<{ id?: string; snapshot: CreatorSnapshot }>;
   cancel(id: string): Promise<CreatorSnapshot>;
   runs(id: string, limit?: number): Promise<CreatorRun[]>;
   startWorker(): Promise<{ started: boolean; reason: string; snapshot: CreatorSnapshot }>;
@@ -367,7 +368,7 @@ function DrivePane({
   );
 }
 
-function TaskRow({ task, now, onCancel }: { task: CreatorTask; now: number; onCancel: (id: string) => void }): React.ReactElement {
+export function TaskRow({ task, now, onCancel }: { task: CreatorTask; now: number; onCancel: (id: string) => void }): React.ReactElement {
   const [open, setOpen] = useState(false);
   const active = task.status === "queued" || task.status === "running";
   const canOpen = Boolean(task.result);
@@ -381,6 +382,7 @@ function TaskRow({ task, now, onCancel }: { task: CreatorTask; now: number; onCa
             <span>{STATUS_LABEL[task.status]}</span>
             <span>{scheduleLabel(task)}</span>
             <span>{meta(task, now)}</span>
+            {task.kind === "notify" ? <span className="kind">提醒</span> : null}
             {task.runs ? <span>{task.runs} 次执行</span> : null}
           </p>
         </div>
@@ -493,9 +495,6 @@ function App(): React.ReactElement {
   const [view, setView] = useState<"drive" | "queue">("drive");
   const [prompt, setPrompt] = useState("");
   const [workspace, setWorkspace] = useState<string>("");
-  const [when, setWhen] = useState<"now" | "at" | "every">("now");
-  const [at, setAt] = useState("");
-  const [minutes, setMinutes] = useState("60");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -557,8 +556,6 @@ function App(): React.ReactElement {
   const active = useMemo(() => tasks.filter(task => ["queued", "running", "paused"].includes(task.status)), [tasks]);
   const done = useMemo(() => tasks.filter(task => !["queued", "running", "paused"].includes(task.status)), [tasks]);
   const blank = tasks.length === 0;
-  /** A sentence like "每天 6 点提醒我" books itself; the chip shows the parse before dispatch. */
-  const parsed = useMemo(() => (when === "now" ? parseSchedule(prompt) : null), [prompt, when]);
   const items = useMemo(() => timeline(frames), [frames]);
   const running = driving && !frames.slice().reverse().some(frame => frame.type === "turn-end" || frame.type === "exit");
 
@@ -608,22 +605,11 @@ function App(): React.ReactElement {
     setBusy(true);
     setError("");
     try {
-      const input: { prompt: string; workspace?: string; at?: number; every?: number } = { prompt: prompt.trim() };
+      // One sentence, no form. Whether this is a reminder, a scan or a one-off
+      // chore is the agent's reading of the sentence — the queue is only where
+      // its `schedule` calls land, not a shape the person has to fill in first.
+      const input: { prompt: string; workspace?: string } = { prompt: prompt.trim() };
       if (workspace.trim()) input.workspace = workspace.trim();
-      if (when === "at") {
-        const value = Date.parse(at);
-        if (!Number.isFinite(value)) throw new Error("先选一个执行时间");
-        input.at = value;
-      }
-      if (when === "every") {
-        const value = Number(minutes);
-        if (!Number.isFinite(value) || value < 1) throw new Error("间隔至少 1 分钟");
-        input.every = Math.max(60, Math.round(value * 60));
-      }
-      if (when === "now" && parsed) {
-        input.at = parsed.at;
-        if (parsed.every) input.every = parsed.every;
-      }
       const result = await bridge.add(input);
       setSnapshot(result.snapshot);
       const booked = result.snapshot.tasks.find(task => task.id === result.id);
@@ -760,7 +746,7 @@ function App(): React.ReactElement {
                 ref={textarea}
                 value={prompt}
                 rows={blank ? 3 : 2}
-                placeholder="交给后台的事，说「每天 6 点提醒我」也能直接排期"
+                placeholder="说一句话，它自己决定要做什么、什么时候做"
                 onChange={event => setPrompt(event.target.value)}
                 onKeyDown={event => {
                   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
@@ -768,18 +754,6 @@ function App(): React.ReactElement {
               />
               <div className="composer-row">
                 <button className="round" title="选择工作区" onClick={async () => { const picked = await bridge.pickWorkspace(); if (picked) setWorkspace(picked); }}><PlusGlyph /></button>
-                <select className="when" value={when} onChange={event => setWhen(event.target.value as "now" | "at" | "every")}>
-                  <option value="now">现在</option>
-                  <option value="at">定时</option>
-                  <option value="every">每隔</option>
-                </select>
-                {when === "at" ? <input type="datetime-local" value={at} onChange={event => setAt(event.target.value)} /> : null}
-                {when === "every" ? (
-                  <>
-                    <input className="num" type="number" min={1} value={minutes} onChange={event => setMinutes(event.target.value)} />
-                    <span className="unit">分钟</span>
-                  </>
-                ) : null}
                 <span className="spacer" />
                 {prompt.trim() ? <span className="enter-hint">⏎</span> : null}
                 <button className="send" disabled={busy || !prompt.trim()} title="派发（Enter）" onClick={() => { void submit(); }}>
@@ -789,11 +763,6 @@ function App(): React.ReactElement {
             </section>
 
             <div className="composer-meta">
-              {parsed ? (
-                <span className="parsed" title="从这句话里识别到的排期">
-                  <ClockGlyph />{parsed.label} · 首次 {dayClock(parsed.at)}
-                </span>
-              ) : null}
               <button onClick={async () => { const picked = await bridge.pickWorkspace(); if (picked) setWorkspace(picked); }}>
                 <FolderGlyph />{workspace ? workspace.split("/").slice(-1)[0] : "选择工作空间"}<i>⌄</i>
               </button>
@@ -897,5 +866,5 @@ function ArrowGlyph(): React.ReactElement {
   return <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 12.4V4M4.3 7.4L8 3.7l3.7 3.7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
-const root = document.getElementById("root");
+const root = typeof document === "undefined" ? null : document.getElementById("root");
 if (root) createRoot(root).render(<App />);

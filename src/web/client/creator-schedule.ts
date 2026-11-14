@@ -39,14 +39,6 @@ export function dayClock(at?: number, now = Date.now()): string {
   return sameDay ? `今天 ${clock(at)}` : `${date.getMonth() + 1}/${date.getDate()} ${clock(at)}`;
 }
 
-export function everyLabel(ms?: number): string {
-  if (!ms) return "";
-  const minutes = Math.round(ms / MINUTE);
-  if (minutes < 60) return `每 ${minutes} 分钟`;
-  if (minutes % 60 === 0) return `每 ${minutes / 60} 小时`;
-  return `每 ${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
-}
-
 /** How the booking reads back: `每天 06:00`, `每周一 09:00`, `每 6 小时`, or one-off. */
 export function scheduleLabel(task: ScheduleTask): string {
   const every = task.every ?? 0;

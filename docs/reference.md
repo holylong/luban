@@ -195,6 +195,7 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
 
 **桌宠与常驻 Bot**
 
+- 定时/提醒走 luban 自己的队列：`schedule` 工具（以及 `luban bot add … --in 5m --remind`）写一条 `kind:"notify"` 任务，到点直接发系统通知，不再借用系统日历。「5 分钟后提醒我下班」这句话不再由正则解析：Creator 输入框与 `drive` 会话把它原样交给模型，由模型换算成 `in`/`at`/`every` 再调 `schedule`。平台通知命令由 `src/core/notify.ts` 选择（macOS `osascript`、Linux `notify-send`、Windows WinRT toast）；worker 不在跑时工具会顺手拉起，或提示先 `luban bot run`。
 - 桌面 App 启动后自动拉起 `luban bot run`，桌宠就是 bot 的身体，后台身体自称「造物主」（前台仍是编码 Agent）。顶部状态灯显示未启动 / 待命 / 干活中 / 出错 / 锁残留；点击展开面板，查看机器负载/内存、正在执行的任务、各进程子 agent（含实时 token）、worker 子进程与线程数、最近任务结果与 token 用量、待授权申请（只读展示，不含审批按钮）。worker 通过 `~/.luban/bot/status.json` 每秒发布当前任务，各 luban 进程在 `~/.luban/agents/<pid>.json` 发布活跃 agent，进程退出时删除。
 - 若 worker 已由 LaunchAgent 或终端启动，锁已存在，桌面 App 不重复启动，也不在退出时杀掉它；由 App 启动的 worker 退出时先中止当前回合、释放 `worker.lock`（最多等 4 秒）。
 - 桌宠直接输入或拖入文件提交的是工作台交互任务（使用交互审批），不进入 bot 队列；两条通道的权限模型不同，见 [Bot 使用指南](../bot.md)。

@@ -13,6 +13,7 @@ import { LubanBackend } from "./backend.js";
 import { callMcpTool, listMcpTools, searchMcpTools } from "./mcp.js";
 import { CheckpointStore } from "./checkpoint.js";
 import { computerControl, computerSupported, type ComputerRequest } from "./computer.js";
+import { ensureBotWorker, scheduleReminder } from "./remind.js";
 import { createKevTool } from "./kev.js";
 import { editPreview } from "./edit-preview.js";
 import type { MeshRuntime } from "./mesh/runtime.js";
@@ -847,6 +848,43 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
         return summary;
       },
     } satisfies ToolDefinition] : []),
+    {
+      name: "schedule",
+      description: "Schedule something for later on this machine, using luban's own durable queue — the same scheduler as `luban bot`, identical on macOS, Linux and Windows. Use this for every 定时/提醒/闹钟 request; never write to the Calendar or Reminders app, and never use osascript, crontab, at or launchd for it, because those are OS-specific and invisible to the user afterwards. `notify: true` posts a desktop notification at that time without a model call: that is what a reminder is. Leave `notify` off when real work has to happen at that time.",
+      risk: "write",
+      parameters: schema({
+        text: { type: "string", description: "What to say or do when it fires, in the user's words (e.g. 提醒我下班)" },
+        in: { type: "string", description: "Delay from now: 5m, 90s, 2h, 1天" },
+        at: { type: "string", description: "Absolute ISO timestamp with a timezone; use instead of `in` when the user named a clock time" },
+        every: { type: "string", description: "Repeat interval, at least 60s: 1h, 30m" },
+        notify: { type: "boolean", description: "true for a pure reminder: desktop notification only, no model call" },
+      }, ["text"]),
+      async execute(args) {
+        const text = stringArg(args, "text").trim();
+        const atText = typeof args.at === "string" ? args.at.trim() : "";
+        const at = atText ? Date.parse(atText) : undefined;
+        if (atText && !Number.isFinite(at)) throw new Error(`「${atText}」不是带时区的 ISO 时间，例如 2026-11-13T18:05:00+08:00`);
+        const scheduled = await scheduleReminder(config.home, workspace, {
+          text,
+          ...(at === undefined ? {} : { at }),
+          ...(typeof args.in === "string" && args.in.trim() ? { in: args.in.trim() } : {}),
+          ...(typeof args.every === "string" && args.every.trim() ? { every: args.every.trim() } : {}),
+          notify: args.notify === true,
+        });
+        const worker = ensureBotWorker(config.home);
+        const assurance = worker.reason === "already-running" ? "后台 worker 正在跑，到点会响。"
+          : worker.reason === "spawned" ? "已顺手拉起后台 worker，到点会响。"
+          : worker.reason === "launch-agent" ? "后台由 LaunchAgent 托管，到点会响。"
+          : "没检测到后台 worker：到点前先跑一次 `luban bot run`，否则不会响。";
+        return [
+          "已排进 luban 自己的队列（不走系统日历，换平台也照样排）：",
+          `· 时间：${scheduled.summary}`,
+          `· 内容：${text}`,
+          `· id：${scheduled.task.id} · \`luban bot list\` 查看 / \`luban bot cancel ${scheduled.task.id}\` 取消`,
+          assurance,
+        ].join("\n");
+      },
+    },
     {
       name: "read_image",
       description: "Inspect a local image for model input. Reports size and vision capability. To actually see the image, ask the user to @-attach the file path; TUI attachments are sent as native vision parts to vision-capable models.",

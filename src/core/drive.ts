@@ -25,6 +25,7 @@ import { beginFromEnvironment, checkPermissions, computerControl, computerSuppor
 import { loadConfig } from "./config.js";
 import type { AgentEvent, ChatMessage, LubanConfig } from "./types.js";
 import type { DriveComputerState, DriveEvent, DriveUsage } from "./drive-events.js";
+import { describeMoment } from "./remind.js";
 
 export type { DriveCommand, DriveComputerState, DriveEvent, DriveUsage } from "./drive-events.js";
 
@@ -105,6 +106,14 @@ export function describeAction(name: string, args: Record<string, unknown>): str
   if (name === "edit_file" || name === "apply_patch") return `修改 ${short(String(args.path ?? "文件"), 60)}`;
   if (name === "read_file" || name === "read_files") return `读取 ${short(String(args.path ?? "文件"), 60)}`;
   if (name === "attach_image") return `附加图片 ${short(String(args.path ?? ""), 60)}`;
+  if (name === "schedule") {
+    const when = typeof args.in === "string" ? `+${args.in}`
+      : typeof args.at === "string" ? String(args.at)
+      : typeof args.at === "number" && Number.isFinite(args.at) ? describeMoment(args.at)
+      : "现在";
+    const text = short(String(args.text ?? ""), 40);
+    return `${args.notify === true ? "定时提醒" : "定时任务"} ${when} · ${text}`;
+  }
   return name;
 }
 
@@ -134,7 +143,6 @@ export class DriveSession {
   private readonly approvalTimeoutMs: number;
   private config?: LubanConfig;
   private runner?: DriveRunner;
-  private runnerMode: "all" | "computer" = "all";
   private messages: ChatMessage[] = [];
   private readonly pending = new Map<string, PendingApproval>();
   private thinking = "";
@@ -223,12 +231,17 @@ export class DriveSession {
     if (!prompt) return;
     if (!this.config) throw new Error("会话还没打开");
     if (this.busy) throw new Error("上一个任务还在执行，先停止或等它结束");
-    const runner = this.ensureRunner(screenIntent(prompt) ? "computer" : "all");
     const id = `turn-${++this.turns}`;
     const controller = new AbortController();
     this.controller = controller;
     this.emit({ type: "turn-start", id, text: prompt });
     this.messages.push({ role: "user", content: prompt });
+    // Every sentence goes to the model with the whole toolbox. Nothing here
+    // decides on the user's behalf what kind of request this is: "5 分钟后提醒
+    // 我下班" is a `schedule` call the model makes after reading it, and a
+    // sentence about the screen is a `computer` call the model chooses. Special
+    // cases in this file would only grow into a second, dumber agent.
+    const runner = this.ensureRunner();
     try {
       const result = await runner.run(this.messages, "agent", controller.signal,
         event => this.onAgentEvent(event),
@@ -257,16 +270,8 @@ export class DriveSession {
     };
   }
 
-  private ensureRunner(mode: "all" | "computer" = "all"): DriveRunner {
-    if (this.runner && this.runnerMode === mode) return this.runner;
-    // Screen work and desk work want different hands, and the runner owns its
-    // tool map: "open the calculator" gets eyes and hands only (a shell there
-    // turns into osascript guessing), everything else keeps the full toolbox.
-    if (this.runner) {
-      try { this.runner.close(); } catch { /* a closed runner is the goal */ }
-      this.runner = undefined;
-    }
-    this.runnerMode = mode;
+  private ensureRunner(): DriveRunner {
+    if (this.runner) return this.runner;
     const config = this.config;
     if (!config) throw new Error("会话还没打开");
     if (this.options.createRunner) {
@@ -275,8 +280,11 @@ export class DriveSession {
     }
     // The window is the consent surface, so this session never inherits a
     // global "allow everything": clicks ask here even when the CLI is in AUTO.
+    // The toolbox is the ordinary one — files, commands, MCP, and the computer
+    // when the switch is on — because a session that pre-picks tools for the
+    // user ("this sentence looks like screen work") is guessing at intent.
     const sessionConfig = { ...config, permissionMode: "edits" as const, permissions: { allow: [], deny: config.permissions?.deny ?? [] } };
-    this.runner = new AgentRunner(sessionConfig, undefined, undefined, 0, { toolset: mode }) as unknown as DriveRunner;
+    this.runner = new AgentRunner(sessionConfig, undefined, undefined, 0, { toolset: "all" }) as unknown as DriveRunner;
     return this.runner;
   }
 
@@ -393,26 +401,17 @@ const THINKING_HOLD_MS = 260;
 /**
  * A window you can talk to is not a screenshot pipeline. The model keeps the
  * ordinary tools — files, documents, commands — and only reaches for the screen
- * when the task is actually about what is on it. Earlier this session was pinned
- * to the computer tool alone, and then "帮我整理这份文档" came back as a
- * screenshot analysis, which is both slower and useless.
+ * when the task is actually about what is on it. That judgement belongs to the
+ * model: this session hands it the whole toolbox instead of narrowing it by
+ * keywords, because a keyword rule can only ever be a worse copy of the
+ * reasoning the model is already doing.
  */
-/**
- * Does this sentence ask about what is on the screen? Only then is the turn
- * narrowed to eyes and hands — "整理这份文档" wants files, "设个明早 8 点的
- * 闹钟" wants a shell command, and neither should cost a screenshot.
- */
-const SCREEN_TERMS = /(截屏|截图|屏幕|窗口|界面|光标|鼠标|点击|点一下|点开|双击|右键|拖动|滚动|按钮|菜单|弹窗|表单|输入框|计算器|日历|备忘录|提醒事项|访达|finder|safari|chrome|浏览器|微信|飞书|钉钉|系统设置|网易云|播放器|vscode|excel|word|numbers|pages|keynote|preview)/i;
-
-export function screenIntent(text: string): boolean {
-  return SCREEN_TERMS.test(text);
-}
-
 export const DRIVE_PROTOCOL = [
-  "你是造物主，坐在这台 Mac 前面替用户办事。先规划再动手：想清楚这件事该用什么手段，只调真正需要的那一个。",
+  "你是造物主，坐在这台机器前面替用户办事。先规划再动手：想清楚这件事该用什么手段，只调真正需要的那一个。",
   "- 只是问一句、要个解释或意见：直接回答，一个工具都不要调。",
   "- 文档、代码、文件、命令、查资料：用普通工具（read_file / write_file / bash 等），和终端里一样干活，不要截屏。",
-  "- 定时、提醒、闹钟：用命令把事排进系统，不要盯着屏幕看。例如「明天早上 8 点叫我」→ bash 执行 osascript 往「日历」或「提醒事项」里写一条带提醒的事件（到点系统自己弹），或者 luban bot add --at <ISO 时间> \"提醒我…\" 排一条后台任务；回答里写清你排了什么、几点响。",
+  "- 定时、提醒、闹钟：一律用 schedule 工具排进 luban 自己的队列，不要碰系统日历、提醒事项、osascript、crontab、at——那些是某台机器上的东西，换到 Windows 或 Ubuntu 就白排了，用户在 luban 里也查不到、取消不了。用户说「5 分钟后」「明天早上 8 点」「每天 6 点」，时间由你自己换算成 in / at / every 传进去；纯提醒（到点只要响一声）带 notify:true，不花模型调用；到点真要干活的就去掉 notify。排完在回答里说清几点响，以及 luban bot list / cancel 怎么查和改。",
+  "- 现成的工具不够用，就自己造：一次性的事写个脚本放进工作区用 bash 跑；反复要用的做法写成 skill（工作区里 .luban/skills/<名字>/SKILL.md，用 write_file 写，写清什么时候用、怎么用），下次用 list_skills / read_skill 读回来。不要等着有一个内置功能，也不要为一个一次性动作去改 luban 自己的源码。",
   "- 只有「屏幕上的东西」才用 computer：要打开某个应用去看、点按钮、在只有界面的地方操作。这时你只有眼睛和手。",
   "真要操作界面时：",
   "1. computer {action:\"windows\"} 拿前台应用和每个窗口的 x/y/宽/高（单位是屏幕「点」）。",

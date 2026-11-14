@@ -9,6 +9,8 @@ import { loadConfig } from "./config.js";
 import { flushUsageStatsOnExit } from "./usage-stats.js";
 import { SessionStore } from "./session-store.js";
 import { BotPermissions } from "./bot-permissions.js";
+import { notifyUser } from "./notify.js";
+import { parseDelay, REMIND_TITLE } from "./remind.js";
 import { readdir } from "node:fs/promises";
 
 export function botLaunchAgent(executable: string, cli: string, home: string, path: string): string {
@@ -42,6 +44,13 @@ async function publishStatus(home: string, startedAt: number): Promise<void> {
 }
 
 const execute: BotExecute = async (task, signal) => {
+  // A `notify` task is the whole point of "5 分钟后提醒我下班": one desktop
+  // notification, no model call, no session, so it costs nothing and no model
+  // can talk itself out of ringing.
+  if (task.kind === "notify") {
+    const shown = await notifyUser(REMIND_TITLE, task.prompt);
+    return { ok: shown, text: shown ? task.prompt : `${task.prompt}（系统通知没有发出去，记录仍在队列里）` };
+  }
   const config = loadConfig({ workspace: task.workspace, model: task.model, mesh: false, seedDefaults: true });
   // Never inherit LUBAN_ALLOW_TOOLS or project-config approval overrides in an unattended process.
   config.permissionMode = "ask";
@@ -103,13 +112,19 @@ export async function runBot(argv: string[]): Promise<number> {
   });
   program.command("add <prompt>").option("-w, --workspace <path>", "workspace", process.cwd())
     .option("-m, --model <id>", "model override").option("--at <ISO-date>", "first execution time (include timezone)")
+    .option("--in <duration>", "fire after a delay, e.g. 5m, 90s, 2h")
     .option("--every <seconds>", "repeat after successful completion, minimum 60 seconds")
+    .option("--remind", "only show a desktop notification at that time; no model call")
     .option("--timeout <seconds>", "execution deadline", "900")
     .action(async (prompt, options) => {
+      if (options.at && options.in) throw new Error("choose either --at or --in");
+      const at = options.in ? Date.now() + parseDelay(String(options.in)) : options.at ? Date.parse(String(options.at)) : Date.now();
+      if (!Number.isFinite(at)) throw new Error("--at must be an ISO timestamp with a timezone");
       const task = await queue.add({ prompt, workspace: options.workspace, model: options.model,
-        at: options.at ? Date.parse(options.at) : Date.now(), every: options.every === undefined ? undefined : Number(options.every) * 1000,
+        at, every: options.every === undefined ? undefined : Number(options.every) * 1000,
+        kind: options.remind ? "notify" : "agent",
         timeout: Number(options.timeout) * 1000 });
-      process.stdout.write(`Queued ${task.id}\n`);
+      process.stdout.write(`Queued ${task.id} at ${new Date(at).toISOString()}${task.kind === "notify" ? " (notify only)" : ""}\n`);
     });
   program.command("list").description("Task states and most recent results (JSON)").action(async () => {
     process.stdout.write(`${JSON.stringify(await queue.list(), null, 2)}\n`);

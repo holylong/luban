@@ -1,3 +1,24 @@
+## 2.4.16 — 2026-11-13
+
+- 通用 agent 化：不再用正则替模型做决定。删掉三处机械路径，一句话原样进模型。
+  - `DriveSession.say()` 里「5 分钟后提醒我下班」的拦截删掉了（`handleReminderSentence`）：以前这句话在模型之前被解析成队列项，好处是模型挂了也能响，代价是它必须认识每一种说法、没法反问、模型根本看不到这句话。现在由模型自己换算 `in/at/every` 再调 `schedule`，`notify:true` 的纯提醒到点仍然零模型调用。
+  - `screenIntent()` 关键词分流删掉：每个回合都是 `toolset: "all"`（文件、命令、MCP、computer），该截屏还是该读文件由模型判断，不再按「计算器/访达/浏览器」这类词预先收窄工具。
+  - `src/core/bot-schedule.ts` + `src/core/reminder-text.ts`（及各自单测，共 4 个文件）整体删除；`remind.ts` 只留队列/间隔/通知这些基础能力（`scheduleReminder`、`ensureBotWorker`、`describeMoment`），`luban bot add --in/--every/--remind` 保持不变。
+  - Creator 输入框只剩一句话：去掉「现在/定时/每隔」选择器、`datetime-local`、分钟输入、识别到的排期青绿标签和 `reminderIntent` 判断，派发时只提交 `{prompt, workspace}`；排期完全由模型的 `schedule` 调用决定，队列变成 agent 排期的落点而不是人填表单的产物。`creator-schedule.ts` 里随之没人用的 `everyLabel` 删除。
+  - 提示词（`DRIVE_PROTOCOL`）改成「工具不够用就自己造」：一次性的事写脚本进工作区用 `bash` 跑，反复要用的做法写成 `.luban/skills/<名字>/SKILL.md`，下次用 `list_skills` / `read_skill` 读回来——能力靠模型长出来，不靠往 agent 里塞功能。
+  - 新增 `drive.test.ts` 用例钉住这条行为：提醒句必须交给 runner（`usage.calls === 1`）、不产生任何 `tool` 事件、不在 `bot/tasks` 里偷偷建任务。顺带修好 `creator.tsx` 的挂载守卫（`typeof document === "undefined"`），`creator-task.test.tsx` 从此能在 node 环境跑起来（2 例）。
+  - 文档同步：`docs/creator.md`（一句话派发、不做句子分流、自建 skill）、`docs/reference.md`（提醒不再由正则解析）。
+
+## 2.4.15 — 2026-11-13
+
+- 「5 分钟后提醒我下班」不再写成系统日历事件：排进 luban 自己的队列，跨平台。
+  - 之前提示词让模型 `bash` + `osascript` 往「日历」或「提醒事项」里写一条——只在 macOS 上有，换到 Windows/Ubuntu 就白排；写在系统应用里 `luban bot list` 看不见、窗口里取消不了；而且一句话提醒还要跑一次模型。
+  - 新增 `schedule` 工具（`src/core/remind.ts`）：`{text:"提醒我下班", in:"5m", notify:true}` → 一条 `kind:"notify"` 的队列任务，到点直接发系统通知，**不花模型调用**；到点真要干活的去掉 `notify`，仍是普通 agent 任务。时间写法支持 `5m / 90s / 2h / 1h30m / 5 分钟 / 1天`，也接受带时区的绝对 `at`。
+  - 通知本身跨平台（`src/core/notify.ts`，有单测）：macOS `osascript display notification`、Linux `notify-send`、Windows PowerShell WinRT toast；没有通知器时任务照样记录完成，不因为「没弹出」把任务判失败。
+  - worker 不在跑时 `schedule` 会顺手拉起（`ensureBotWorker`，不抢 LaunchAgent 的锁），并明确告诉模型「到点会响 / 先跑 luban bot run」。`luban bot add` 加了 `--in <5m>` 与 `--remind`，命令行也能排纯提醒。
+  - 提示词改成「定时/提醒/闹钟一律用 schedule，别碰日历、提醒事项、osascript、crontab、at」，眼睛和手的窄工具集里也保留 `schedule`（提醒不是屏幕任务，不该被逼进日历 App）。窗口时间线把这一动作显示成「定时提醒 +5m · 提醒我下班」。
+  - 实测：`bot add "提醒我喝水" --in 8s --remind` + `bot run`，到点 200 ms 内完成，`runs.jsonl` 只有 `result:"提醒我喝水"`、无 usage（零模型调用），通知由 osascript 成功弹出。
+
 ## 2.4.14 — 2026-11-13
 
 - 造物主改名 `Creator`，图标换成青绿，不再和 luban 长得一模一样。

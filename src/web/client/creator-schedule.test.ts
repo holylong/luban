@@ -1,11 +1,10 @@
-/* The booking must read back the way the user said it.
+/* A booking must read back the way it will fire.
  *
- * These assertions exist because the 造物主 window is where someone checks whether
- * "每天 6 点提醒我" and "5 分钟后提醒我下班" actually became a schedule — a wrong
- * label here means the user trusts a task that will never fire. */
+ * The model decides what a sentence means and calls `schedule`; these two
+ * helpers are what the window shows for the row that lands. A wrong label here
+ * means the user trusts a task that will never fire. */
 import { describe, expect, it } from "vitest";
-import { parseSchedule } from "../../core/bot-schedule";
-import { dayClock, everyLabel, nextRunLabel, scheduleLabel } from "./creator-schedule";
+import { dayClock, nextRunLabel, scheduleLabel } from "./creator-schedule";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -51,29 +50,6 @@ describe("nextRunLabel", () => {
   it("falls back to the last status for finished work", () => {
     expect(nextRunLabel({ at: NOW, status: "completed" }, NOW)).toBe("已完成");
     expect(nextRunLabel({ at: NOW, status: "failed" }, NOW)).toBe("失败");
-  });
-});
-
-describe("composer booking", () => {
-  it("turns 「每天 6 点提醒我」 into a daily 06:00 schedule", () => {
-    const parsed = parseSchedule("每天 6 点提醒我今天要做什么", NOW);
-    expect(parsed).not.toBeNull();
-    expect(parsed?.every).toBe(DAY);
-    // The label the composer shows and the label the queue shows must agree.
-    expect(scheduleLabel({ at: parsed!.at, every: parsed!.every, status: "queued" })).toBe("每天 06:00");
-  });
-
-  it("turns 「5 分钟后提醒我下班」 into a one-off five minutes out", () => {
-    const parsed = parseSchedule("5 分钟后提醒我下班", NOW);
-    expect(parsed?.at).toBe(NOW + 5 * MINUTE);
-    expect(parsed?.every).toBeUndefined();
-    expect(nextRunLabel({ at: parsed!.at, status: "queued" }, NOW)).toBe("下次 今天 08:05");
-  });
-
-  it("keeps scanning work on a repeat interval instead of firing once", () => {
-    const parsed = parseSchedule("每 6 小时扫一次 buglist，能复现的整理成清单", NOW);
-    expect(parsed?.every).toBe(6 * HOUR);
-    expect(everyLabel(parsed?.every)).toBe("每 6 小时");
   });
 });
 

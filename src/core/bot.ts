@@ -10,6 +10,12 @@ export interface BotTask {
   at: number;
   every?: number;
   timeout: number;
+  /**
+   * What fires at that time. `agent` runs the usual model task; `notify` only
+   * shows a desktop notification, which is what a reminder actually is — a
+   * 5-minute alarm should never spend a model call to say "下班了".
+   */
+  kind?: "agent" | "notify";
 }
 export interface BotState {
   status: "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
@@ -57,6 +63,7 @@ export class BotQueue {
   }
   async add(input: Omit<BotTask, "id">): Promise<BotTask> {
     if (!input.prompt.trim()) throw new Error("Task prompt cannot be empty");
+    if (input.kind !== undefined && input.kind !== "agent" && input.kind !== "notify") throw new Error("Invalid task kind");
     if (!Number.isFinite(input.at) || !Number.isFinite(input.timeout) || input.timeout < 1000
       || (input.every !== undefined && (!Number.isFinite(input.every) || input.every < 60_000))) {
       throw new Error("Invalid schedule: timeout >= 1s, repeat interval >= 60s required");

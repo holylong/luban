@@ -207,7 +207,7 @@ ipcMain.handle("creator:drive-start", (_event, input) => {
     settings = { ...settings, computer: true };
     saveSettings();
   }
-  bridge.start(workspace, { computer: settings.computer === true, model: input?.model });
+  bridge.start(workspace, { computer: settings.computer === true, model: input?.model, home });
   return bridge.snapshot();
 });
 
@@ -322,6 +322,30 @@ else {
               };
             })()`);
             require("node:fs").writeFileSync(plansPath.replace(/\.png$/u, ".rects.json"), JSON.stringify(plans, null, 2));
+          }
+          // The 后台任务 tab is the queue's face: its composer is one sentence box.
+          // It used to carry 现在/定时/每隔 controls, so a smoke proves the form is
+          // gone and what is left is the textarea plus send.
+          if (process.env.CREATOR_SMOKE_QUEUE === "1") {
+            const queuePath = smokePath.replace(/\.png$/u, "-queue.png");
+            await window.webContents.executeJavaScript(`(() => {
+              const button = [...document.querySelectorAll(".side-nav button")].find(node => node.textContent.includes("后台任务"));
+              if (button) button.click();
+            })()`);
+            await new Promise(resolve => setTimeout(resolve, 400));
+            const composer = await window.webContents.executeJavaScript(`(() => {
+              const box = (selector) => { const el = document.querySelector(selector); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+              return {
+                composer: box(".composer"),
+                placeholder: document.querySelector(".composer textarea")?.placeholder ?? "",
+                controls: [...document.querySelectorAll(".composer select, .composer input")].map(el => el.tagName + "." + el.className),
+                parsed: document.querySelector(".composer-meta .parsed")?.textContent ?? "",
+                send: box(".composer .send"),
+              };
+            })()`);
+            require("node:fs").writeFileSync(queuePath, (await window.webContents.capturePage()).toPNG());
+            require("node:fs").writeFileSync(queuePath.replace(/\.png$/u, ".json"), JSON.stringify(composer, null, 2));
+            process.stdout.write(`queue composer ${JSON.stringify(composer)}\n`);
           }
           // The control panel is the point of this window, and a panel that only
           // renders is not the same as one that drives the machine: run a real

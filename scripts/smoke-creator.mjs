@@ -10,7 +10,7 @@
  * Usage: npm run build && npm run smoke:creator
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,6 +120,24 @@ for (const needle of expected) {
   }
 }
 // The 计划 drawer must list every job with its schedule, next fire and history.
+// The queue tab's composer is one sentence box: no 现在/定时/每隔 form, no
+// locally guessed schedule. Anything else means a regex came back to life.
+const queueJson = shot.replace(/\.png$/u, "-queue.json");
+if (existsSync(queueJson)) {
+  const composer = JSON.parse(readFileSync(queueJson, "utf8"));
+  if (!composer.composer) {
+    console.error(`后台任务页没有输入卡：${JSON.stringify(composer)}`);
+    process.exit(1);
+  }
+  if (composer.controls.length) {
+    console.error(`输入卡里又出现了时间控件：${composer.controls.join(", ")}`);
+    process.exit(1);
+  }
+  if (composer.parsed) {
+    console.error(`输入卡又自己猜排期了：「${composer.parsed}」`);
+    process.exit(1);
+  }
+}
 const plansShot = shot.replace(/\.png$/u, "-plans.png");
 const plans = JSON.parse(readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8"));
 const drawerText = readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8");

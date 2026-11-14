@@ -100,6 +100,7 @@ function listTasks(home) {
       model: task.model,
       at: task.at,
       every: task.every,
+      kind: task.kind || "agent",
       timeout: task.timeout,
       status: existsSync(join(directory, id, "cancel")) ? "cancelled" : state.status,
       nextAt: state.nextAt,
@@ -164,6 +165,8 @@ function addTask(home, input) {
   const args = ["bot", "add", prompt, "-w", workspace];
   if (input.model) args.push("-m", String(input.model));
   if (input.at) args.push("--at", new Date(input.at).toISOString());
+  // A reminder is a queue entry with a notification, not a model turn.
+  if (input.remind) args.push("--remind");
   if (input.every && Number(input.every) > 0) args.push("--every", String(Math.max(60, Math.round(Number(input.every)))));
   const timeout = Number(input.timeout);
   if (Number.isFinite(timeout) && timeout >= 1) args.push("--timeout", String(Math.round(timeout)));

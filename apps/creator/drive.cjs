@@ -45,7 +45,9 @@ class DriveBridge {
   start(workspace, options = {}) {
     if (this.child) return this.snapshot();
     this.workspace = workspace;
-    const env = bot.nodeEnv(options.computer ? { LUBAN_COMPUTER: "1" } : {});
+    // The drive child schedules reminders into the same queue this window lists,
+    // so it must be given the same home the app resolved.
+    const env = bot.nodeEnv({ LUBAN_HOME: (options.home || bot.homeDir()), ...(options.computer ? { LUBAN_COMPUTER: "1" } : {}) });
     delete env.LUBAN_GLOW_URL;
     const args = [bot.cliPath(), "drive", workspace];
     if (options.model) args.push("--model", options.model);

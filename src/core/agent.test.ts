@@ -21,11 +21,13 @@ describe("AgentRunner", () => {
     // A hands-on session that can still run bash will run bash: the real run
     // spent nine tool calls on pgrep/osascript and never clicked once.
     const tools = new Map<string, unknown>([
-      ["computer", {}], ["read_image", {}], ["attach_image", {}],
+      ["computer", {}], ["read_image", {}], ["attach_image", {}], ["schedule", {}],
       ["bash", {}], ["write_file", {}], ["edit_file", {}], ["delegate_task", {}], ["mcp_call", {}],
     ]);
     keepComputerTools(tools);
-    expect([...tools.keys()].sort()).toEqual(["attach_image", "computer", "read_image"]);
+    // schedule survives on purpose: "5 分钟后提醒我下班" is not a screen task,
+    // and a hands-only turn must not be pushed into the Calendar app for it.
+    expect([...tools.keys()].sort()).toEqual(["attach_image", "computer", "read_image", "schedule"]);
   });
 
   it("keeps every tool when the toolset is not restricted", () => {

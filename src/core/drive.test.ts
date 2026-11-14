@@ -4,11 +4,11 @@
  * session's rules and not about any provider: which actions run unattended,
  * which ones wait for the window, and what happens when nobody answers.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DRIVE_PROTOCOL, DriveSession, describeAction, screenIntent, screenshotPath, type DriveEvent } from "./drive";
+import { DRIVE_PROTOCOL, DriveSession, describeAction, screenshotPath, type DriveEvent } from "./drive";
 import type { AgentEvent, ChatMessage } from "./types";
 
 const homes: string[] = [];
@@ -59,6 +59,9 @@ describe("describeAction", () => {
     expect(describeAction("computer", { action: "screenshot" })).toBe("截取整屏");
     expect(describeAction("computer", { action: "windows" })).toBe("查看屏幕上的窗口");
     expect(describeAction("computer", { action: "app", name: "计算器" })).toBe("打开 计算器");
+    // A reminder is an action in the timeline too, not the bare tool name.
+    expect(describeAction("schedule", { text: "提醒我下班", in: "5m", notify: true })).toBe("定时提醒 +5m · 提醒我下班");
+    expect(describeAction("schedule", { text: "汇总今天提交", every: "1h" })).toBe("定时任务 现在 · 汇总今天提交");
   });
 
   it("tells the model to look before it touches anything", () => {
@@ -77,24 +80,23 @@ describe("describeAction", () => {
     expect(DRIVE_PROTOCOL).toContain("重复截同一块");
   });
 
+  it("sends reminders to luban's own scheduler instead of the system calendar", () => {
+    // The old bullet wrote an osascript event into 日历/提醒事项: macOS-only,
+    // invisible to `luban bot list`, and gone the moment the user moves to
+    // Windows or Ubuntu. A reminder is a queue task with kind=notify.
+    expect(DRIVE_PROTOCOL).toContain("schedule");
+    expect(DRIVE_PROTOCOL).toContain("notify:true");
+    expect(DRIVE_PROTOCOL).toContain("crontab");
+    expect(DRIVE_PROTOCOL).not.toContain("往「日历」或「提醒事项」里写一条");
+    expect(DRIVE_PROTOCOL).toContain("luban bot list");
+  });
+
   it("finds the screenshot path even when the result grew a sentence", () => {
     // The control runner appends 「已经附在本次请求里」 to every screenshot result;
     // plain JSON.parse then failed and the window drew an action with no picture.
     const result = `{\n  "path": ".luban/computer/shot-1.png",\n  "absolute": "/tmp/ws/.luban/computer/shot-1.png",\n  "bytes": 12\n}\n\n这张截图已经附在本次请求里：下一步的模型调用就能看到画面。`;
     expect(screenshotPath(result)).toBe("/tmp/ws/.luban/computer/shot-1.png");
     expect(screenshotPath("点击 (12, 34)")).toBeUndefined();
-  });
-
-  it("reserves eyes-and-hands for sentences about the screen", () => {
-    // Narrowing every turn to the computer tool is what turned a document
-    // request into screenshot analysis.
-    expect(screenIntent("在计算器里算 6*7")).toBe(true);
-    expect(screenIntent("帮我截个图看看屏幕上这个报错")).toBe(true);
-    expect(screenIntent("在访达里把那个文件夹拖到桌面")).toBe(true);
-    expect(screenIntent("把 meeting.md 整理成三条要点")).toBe(false);
-    expect(screenIntent("你叫什么名字？")).toBe(false);
-    expect(screenIntent("设个明天早上 8 点的闹钟叫我起床")).toBe(false);
-    expect(screenIntent("打开 README 看看写了什么")).toBe(false);
   });
 
   it("names non-computer tools by what they touch", () => {
@@ -241,5 +243,29 @@ describe("events", () => {
     await expect(drive.say("第二句")).rejects.toThrow(/还在执行/u);
     release?.();
     await first;
+  });
+});
+
+describe("no mechanical shortcuts", () => {
+  it("gives a reminder sentence to the model instead of answering it itself", async () => {
+    // "5 分钟后提醒我下班" used to be parsed by a local regex and turned into a
+    // queue entry before the model ever saw it. That is a second, dumber agent:
+    // it has to know every phrasing, it cannot ask a question back, and the
+    // sentence never reaches the model that was supposed to act on it.
+    const events: DriveEvent[] = [];
+    let turns = 0;
+    const { drive, home } = session(scripted(async () => {
+      turns += 1;
+      return { text: "已排：5 分钟后提醒你下班" };
+    }), events);
+    await drive.open();
+    await drive.say("5 分钟后提醒我下班");
+    expect(turns).toBe(1);
+    // Nothing was booked behind the model's back, and the timeline shows a real
+    // turn (usage included) rather than a fabricated `schedule` action.
+    expect(existsSync(join(home, "bot", "tasks"))).toBe(false);
+    expect(events.some(event => event.type === "tool")).toBe(false);
+    const end = events.find(event => event.type === "turn-end");
+    expect(end?.type === "turn-end" ? end.usage.calls : 0).toBe(1);
   });
 });

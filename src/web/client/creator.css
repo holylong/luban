@@ -323,6 +323,9 @@ button { cursor: pointer; }
 .task.open .task-prompt { -webkit-line-clamp: unset; }
 .task-meta { margin: 5px 0 0; display: flex; gap: 7px; color: var(--faint); font-size: 11px; }
 .task-meta span + span::before { content: "·"; margin-right: 7px; color: #dcdce2; }
+/* A reminder is not a job: it never runs a model, so the row says so. */
+.task-meta .kind { color: #1f7a68; background: #e6f6f1; border-radius: 999px; padding: 1px 7px; }
+.task-meta .kind::before { content: none; }
 .task .ghost {
   flex: none; height: 22px; padding: 0 8px;
   border: 1px solid transparent; background: transparent; color: var(--faint);
