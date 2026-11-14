@@ -253,3 +253,74 @@ it("skips while another process holds the ledger lock, and recovers a stale one"
   expect(bodies.at(-1)).toMatchObject({ input: 12, output: 3 });
   expect(readUsageLedger(home).pending).toEqual({ input: 0, output: 0, runs: 0 });
 });
+
+it("splits one run's tokens per model, counting the run once per model used", () => {
+  const usage = runUsage({ requests: [
+    { index: 1, purpose: "task", elapsedMs: 10, ok: true, model: "alpha/one", usage: { input: 100, output: 10 } },
+    { index: 2, purpose: "task", elapsedMs: 10, ok: false, model: "alpha/one", usage: { input: 50, output: 0 } },
+    { index: 3, purpose: "compaction", elapsedMs: 10, ok: true, model: "beta/two", usage: { input: 20, output: 5 } },
+    { index: 4, purpose: "task", elapsedMs: 10, ok: true },
+  ] });
+  expect(usage).toEqual({
+    input: 170, output: 15, runs: 1,
+    models: {
+      "alpha/one": { input: 150, output: 10, runs: 1 },
+      "beta/two": { input: 20, output: 5, runs: 1 },
+    },
+  });
+});
+
+it("keeps model rows in the ledger and uploads them with the totals", async () => {
+  const home = makeHome();
+  const { bodies, fetchImpl } = recorder();
+  const clock = 100 * HOUR;
+  recordRunUsage(home, runUsage({ requests: [{ index: 1, purpose: "task", elapsedMs: 1, ok: true, model: "alpha/one", usage: { input: 30, output: 3 } }] }), clock);
+  recordRunUsage(home, runUsage({ requests: [{ index: 1, purpose: "task", elapsedMs: 1, ok: true, model: "beta/two", usage: { input: 7, output: 1 } }] }), clock);
+  expect(readUsageLedger(home).pending).toEqual({
+    input: 37, output: 4, runs: 2,
+    models: {
+      "alpha/one": { input: 30, output: 3, runs: 1 },
+      "beta/two": { input: 7, output: 1, runs: 1 },
+    },
+  });
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => clock })).toBe("sent");
+  expect(bodies.at(-1)).toMatchObject({
+    input: 37, output: 4, runs: 2,
+    models: [
+      { model: "alpha/one", input: 30, output: 3, runs: 1 },
+      { model: "beta/two", input: 7, output: 1, runs: 1 },
+    ],
+  });
+  // Acknowledged model rows leave the pending bucket rather than being resent.
+  expect(readUsageLedger(home).pending).toEqual({ input: 0, output: 0, runs: 0 });
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => clock + 1000, force: true })).toBe("skipped");
+});
+
+it("keeps a model row recorded while the upload is in flight", async () => {
+  const home = makeHome();
+  const fetchImpl = (async () => {
+    recordRunUsage(home, runUsage({ requests: [{ index: 1, purpose: "task", elapsedMs: 1, ok: true, model: "beta/two", usage: { input: 9, output: 1 } }] }), HOUR + 1500);
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  recordRunUsage(home, runUsage({ requests: [{ index: 1, purpose: "task", elapsedMs: 1, ok: true, model: "alpha/one", usage: { input: 4, output: 2 } }] }), HOUR);
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => HOUR })).toBe("sent");
+  expect(readUsageLedger(home).pending).toEqual({
+    input: 9, output: 1, runs: 1,
+    models: { "beta/two": { input: 9, output: 1, runs: 1 } },
+  });
+});
+
+it("uploads totals without a model split for ledgers written before it existed", async () => {
+  const home = makeHome();
+  const { bodies, fetchImpl } = recorder();
+  const clock = 100 * HOUR;
+  writeFileSync(usageLedgerPath(home), JSON.stringify({
+    installId: "legacy-install", createdAt: HOUR, lastAttemptAt: 0, lastSuccessAt: clock - HOUR,
+    lastSuccess: undefined, failures: 0,
+    pending: { input: 11, output: 2, runs: 1 }, reported: { input: 0, output: 0, runs: 0 },
+  }));
+  expect(await flushUsageStats({ home, settings, fetchImpl, now: () => clock })).toBe("sent");
+  expect(bodies.at(-1)).toMatchObject({ input: 11, output: 2, runs: 1 });
+  expect(bodies.at(-1)).not.toHaveProperty("models");
+  expect(readUsageLedger(home).pending).toEqual({ input: 0, output: 0, runs: 0 });
+});

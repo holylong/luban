@@ -262,6 +262,9 @@ ipcMain.handle("creator:forget", () => {
   return settings;
 });
 
+ipcMain.handle("creator:memory", () => bot.memoryList(home));
+ipcMain.handle("creator:memory-clear", (_event, workspace) => bot.clearMemory(home, workspace));
+
 ipcMain.handle("creator:snapshot", () => snapshot());
 ipcMain.handle("creator:add", (_event, input) => {
   const result = bot.addTask(home, input || {});
@@ -354,6 +357,30 @@ else {
               };
             })()`);
             require("node:fs").writeFileSync(plansPath.replace(/\.png$/u, ".rects.json"), JSON.stringify(plans, null, 2));
+          }
+          // 记忆 is where a project's cross-run memory becomes visible: facts the
+          // model kept plus the journal of finished runs, with one click to clear.
+          if (process.env.CREATOR_SMOKE_MEMORY === "1") {
+            const memoryPath = smokePath.replace(/\.png$/u, "-memory.png");
+            await window.webContents.executeJavaScript(`(() => {
+              const button = [...document.querySelectorAll(".side-nav button")].find(node => node.textContent.includes("记忆"));
+              if (button) button.click();
+            })()`);
+            await new Promise(resolve => setTimeout(resolve, 700));
+            const memory = await window.webContents.executeJavaScript(`(() => {
+              const box = (selector) => { const el = document.querySelector(selector); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+              return {
+                title: document.querySelector(".drawer h2")?.textContent ?? "",
+                drawer: box(".drawer"),
+                projects: [...document.querySelectorAll(".memory-project")].map(el => el.innerText.slice(0, 240)),
+                rows: [...document.querySelectorAll(".memory-list li")].map(el => el.innerText.slice(0, 120)),
+                clear: [...document.querySelectorAll(".memory-project .wide")].map(el => el.textContent),
+                scrollH: document.querySelector(".drawer-body")?.scrollHeight,
+              };
+            })()`);
+            require("node:fs").writeFileSync(memoryPath, (await window.webContents.capturePage()).toPNG());
+            require("node:fs").writeFileSync(memoryPath.replace(/\.png$/u, ".json"), JSON.stringify(memory, null, 2));
+            process.stdout.write(`memory ${JSON.stringify(memory)}\n`);
           }
           // 授权 is where a standing 允许 becomes visible and revocable. Prove the
           // page lists what creator.json remembered, or it is memory nobody sees.

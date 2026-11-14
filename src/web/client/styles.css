@@ -174,31 +174,38 @@ a { color: var(--blue); }
 .tool-args { margin: 0; padding: 9px 11px; font: 11.5px/1.5 var(--mono); color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; border-bottom: 1px solid var(--line-soft); }
 
 /* Inline edit records -------------------------------------------------- */
-.edit-record { font: 11.5px/1.6 var(--mono); }
+/* Diff rows are read line by line, so 1.6 of leading only stretched the
+   record: 1.45 fits more lines in the same pane while every row keeps an
+   unbroken background. */
+.edit-record { font: 11.5px/1.45 var(--mono); }
 .edit-summary { display: flex; align-items: center; gap: 8px; padding: 7px 11px; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
 .edit-summary .path { color: var(--fg); font-weight: 600; overflow-wrap: anywhere; }
 .chip { padding: 1px 6px; border-radius: 5px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); }
 .chip.add { color: var(--green); background: var(--green-soft); border-color: #2a4d43; }
 .chip.del { color: var(--red); background: var(--red-soft); border-color: #4d2a33; }
 .chip.range { color: var(--dim); }
-.edit-lines { max-height: 340px; overflow: auto; padding: 4px 0; }
-.edit-line { display: grid; grid-template-columns: 46px 14px 1fr; gap: 0; }
-.edit-line .ln { text-align: right; padding-right: 8px; color: var(--dim); user-select: none; }
-.edit-line .sign { color: var(--dim); }
+/* Unified record (narrow panes): one column of number | sign | text. The
+   gutter columns are fixed, so a wrapped line continues inside the text
+   column instead of sliding under the line number. */
+.edit-lines { max-height: 340px; overflow: auto; padding: 3px 0; }
+.edit-lines-head { padding: 3px 12px; color: var(--dim); font-size: 11px; border-bottom: 1px solid var(--line-soft); }
+.edit-line { display: grid; grid-template-columns: 46px 14px 1fr; gap: 0; align-items: start; }
+.edit-line .ln { text-align: right; padding-right: 8px; color: var(--dim); user-select: none; font-variant-numeric: tabular-nums; }
+.edit-line .sign { color: var(--dim); text-align: center; }
 .edit-line.add { background: var(--add-bg); }
 .edit-line.add .sign { color: var(--green); }
 .edit-line.remove { background: var(--del-bg); }
 .edit-line.remove .sign { color: var(--red); }
-.edit-line .code { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 10px; }
+.edit-line .code { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 10px; min-width: 0; }
 .edit-meta { padding: 3px 12px; color: var(--dim); }
 /* Side-by-side record: removed lines on the left, added lines on the right. */
-.edit-split { max-height: 340px; overflow: auto; padding: 4px 0; }
+.edit-split { max-height: 340px; overflow: auto; padding: 3px 0; }
 .edit-split-head { padding: 3px 12px; color: var(--dim); font-size: 11px; border-bottom: 1px solid var(--line-soft); }
 .edit-split-row { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; }
 .edit-cell { display: grid; grid-template-columns: 42px 14px 1fr; gap: 0; min-width: 0; }
 .edit-cell.left { border-right: 1px solid var(--line); }
-.edit-cell .ln { text-align: right; padding-right: 8px; color: var(--dim); user-select: none; }
-.edit-cell .sign { color: var(--dim); }
+.edit-cell .ln { text-align: right; padding-right: 8px; color: var(--dim); user-select: none; font-variant-numeric: tabular-nums; }
+.edit-cell .sign { color: var(--dim); text-align: center; }
 .edit-cell.add { background: var(--add-bg); }
 .edit-cell.add .sign { color: var(--green); }
 .edit-cell.remove { background: var(--del-bg); }
@@ -303,12 +310,15 @@ a { color: var(--blue); }
 .tabs-bar { display: flex; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--line); flex: none; }
 .tabs-bar button { padding: 5px 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; }
 .tabs-bar button.active { background: var(--panel-2); border-color: var(--line); color: var(--fg); }
-.code { font: 11.5px/1.6 var(--mono); overflow: auto; flex: 1; padding: 6px 0 20px; }
-.code-row { display: grid; grid-template-columns: 46px 1fr; }
-.code-row .ln { text-align: right; padding-right: 9px; color: var(--dim); user-select: none; }
-.code-row .src { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 12px; }
-.code-row.add { background: var(--add-bg); }
-.code-row.del { background: var(--del-bg); }
+/* The file/diff preview owns these names: a plain `.code` also hit the diff
+   cells, where its chat leading and 26px of vertical padding made every
+   recorded line 44px tall instead of 17. */
+.preview-code { font: 11.5px/1.6 var(--mono); overflow: auto; flex: 1; padding: 6px 0 20px; }
+.preview-code-row { display: grid; grid-template-columns: 46px 1fr; }
+.preview-code-row .ln { text-align: right; padding-right: 9px; color: var(--dim); user-select: none; }
+.preview-code-row .src { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 12px; }
+.preview-code-row.add { background: var(--add-bg); }
+.preview-code-row.del { background: var(--del-bg); }
 .banner { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid var(--line); color: var(--muted); flex: none; }
 .difffile { padding: 8px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; display: flex; gap: 8px; align-items: center; }
 .difffile .status { width: 16px; text-align: center; font-weight: 700; }

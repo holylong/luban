@@ -21,6 +21,7 @@ import { SessionStore } from "./core/session-store.js";
 import { flushUsageStatsOnExit, scheduleUsageFlush } from "./core/usage-stats.js";
 import { sharedHistory } from "./core/session-history.js";
 import { runHistory } from "./core/history-command.js";
+import { runMemory } from "./core/memory-command.js";
 import { runStats } from "./core/stats-command.js";
 import { runDaemonCommand } from "./core/daemon-command.js";
 import { clearDaemonStateIfOwner, ensureDaemon, writeDaemonState } from "./web/daemon.js";
@@ -789,7 +790,7 @@ async function main(): Promise<number> {
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
     .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
     .option("-p, --prompt <text>", "run once without the TUI")
-    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban daemon        one always-on backend per machine (status/start/stop/logs)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban login relay   sign in to a relay account and enroll this computer\n  luban login codex   sign in to Codex through the official CLI\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
+    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban daemon        one always-on backend per machine (status/start/stop/logs)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban login relay   sign in to a relay account and enroll this computer\n  luban login codex   sign in to Codex through the official CLI\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban memory        show or clear what a project remembers between runs\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
   program.parse();
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -1107,6 +1108,8 @@ const entry = command === "login" && process.argv[3] === "codex"
         ? runMeshCheck(process.argv.slice(3))
         : command === "history"
           ? runHistory(process.argv.slice(3))
+          : command === "memory"
+            ? runMemory(process.argv.slice(3))
           : command === "stats"
             ? runStats(process.argv.slice(3))
           : command === "relay"

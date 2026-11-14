@@ -25,6 +25,7 @@ function mergeEvents(existing: JobStreamRecord[], incoming: JobStreamRecord[]): 
 export interface WorkbenchStore {
   node?: NodeInfo;
   connected: boolean;
+  connectionError?: string;
   live: boolean;
   jobs: MeshJob[];
   peers: PeerView[];
@@ -81,6 +82,7 @@ export interface WorkbenchStore {
 export function useWorkbench(): WorkbenchStore {
   const [node, setNode] = useState<NodeInfo>();
   const [connected, setConnected] = useState(false);
+  const [connectionError, setConnectionError] = useState<string>();
   const [live, setLive] = useState(false);
   const [jobs, setJobs] = useState<MeshJob[]>([]);
   const [peers, setPeers] = useState<PeerView[]>([]);
@@ -158,18 +160,29 @@ export function useWorkbench(): WorkbenchStore {
 
   const refreshOverview = useCallback(async () => {
     try {
-      const [info, peerList, jobList, inboxList] = await Promise.all([
-        api.node(), api.peers(), api.jobs(), api.inbox(20),
+      // Node/model availability must not depend on peers, jobs or inbox. Each
+      // request updates independently, so a slow/failed sidebar cannot disable
+      // a perfectly healthy model selector (or hide its actual connection error).
+      const [info, , jobList] = await Promise.all([
+        api.node().then(info => {
+          setNode(info);
+          setConnected(true);
+          setConnectionError(undefined);
+          if (!project) setProjectState(info.project && info.projects?.[info.project] ? info.project : Object.keys(info.projects ?? {})[0] ?? "");
+          return info;
+        }).catch(error => {
+          setConnected(false);
+          setConnectionError(error instanceof Error ? error.message : String(error));
+          return undefined;
+        }),
+        api.peers().then(setPeers).catch(() => undefined),
+        api.jobs().then(list => { setJobs(list); return list; }).catch(() => undefined),
+        api.inbox(20).then(setInbox).catch(() => undefined),
       ]);
-      setNode(info);
-      setConnected(true);
-      setPeers(peerList);
-      setJobs(jobList);
-      setInbox(inboxList);
-      if (!project) setProjectState(info.project && info.projects?.[info.project] ? info.project : Object.keys(info.projects ?? {})[0] ?? "");
-      return jobList;
-    } catch {
+      return info ? jobList : undefined;
+    } catch (error) {
       setConnected(false);
+      setConnectionError(error instanceof Error ? error.message : String(error));
       return undefined;
     }
   }, [project]);
@@ -493,13 +506,13 @@ export function useWorkbench(): WorkbenchStore {
   }, [selectedId]);
 
   return useMemo<WorkbenchStore>(() => ({
-    node, connected, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
+    node, connected, connectionError, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
     project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy, queued,
     notify, dismiss, selectJob, startNew, submit, clearQueue, cancel, resume, decide, answerQuestion,
     setProject, setModel, setMode, setSideTab, setPreviewTab, browse, openFile, openSession, leaveSession,
     refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   }), [
-    node, connected, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
+    node, connected, connectionError, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
     project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy, queued,
     notify, dismiss, selectJob, startNew, submit, clearQueue, cancel, resume, decide, answerQuestion,
     setProject, setModel, browse, openFile, openSession, leaveSession, refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,

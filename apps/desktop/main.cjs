@@ -614,6 +614,14 @@ ipcMain.handle("luban:openWorkspaceWindow", async event => {
 });
 function installWindowGuards(session) {
   const win = session.window;
+  // Electron normally replaces BrowserWindow's title with the renderer's <title>
+  // after navigation. All desktop windows load the same generic HTML title, which
+  // makes macOS's Dock/window list impossible to distinguish. Keep the project
+  // and this window's stable session number as the native title instead.
+  win.webContents.on("page-title-updated", event => {
+    event.preventDefault();
+    setWorkspaceWindowTitle(session);
+  });
   win.once("ready-to-show", () => win.show());
   win.on("focus", () => { lastSession = session; updateTray(); });
   // Closing hides the window: its backend keeps running and the tray icon
@@ -656,6 +664,12 @@ function installWindowGuards(session) {
   });
   win.webContents.on("render-process-gone", () => { session.dirty = false; stopWorkspace(session); });
 }
+function setWorkspaceWindowTitle(session) {
+  const win = session.window;
+  if (!win || win.isDestroyed()) return;
+  const project = session.workspace ? basename(session.workspace) : "Workspace";
+  win.setTitle(`luban · ${project} — 窗口 ${session.key}`);
+}
 function ensureWindow(session) {
   if (session.window && !session.window.isDestroyed()) return session.window;
   const win = new BrowserWindow({
@@ -664,9 +678,23 @@ function ensureWindow(session) {
     icon: join(dirname(cli), "web-ui", process.platform === "win32" ? "icon.ico" : "icon-512.png"),
     // plugins:true is what enables Chromium's bundled PDF viewer for the
     // luban-media:// embed, so a PDF preview needs no external application.
-    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, plugins: true, preload: join(__dirname, "preload.cjs") },
+    // Cookies are host-scoped, not port-scoped: sharing Electron's default
+    // session lets a second loopback backend overwrite the first one's token.
+    // A private, in-memory partition keeps lazy imports, fetch and SSE attached
+    // to this window's backend, without persisting credentials between launches.
+    webPreferences: { partition: `luban-workspace-${session.key}`, nodeIntegration: false, contextIsolation: true, sandbox: true, plugins: true, preload: join(__dirname, "preload.cjs") },
   });
   session.window = win;
+  // Keep credentials in the main process, independent of expiring/lost cookies.
+  // Read current access per request so project switches rotate the credential.
+  win.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+    const access = session.backendAccess;
+    const headers = { ...details.requestHeaders };
+    if (access && new URL(details.url).origin === new URL(access.url).origin) {
+      headers["x-luban-token"] = access.token;
+    }
+    callback({ requestHeaders: headers });
+  });
   session.webContentsId = win.webContents.id;
   sessions.set(session.webContentsId, session);
   installWindowGuards(session);
@@ -690,7 +718,7 @@ async function loadInSession(session, workspace) {
     session.trustedOrigin = new URL(url).origin;
     rememberWorkspace(workspace);
     const win = ensureWindow(session);
-    win.setTitle(`luban · ${basename(workspace)}`);
+    setWorkspaceWindowTitle(session);
     updateTray();
     session.approvedUnload = true;
     await win.loadURL(`${url}?desktop=1&token=${encodeURIComponent(token)}`);

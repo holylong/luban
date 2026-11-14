@@ -59,6 +59,15 @@ export interface CreatorSnapshot {
   requests: Array<{ id: string; taskId: string; workspace: string; tool: string; args: Record<string, unknown>; reason: string; createdAt: string }>;
 }
 
+/** One project's memory, as `luban memory --json` reports it. */
+export interface CreatorMemory {
+  project: string;
+  workspace: string;
+  file: string;
+  facts: Array<{ at: number; text: string }>;
+  runs: Array<{ at: number; text: string }>;
+}
+
 export interface DriveComputer {
   supported?: boolean;
   enabled?: boolean;
@@ -121,6 +130,8 @@ interface CreatorBridge {
   driveApprove(id: string, allow: boolean): Promise<boolean>;
   setComputer(on: boolean): Promise<CreatorSettings>;
   forgetApprovals(): Promise<CreatorSettings>;
+  memory(): Promise<CreatorMemory[]>;
+  clearMemory(workspace: string): Promise<CreatorMemory[]>;
   onSettings(handler: (settings: CreatorSettings) => void): () => void;
   onDrive(handler: (event: DriveFrame) => void): () => void;
   onDriveLog(handler: (line: string) => void): () => void;
@@ -152,6 +163,8 @@ const SUGGESTIONS = [
 ];
 
 const MINUTE = 60_000;
+/** How many journal lines the drawer shows per project; the file keeps 40. */
+const MEMORY_RUNS_SHOWN = 5;
 
 function ago(at?: number, now = Date.now()): string {
   if (!at) return "";
@@ -520,6 +533,59 @@ function Plans({ tasks, now, bridge, onClose, onCancel }: {
   );
 }
 
+/**
+ * The 记忆 drawer: what a project carries from one run to the next.
+ *
+ * Facts are what the model chose to keep; 记录 is the automatic journal of
+ * finished runs. Both are the same Markdown file, so this view never invents a
+ * second store — clearing here deletes the file, and the next run starts fresh.
+ */
+export function Memory({ rows, onClose, onClear }: {
+  rows: CreatorMemory[]; onClose: () => void; onClear: (workspace: string) => void;
+}): React.ReactElement {
+  const facts = rows.reduce((sum, row) => sum + row.facts.length, 0);
+  const runs = rows.reduce((sum, row) => sum + row.runs.length, 0);
+  return (
+    <div className="drawer-wrap">
+      <div className="drawer-backdrop" onClick={onClose} />
+      <aside className="drawer memory">
+        <header>
+          <div>
+            <h2>项目记忆</h2>
+            <p>{rows.length} 个项目 · 事实 {facts} · 记录 {runs}</p>
+          </div>
+          <button className="drawer-close" onClick={onClose}>✕</button>
+        </header>
+        <div className="drawer-body">
+          {rows.length ? rows.map(row => (
+            <article className="memory-project" key={row.workspace}>
+              <p className="memory-title">{row.project}<span>{row.workspace}</span></p>
+              {row.facts.length ? (
+                <>
+                  <div className="drawer-section">事实</div>
+                  <ul className="memory-list">
+                    {row.facts.map(fact => <li key={`${fact.at}-${fact.text}`}><b>{dayClock(fact.at)}</b>{fact.text}</li>)}
+                  </ul>
+                </>
+              ) : null}
+              {row.runs.length ? (
+                <>
+                  <div className="drawer-section">记录（最近 {Math.min(row.runs.length, MEMORY_RUNS_SHOWN)} 条）</div>
+                  <ul className="memory-list">
+                    {row.runs.slice(-MEMORY_RUNS_SHOWN).map(run => <li key={`${run.at}-${run.text}`}><b>{dayClock(run.at)}</b>{run.text}</li>)}
+                  </ul>
+                </>
+              ) : null}
+              {!row.facts.length && !row.runs.length ? <p className="hint">这个项目还没有记忆。</p> : null}
+              <button className="wide" onClick={() => onClear(row.workspace)}>清除这个项目的记忆</button>
+            </article>
+          )) : <p className="hint">还没有任何记忆。任务里说「记住…」，或让它调用 remember 工具；下一次执行就会带上。</p>}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 function App(): React.ReactElement {
   const bridge = window.creator;
   const [snapshot, setSnapshot] = useState<CreatorSnapshot | undefined>();
@@ -531,6 +597,7 @@ function App(): React.ReactElement {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"active" | "done" | "approvals">("active");
   const [plans, setPlans] = useState(false);
+  const [memoryRows, setMemoryRows] = useState<CreatorMemory[] | undefined>();
   const textarea = useRef<HTMLTextAreaElement>(null);
 
   // Control session
@@ -644,6 +711,19 @@ function App(): React.ReactElement {
     setDriving(false);
   };
 
+  /** Open the drawer and load what is on disk right now, not a cached list. */
+  const openMemory = async (): Promise<void> => {
+    if (!bridge) return;
+    try { setMemoryRows(await bridge.memory()); }
+    catch (cause) { setError(String((cause as Error).message || cause)); setMemoryRows([]); }
+  };
+
+  const clearMemory = async (workspace: string): Promise<void> => {
+    if (!bridge) return;
+    try { setMemoryRows(await bridge.clearMemory(workspace)); setNotice("已清除这个项目的记忆"); }
+    catch (cause) { setError(String((cause as Error).message || cause)); }
+  };
+
   const submit = async (): Promise<void> => {
     if (!bridge || busy || !prompt.trim()) return;
     setBusy(true);
@@ -718,6 +798,9 @@ function App(): React.ReactElement {
           </button>
           <button onClick={() => { void bridge.openPolicy(); }}>
             <FileGlyph />权限策略
+          </button>
+          <button className={memoryRows ? "on" : ""} onClick={() => { void openMemory(); }}>
+            <ListGlyph />记忆
           </button>
         </nav>
 
@@ -876,6 +959,14 @@ function App(): React.ReactElement {
           </div>
         )}
       </main>
+
+      {memoryRows ? (
+        <Memory
+          rows={memoryRows}
+          onClose={() => setMemoryRows(undefined)}
+          onClear={workspace => { void clearMemory(workspace); }}
+        />
+      ) : null}
 
       {plans ? (
         <Plans

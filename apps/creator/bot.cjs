@@ -198,6 +198,27 @@ function policyPath(home) {
   return join(home, "bot", "permissions.json");
 }
 
+/**
+ * Per-project memory, exactly as `luban memory --json` reports it.
+ *
+ * The Markdown format (sections, `YYYY-MM-DD HH:mm` stamps, caps) belongs to
+ * src/core/memory.ts; parsing it a second time here is how a UI drifts from the
+ * file it is showing. Clearing goes through the CLI for the same reason.
+ */
+function memoryList(home) {
+  const output = runCli(["memory", "--json"], home);
+  const rows = JSON.parse(output || "[]");
+  if (!Array.isArray(rows)) throw new Error("luban memory --json 没有返回列表");
+  return rows;
+}
+
+function clearMemory(home, workspace) {
+  const target = String(workspace || "").trim();
+  if (!target) throw new Error("缺少工作区路径");
+  runCli(["memory", "--clear", target], home);
+  return memoryList(home);
+}
+
 /** Create the empty policy through the CLI; this app never writes grants itself. */
 function ensurePolicy(home) {
   runCli(["bot", "permissions"], home);
@@ -231,6 +252,6 @@ function ensureWorker(home) {
 }
 
 module.exports = {
-  addTask, cancelTask, cliPath, ensurePolicy, ensureWorker, homeDir, listTasks, nodeBinary, nodeEnv, permissionRequests,
-  policyPath, taskRuns, workerStatus,
+  addTask, cancelTask, clearMemory, cliPath, ensurePolicy, ensureWorker, homeDir, listTasks, memoryList, nodeBinary,
+  nodeEnv, permissionRequests, policyPath, taskRuns, workerStatus,
 };

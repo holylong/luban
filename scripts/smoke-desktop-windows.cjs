@@ -23,6 +23,9 @@ function createElectron() {
   let idSeq = 0;
   let readyCallback;
   const windows = [];
+  // Model Chromium's cookie jars by partition and hostname (NOT by port).
+  // Real requests still go to the real per-window backend's AuthGate.
+  const cookieJars = new Map();
   const registered = new Map();
   const protocol = {
     registerSchemesAsPrivileged() {},
@@ -37,6 +40,7 @@ function createElectron() {
       this.mainFrame = { url: "about:blank" };
       this.url = "about:blank";
       this.sent = [];
+      this.session = { webRequest: { onBeforeSendHeaders: handler => { this.beforeHeaders = handler; } } };
     }
     getURL() { return this.url; }
     setWindowOpenHandler() {}
@@ -56,13 +60,40 @@ function createElectron() {
     }
     static getFocusedWindow() { return windows.filter(win => !win.destroyed).at(-1) ?? null; }
     static fromWebContents(contents) { return contents.win; }
-    loadURL(url) {
+    async browserFetch(url, init = {}) {
+      const target = new URL(url);
+      const partition = this.options.webPreferences?.partition || "default";
+      if (!cookieJars.has(partition)) cookieJars.set(partition, new Map());
+      const jar = cookieJars.get(partition);
+      const headers = new Headers(init.headers);
+      const cookie = jar.get(target.hostname);
+      if (cookie && !this.dropCookies) headers.set("cookie", cookie);
+      if (this.webContents.beforeHeaders) {
+        const result = await new Promise(resolve => this.webContents.beforeHeaders({ url, requestHeaders: Object.fromEntries(headers) }, resolve));
+        for (const [key, value] of Object.entries(result.requestHeaders)) headers.set(key, value);
+      }
+      const response = await fetch(url, { ...init, headers, redirect: "manual" });
+      const stored = response.headers.get("set-cookie");
+      if (stored) jar.set(target.hostname, stored.split(";")[0]);
+      return response;
+    }
+    async loadURL(url) {
+      const response = await this.browserFetch(url);
+      if (!response.ok) throw new Error(`window navigation failed: ${response.status}`);
+      await response.text();
       this.loads.push(url);
       this.webContents.url = url;
       this.webContents.mainFrame.url = url;
       // Real Electron commits the navigation asynchronously; the session guard
       // rebuilds its workspace service from this event.
-      setImmediate(() => this.webContents.emit("did-frame-navigate", {}, url, 200, "OK", true));
+      setImmediate(() => {
+        this.webContents.emit("did-frame-navigate", {}, url, 200, "OK", true);
+        // Chromium reports the shared generic HTML title after navigation.
+        // Match Electron: preventDefault must preserve our project-specific title.
+        let prevented = false;
+        this.webContents.emit("page-title-updated", { preventDefault() { prevented = true; } }, "luban · Agent Workspace");
+        if (!prevented) this.setTitle("luban · Agent Workspace");
+      });
       return Promise.resolve();
     }
     loadFile() { return Promise.resolve(); }
@@ -146,6 +177,44 @@ const fail = message => { console.error("SMOKE FAIL:", message); process.exit(1)
 const workbench = () => smoke.windows.filter(win => win.loads.length > 0 && !win.destroyed);
 const eventFor = win => ({ sender: win.webContents, senderFrame: win.webContents.mainFrame });
 const portOf = win => new URL(win.loads[0]).port;
+const xtermAsset = fs.readdirSync(path.join(repo, "dist/web-ui/assets")).find(name => /^xterm-.*\.js$/u.test(name));
+async function checkWindowAuth(win) {
+  if (!xtermAsset) fail("built xterm chunk missing");
+  const base = new URL(win.webContents.getURL()).origin;
+  // No ?token= or explicit Authorization: lazy imports and EventSource only
+  // have the browser's cookie jar after the initial navigation.
+  for (const resource of [`/assets/${xtermAsset}`, "/api/node"]) {
+    const response = await win.browserFetch(`${base}${resource}`);
+    if (!response.ok) fail(`window ${win.title} lost cookie authentication for ${resource}: ${response.status}`);
+    if (resource.startsWith("/assets/") && !response.headers.get("content-type")?.includes("javascript")) fail("xterm returned a login page instead of JavaScript");
+    await response.text();
+  }
+  const controller = new AbortController();
+  try {
+    const events = await win.browserFetch(`${base}/api/events`, { signal: controller.signal });
+    if (!events.ok || !events.headers.get("content-type")?.includes("text/event-stream")) fail(`SSE authentication failed: ${events.status}`);
+    await events.body.cancel();
+  } finally { controller.abort(); }
+  // Isolation must not be implemented by removing authentication from chunks.
+  const anonymous = await fetch(`${base}/assets/${xtermAsset}`, { redirect: "manual" });
+  if (anonymous.ok) fail("anonymous xterm request bypassed authentication");
+  await anonymous.text();
+  // Background failures must not prevent recovery with the native credential.
+  win.dropCookies = true;
+  for (let i = 0; i < 21; i++) {
+    const denied = await fetch(`${base}/api/node`);
+    if (denied.ok) fail("anonymous API bypassed authentication");
+    await denied.text();
+  }
+  const recovered = await win.browserFetch(`${base}/api/node`);
+  if (!recovered.ok) fail(`native token did not recover lockout: ${recovered.status}`);
+  await recovered.text();
+  const post = await win.browserFetch(`${base}/api/model`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  if (post.status === 401 || post.status === 429) fail(`composer-style POST lost authentication: ${post.status}`);
+  await post.text();
+  const foreign = await new Promise(resolve => win.webContents.beforeHeaders({ url: "https://example.com/api/node", requestHeaders: {} }, resolve));
+  if (foreign.requestHeaders["x-luban-token"]) fail("native token leaked to foreign origin");
+}
 
 (async () => {
   if (!fs.existsSync(path.join(repo, "dist/cli.js"))) fail("run npm run build first");
@@ -169,6 +238,7 @@ const portOf = win => new URL(win.loads[0]).port;
   const first = workbench()[0];
   if (!first) fail("no window opened");
   if (!first.title.includes("luban-a")) fail(`unexpected first title: ${first.title}`);
+  if (!/窗口 \d+$/u.test(first.title)) fail(`first window title has no unique window number: ${first.title}`);
   console.log("window 1:", first.title, portOf(first));
 
   // 文件 → 打开项目文件夹 on a second folder opens a second window.
@@ -180,8 +250,13 @@ const portOf = win => new URL(win.loads[0]).port;
   const second = workbench()[1];
   if (!second) fail("second window never opened");
   if (!second.title.includes("luban-b")) fail(`second window shows ${second.title}`);
+  if (second.title === first.title) fail(`two projects have the same native window title: ${first.title}`);
+  if (!/窗口 \d+$/u.test(second.title)) fail(`second window title has no unique window number: ${second.title}`);
   if (portOf(first) === portOf(second)) fail("both windows share one backend");
   console.log("window 2:", second.title, portOf(second));
+  await checkWindowAuth(first);
+  await checkWindowAuth(second);
+  console.log("cookie isolation: xterm chunk, API and SSE work in both windows");
 
   const listFiles = smoke.registered.get("luban:listFiles");
   const filesOf = win => listFiles(eventFor(win), undefined);
@@ -201,6 +276,7 @@ const portOf = win => new URL(win.loads[0]).port;
   if (workbench().length !== 3) fail("文件 → 新建窗口 did not open a window");
   const fromMenu = workbench()[2];
   if (!fromMenu.title.includes("luban-b")) fail(`新建窗口 opened ${fromMenu.title}`);
+  if (fromMenu.title === second.title) fail(`two windows for the same project are indistinguishable: ${fromMenu.title}`);
   console.log("菜单新建窗口:", fromMenu.title, portOf(fromMenu));
   fromMenu.destroy();
   await wait(1500);
@@ -255,6 +331,9 @@ const portOf = win => new URL(win.loads[0]).port;
   if (!(await filesOf(first)).includes("c.txt")) fail("switched window cannot see its new folder");
   if (!(await filesOf(second)).includes("b.txt")) fail("other window followed the switch");
   console.log("window 1 after switch:", first.title);
+  await checkWindowAuth(first);
+  await checkWindowAuth(second);
+  console.log("cookie isolation survives switching one window's backend");
 
   // Right-click file actions: create, rename, copy path, reveal, trash.
   const createEntry = smoke.registered.get("luban:createEntry");

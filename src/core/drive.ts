@@ -25,7 +25,9 @@ import { beginFromEnvironment, checkPermissions, computerControl, computerSuppor
 import { loadConfig } from "./config.js";
 import type { AgentEvent, ChatMessage, LubanConfig } from "./types.js";
 import type { DriveComputerState, DriveEvent, DriveUsage } from "./drive-events.js";
+import { injectMemory, memoryPrompt, noteRun, readProjectMemory, runSummary, stripMemory } from "./memory.js";
 import { describeMoment } from "./remind.js";
+import { creatorIdentityPrompt, creatorSelfDescription, readCreatorIdentity } from "./creator-identity.js";
 
 export type { DriveCommand, DriveComputerState, DriveEvent, DriveUsage } from "./drive-events.js";
 
@@ -178,7 +180,8 @@ export class DriveSession {
   async open(): Promise<void> {
     const config = loadConfig({ workspace: this.options.workspace, model: this.options.model, mesh: false, seedDefaults: true });
     this.config = config;
-    this.messages = initialMessages(config.workspace, config.model.name, config.planning, "model", false, DRIVE_IDENTITY);
+    config.creatorIdentity = true;
+    this.messages = initialMessages(config.workspace, config.model.name, config.planning, "model", false, creatorIdentityPrompt(readCreatorIdentity(this.options.home)));
     this.messages.push({ role: "system", content: DRIVE_PROTOCOL });
     this.computer = await this.openComputer(config);
     this.emit({ type: "ready", workspace: config.workspace, model: config.model.id, computer: this.computer });
@@ -252,15 +255,27 @@ export class DriveSession {
     // cases in this file would only grow into a second, dumber agent.
     const runner = this.ensureRunner();
     try {
-      const result = await runner.run(this.messages, "agent", controller.signal,
+      // What this project already knows goes in front of every turn: a preference
+      // stated yesterday, last night's scan, the id of the tracker project. The
+      // block is rebuilt from the file each turn, so editing or clearing the
+      // Markdown takes effect on the very next sentence.
+      this.messages[0] = initialMessages(this.config.workspace, this.config.model.name, this.config.planning, "model", false,
+        creatorIdentityPrompt(readCreatorIdentity(this.options.home)))[0]!;
+      const record = await readProjectMemory(this.options.home, this.config.workspace).catch(() => undefined);
+      const messages = injectMemory(this.messages, record ? memoryPrompt(record, prompt) : undefined);
+      const result = await runner.run(messages, "agent", controller.signal,
         event => this.onAgentEvent(event),
         (tool, args) => this.confirm(tool, args));
-      this.messages = result.messages;
+      this.messages = stripMemory(result.messages);
       this.flushThinking();
       this.emit({
         type: "turn-end", id, ok: result.ok, text: result.text, steps: result.steps,
         usage: this.usage(result.metrics?.requests), stopReason: result.stopReason,
       });
+      // The journal is what makes tomorrow different from today: one line about
+      // what this turn actually produced, not a second copy of the transcript.
+      const summary = runSummary(result.ok, result.text);
+      if (summary) await noteRun(this.options.home, this.config.workspace, summary).catch(() => undefined);
     } catch (error) {
       this.emit({ type: "error", text: error instanceof Error ? error.message : String(error) });
       this.emit({ type: "turn-end", id, ok: false, text: "", steps: 0, usage: { input: 0, output: 0, calls: 0 } });
@@ -292,8 +307,10 @@ export class DriveSession {
     // The toolbox is the ordinary one — files, commands, MCP, and the computer
     // when the switch is on — because a session that pre-picks tools for the
     // user ("this sentence looks like screen work") is guessing at intent.
-    const sessionConfig = { ...config, permissionMode: "edits" as const, permissions: { allow: [], deny: config.permissions?.deny ?? [] } };
-    this.runner = new AgentRunner(sessionConfig, undefined, undefined, 0, { toolset: "all" }) as unknown as DriveRunner;
+    const sessionConfig = { ...config, home: this.options.home, permissionMode: "edits" as const, permissions: { allow: [], deny: config.permissions?.deny ?? [] } };
+    const runner = new AgentRunner(sessionConfig, undefined, undefined, 0, { toolset: "all" });
+    Object.defineProperty(runner, "identity", { get: () => creatorSelfDescription(this.options.home) });
+    this.runner = runner as unknown as DriveRunner;
     return this.runner;
   }
 
@@ -340,6 +357,18 @@ export class DriveSession {
     } else if (tool.risk === "read" && !tool.approvalOnceOnly) {
       // Reading is what makes the timeline worth watching; asking about it turns
       // the window into a dead end where every turn stalls on "read_file".
+      return "once";
+    } else if (tool.name === "update_creator_identity") {
+      // A real approval in the Creator window, not a silently remembered grant.
+      return await this.ask(randomUUID(), tool.name, "保存全局身份", args, "更新名字、性格或称呼；对所有工作区及后台任务生效") ? "once" : "deny";
+    } else if (tool.name === "remember") {
+      // One line into luban's own memory file, never the human's files. Asking
+      // each time taught the model not to remember anything at all; the 记忆
+      // drawer is where a wrong fact gets deleted instead.
+      if (!this.announced.has("remember")) {
+        this.announced.add("remember");
+        this.emit({ type: "status", text: "已写进项目记忆；侧栏「记忆」里可以查看和清除" });
+      }
       return "once";
     }
     // A standing 允许 the human gave earlier still holds — but only after the
@@ -414,9 +443,6 @@ export class DriveSession {
   }
 }
 
-/** The session names itself in its own body, like the bot worker does. */
-const DRIVE_IDENTITY = "造物主 (the creator of this workspace)";
-
 /** How long reasoning deltas are collected before one thinking event is sent. */
 const THINKING_HOLD_MS = 260;
 
@@ -429,7 +455,7 @@ const THINKING_HOLD_MS = 260;
  * reasoning the model is already doing.
  */
 export const DRIVE_PROTOCOL = [
-  "你是造物主，坐在这台机器前面替用户办事。先规划再动手：想清楚这件事该用什么手段，只调真正需要的那一个。",
+  "你是 Creator 助手，按当前全局身份档案自称，坐在这台机器前面替用户办事。先规划再动手：想清楚这件事该用什么手段，只调真正需要的那一个。",
   "- 只是问一句、要个解释或意见：直接回答，一个工具都不要调。",
   "- 文档、代码、文件、命令、查资料：用普通工具（read_file / write_file / bash 等），和终端里一样干活，不要截屏。",
   "- 定时、提醒、闹钟：一律用 schedule 工具排进 luban 自己的队列，不要碰系统日历、提醒事项、osascript、crontab、at——那些是某台机器上的东西，换到 Windows 或 Ubuntu 就白排了，用户在 luban 里也查不到、取消不了。用户说「5 分钟后」「明天早上 8 点」「每天 6 点」，时间由你自己换算成 in / at / every 传进去；纯提醒（到点只要响一声）带 notify:true，不花模型调用；到点真要干活的就去掉 notify。排完在回答里说清几点响，以及 luban bot list / cancel 怎么查和改。",

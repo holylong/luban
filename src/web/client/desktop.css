@@ -111,9 +111,9 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-editor-head { height: 38px; padding: 0 10px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 11px; }
 .desktop-editor-title { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-size: 12px; }
 .desktop-editor .preview-body { min-height: 0; }
-.desktop-editor .code { font-size: 12px; }
-.desktop-editor .code-row { width: max-content; min-width: 100%; grid-template-columns: 48px auto; }
-.desktop-editor .code-row .src { white-space: pre; overflow-wrap: normal; }
+.desktop-editor .preview-code { font-size: 12px; }
+.desktop-editor .preview-code-row { width: max-content; min-width: 100%; grid-template-columns: 48px auto; }
+.desktop-editor .preview-code-row .src { white-space: pre; overflow-wrap: normal; }
 .desktop-agent .top { min-height: 40px; padding: 0 12px; }
 .desktop-agent .top .pills { display: none; }
 .desktop-agent .thread { min-height: 0; flex: 1; }
@@ -182,10 +182,15 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-code-tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--blue); }
 .desktop-code-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .desktop-code-pane[hidden] { display: none; }
-.desktop-changes { flex: 1; min-height: 0; overflow: auto; background: var(--panel); }
+/* The middle column exists to read one change, so the record fills it: the
+   340px reading cap that keeps a transcript card short left half the pane
+   empty and pushed the change into its own small box. */
+.desktop-changes { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--panel); }
 .desktop-changes .desktop-changes-heading { position: sticky; top: 0; z-index: 1; background: var(--panel); padding: 7px 10px; font-size: 12px; }
 .desktop-changes > div { padding: 0 10px 10px; }
-.desktop-changes .edit-record { margin-bottom: 8px; }
+.desktop-changes .edit-record { margin-bottom: 8px; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.desktop-changes .edit-summary { flex: none; }
+.desktop-changes .edit-lines, .desktop-changes .edit-split { flex: 1; min-height: 0; max-height: none; }
 .desktop-agent .composer-row { flex-wrap: wrap; }
 .desktop-agent .session-msg .content { max-height: none; }
 .desktop-agent-tabs > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

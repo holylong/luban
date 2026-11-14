@@ -17,6 +17,20 @@ export interface UsageDelta {
   input: number;
   output: number;
   runs: number;
+  /**
+   * Per-model split, keyed by `provider/model`.
+   *
+   * Optional: ledgers written before models were tracked only carry totals, and
+   * such a bucket still uploads — it lands under "unattributed" on the
+   * dashboard instead of being invented into some model's row.
+   */
+  models?: Record<string, ModelUsage>;
+}
+
+export interface ModelUsage {
+  input: number;
+  output: number;
+  runs: number;
 }
 
 export interface UsageLedger {
@@ -68,7 +82,27 @@ function count(value: unknown): number {
 
 function delta(raw: unknown): UsageDelta {
   const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  return { input: count(value.input), output: count(value.output), runs: count(value.runs) };
+  const models = modelDeltas(value.models);
+  return { input: count(value.input), output: count(value.output), runs: count(value.runs), ...(models ? { models } : {}) };
+}
+
+/** Read a `{ model: {input, output, runs} }` map, dropping empty rows. */
+function modelDeltas(raw: unknown): Record<string, ModelUsage> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, ModelUsage> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const name = key.slice(0, 80);
+    const item = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+    const input = count(item.input);
+    const output = count(item.output);
+    if (!name || (input <= 0 && output <= 0)) continue;
+    const bucket = out[name] ?? { input: 0, output: 0, runs: 0 };
+    bucket.input += input;
+    bucket.output += output;
+    bucket.runs += Math.max(1, count(item.runs));
+    out[name] = bucket;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export function readUsageLedger(home: string, now = Date.now()): UsageLedger {
@@ -102,13 +136,25 @@ export function writeUsageLedger(home: string, ledger: UsageLedger): void {
 /** Sum the token usage of one completed run from its metrics. */
 export function runUsage(metrics: Pick<RunMetrics, "requests"> | undefined): UsageDelta {
   const usage = zero();
+  const models: Record<string, ModelUsage> = {};
   for (const request of metrics?.requests ?? []) {
     const item = request.usage;
     if (!item) continue;
     usage.input += count(item.input);
     usage.output += count(item.output);
+    // Each request remembers which model served it, so compaction and handoff
+    // calls stay attributed even after the model changes for a later turn.
+    const name = (request.model ?? "").slice(0, 80);
+    if (!name || (count(item.input) <= 0 && count(item.output) <= 0)) continue;
+    const bucket = models[name] ?? { input: 0, output: 0, runs: 0 };
+    bucket.input += count(item.input);
+    bucket.output += count(item.output);
+    models[name] = bucket;
   }
   usage.runs = 1;
+  // One run counts once per model it actually spent tokens on.
+  for (const bucket of Object.values(models)) bucket.runs = 1;
+  if (Object.keys(models).length) usage.models = models;
   return usage;
 }
 
@@ -120,6 +166,15 @@ export function recordRunUsage(home: string, usage: UsageDelta, now = Date.now()
     ledger.pending.input += count(usage.input);
     ledger.pending.output += count(usage.output);
     ledger.pending.runs += Math.max(1, count(usage.runs));
+    if (usage.models) {
+      const models = ledger.pending.models ?? (ledger.pending.models = {});
+      for (const [name, bucket] of Object.entries(usage.models)) {
+        const target = models[name] ?? (models[name] = { input: 0, output: 0, runs: 0 });
+        target.input += count(bucket.input);
+        target.output += count(bucket.output);
+        target.runs += Math.max(1, count(bucket.runs));
+      }
+    }
     writeUsageLedger(home, ledger);
   } catch {
     // A read-only or full disk must never break an agent run.
@@ -222,11 +277,24 @@ async function performFlush(options: UsageFlushOptions): Promise<"sent" | "skipp
       // Only an acknowledged upload is subtracted; a failure leaves the bucket
       // exactly where it was (plus whatever other runs added meanwhile).
       if (delta) {
+        // Keep whatever per-model buckets other runs added meanwhile, and
+        // subtract only what this upload actually covered.
+        const models = ledger.pending.models;
         ledger.pending = {
           input: Math.max(0, ledger.pending.input - delta.input),
           output: Math.max(0, ledger.pending.output - delta.output),
           runs: Math.max(0, ledger.pending.runs - delta.runs),
+          ...(models ? { models } : {}),
         };
+        for (const [name, bucket] of Object.entries(delta.models ?? {})) {
+          const current = ledger.pending.models?.[name];
+          if (!current) continue;
+          current.input = Math.max(0, current.input - bucket.input);
+          current.output = Math.max(0, current.output - bucket.output);
+          current.runs = Math.max(0, current.runs - bucket.runs);
+          if (current.input <= 0 && current.output <= 0) delete ledger.pending.models![name];
+        }
+        if (ledger.pending.models && !Object.keys(ledger.pending.models).length) delete ledger.pending.models;
       }
       update(ledger);
       writeUsageLedger(options.home, ledger);
@@ -246,6 +314,12 @@ async function performFlush(options: UsageFlushOptions): Promise<"sent" | "skipp
         input: pending.input,
         output: pending.output,
         runs: pending.runs,
+        // Per-model rows are optional on the wire: a bucket that predates model
+        // tracking still reports its totals, which the server counts as
+        // unattributed rather than forcing it into a model.
+        ...(pending.models && Object.keys(pending.models).length
+          ? { models: Object.entries(pending.models).map(([model, bucket]) => ({ model, ...bucket })) }
+          : {}),
         reportedAt: at,
       }),
       signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),

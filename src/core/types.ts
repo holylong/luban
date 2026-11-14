@@ -95,6 +95,8 @@ export interface MeshSettings {
 export type ThemeColors = Record<string, string>;
 
 export interface LubanConfig {
+  /** Only Creator bodies expose the global identity editor. */
+  creatorIdentity?: boolean;
   home: string;
   workspace: string;
   project: string;
@@ -316,6 +318,8 @@ export interface RunMetrics {
   approvalMs: number;
   compactions: number;
   requests: Array<{ index: number; purpose: "task" | "compaction" | "handoff"; elapsedMs: number; firstOutputMs?: number; ok: boolean;
+    /** `provider/model` that served this call, so usage can be split per model. */
+    model?: string;
     usage?: { input: number; output: number; cached?: number; reasoning?: number } }>;
 }
 

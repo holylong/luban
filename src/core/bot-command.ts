@@ -6,6 +6,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { AgentRunner, initialMessages } from "./agent.js";
 import { BotQueue, type BotExecute } from "./bot.js";
 import { loadConfig } from "./config.js";
+import { injectMemory, memoryPrompt, noteRun, readProjectMemory, runSummary, stripMemory, type ProjectMemoryRecord } from "./memory.js";
+import type { ChatMessage, LubanConfig } from "./types.js";
+import { creatorIdentityPrompt, creatorSelfDescription, readCreatorIdentity } from "./creator-identity.js";
 import { flushUsageStatsOnExit } from "./usage-stats.js";
 import { SessionStore } from "./session-store.js";
 import { BotPermissions } from "./bot-permissions.js";
@@ -27,9 +30,6 @@ export function botLaunchAgent(executable: string, cli: string, home: string, pa
 </dict></plist>\n`;
 }
 
-/** The soul names itself 造物主 in its own body; the foreground stays a coding agent. */
-const SOUL_IDENTITY = "造物主 (the creator of this workspace)";
-const SOUL_IDENTITY_TEXT = { zh: "我是 luban，你工作区的造物主。", en: "I am luban, the creator of your workspace." };
 
 /** What the worker is running right now, published for the desktop pet. */
 let currentTask: { prompt: string; startedAt: number } | undefined;
@@ -41,6 +41,26 @@ async function publishStatus(home: string, startedAt: number): Promise<void> {
   const temporary = join(directory, "status.tmp");
   await writeFile(temporary, JSON.stringify(status), { mode: 0o600 });
   await rename(temporary, join(directory, "status.json"));
+}
+
+/**
+ * One scheduled run's transcript: the soul's identity, whatever this project
+ * already knows, then the task itself.
+ *
+ * Exported and pure so the injection order is testable without a model call:
+ * the memory block has to sit immediately before the task prompt, and it must be
+ * absent for a project that has no memory yet.
+ */
+export function scheduledMessages(
+  config: Pick<LubanConfig, "home" | "workspace" | "model" | "planning">,
+  prompt: string,
+  record?: Pick<ProjectMemoryRecord, "project" | "facts" | "runs">,
+): ChatMessage[] {
+  const messages: ChatMessage[] = [
+    ...initialMessages(config.workspace, config.model.name, config.planning, "model", false, creatorIdentityPrompt(readCreatorIdentity(config.home))),
+    { role: "user", content: prompt },
+  ];
+  return injectMemory(messages, record ? memoryPrompt(record as ProjectMemoryRecord, prompt) : undefined);
 }
 
 const execute: BotExecute = async (task, signal) => {
@@ -57,11 +77,15 @@ const execute: BotExecute = async (task, signal) => {
   config.permissions = { allow: [], deny: config.permissions?.deny ?? [] };
   config.sandbox = { ...config.sandbox, allowOutsideWorkspace: false };
   const store = new SessionStore(config.home);
-  const messages = [...initialMessages(config.workspace, config.model.name, config.planning, "model", false, SOUL_IDENTITY), { role: "user" as const, content: task.prompt }];
+  // Scheduled tasks are the ones that most need memory: last night's scan has to
+  // be readable tonight. The block is inserted for this call only; the stored
+  // session stays a plain transcript.
+  const record = await readProjectMemory(config.home, config.workspace).catch(() => undefined);
+  const messages = scheduledMessages(config, task.prompt, record);
   currentTask = { prompt: task.prompt, startedAt: Date.now() };
   const session = store.create(config.project, config.workspace, "agent", config.model.id, messages);
   const runner = new AgentRunner(config);
-  runner.identity = SOUL_IDENTITY_TEXT;
+  Object.defineProperty(runner, "identity", { get: () => creatorSelfDescription(config.home) });
   const permissions = new BotPermissions(config.home);
   let denied = false;
   try {
@@ -79,8 +103,12 @@ const execute: BotExecute = async (task, signal) => {
       process.stderr.write(`Permission needed: ${id} (${tool.name}); inspect luban bot requests\n`);
       return "deny";
     });
-    session.messages = result.messages;
+    session.messages = stripMemory(result.messages);
     await store.save(session);
+    // An unattended run still leaves a line for the next one, which is the whole
+    // point of a nightly scan: tonight's job should know what last night found.
+    const summary = runSummary(result.ok && !denied, result.text);
+    if (summary) await noteRun(config.home, config.workspace, summary).catch(() => undefined);
     const requests = result.metrics?.requests ?? [];
     const usage = {
       input: requests.reduce((sum, request) => sum + (request.usage?.input ?? 0), 0),

@@ -50,9 +50,9 @@ function FileView({ file }: { file: FileContent }): React.ReactElement {
       {file.binary
         ? <div className="banner">二进制文件，未在浏览器中渲染。</div>
         : (
-          <div className="code">
+          <div className="preview-code">
             {lines.map((line, index) => (
-              <div className="code-row" key={index}>
+              <div className="preview-code-row" key={index}>
                 <span className="ln">{index + 1}</span>
                 <span className="src"><HighlightedLine line={line} language={file.language} /></span>
               </div>
@@ -78,12 +78,12 @@ function DiffView({ diff, onOpen }: { diff: DiffPayload; onOpen: (path: string) 
           <button onClick={() => onOpen(entry.path)}>打开</button>
         </div>
       ))}
-      <div className="code">
+      <div className="preview-code">
         {files.map((file, fileIndex) => (
           <React.Fragment key={`${file.path}-${fileIndex}`}>
-            {file.path && <div className="code-row"><span className="ln" /><span className="src hunk">{file.path}</span></div>}
+            {file.path && <div className="preview-code-row"><span className="ln" /><span className="src hunk">{file.path}</span></div>}
             {file.rows.map((row, index) => (
-              <div className={`code-row ${row.kind === "add" ? "add" : row.kind === "del" ? "del" : ""}`} key={index}>
+              <div className={`preview-code-row ${row.kind === "add" ? "add" : row.kind === "del" ? "del" : ""}`} key={index}>
                 <span className="ln">{row.kind === "hunk" ? "" : row.kind === "add" ? "+" : row.kind === "del" ? "−" : " "}</span>
                 <span className={`src ${row.kind === "hunk" ? "hunk" : row.kind === "meta" ? "muted" : ""}`}>
                   {row.kind === "hunk" || row.kind === "meta" ? row.text : <HighlightedLine line={row.text} />}

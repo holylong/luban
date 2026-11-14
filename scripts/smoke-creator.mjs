@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const home = mkdtempSync(join(tmpdir(), "luban-creator-"));
@@ -67,6 +67,17 @@ for (const task of seed) {
 }
 mkdirSync(join(home, "workspace"), { recursive: true });
 
+// Cross-run memory for the 记忆 drawer: written through the real writer in
+// dist/core/memory.js, so the smoke proves the same Markdown a task would leave.
+// A hand-written fixture would agree with the window and disagree with the code.
+const { rememberFact, noteRun } = await import(pathToFileURL(join(repo, "dist", "core", "memory.js")).href);
+const workspace = join(home, "workspace");
+const startedAt = now - 3600_000;
+await rememberFact(home, workspace, "禅道 bug 项目的 id 是 42", startedAt);
+await rememberFact(home, workspace, "用户偏好 pnpm，不要用 npm", startedAt + 60_000);
+await noteRun(home, workspace, "扫了本周新增 bug，找到 3 个。", startedAt + 120_000);
+await noteRun(home, workspace, "整理了文档里的过期截图。", startedAt + 180_000);
+
 // A standing 允许 and the 操控 switch: creator.json is what makes them survive a
 // relaunch, so the window is handed a real one instead of an empty default.
 writeFileSync(join(home, "creator.json"), JSON.stringify({ computer: true, allowed: ["computer", "bash"] }, null, 2));
@@ -86,7 +97,7 @@ writeFileSync(join(tasks, "22222222-2222-4222-8222-222222222222", "runs.jsonl"),
 
 const electron = join(repo, "node_modules", "electron", "cli.js");
 const child = spawn(process.execPath, [electron, join(repo, "apps", "creator"), "--smoke", shot], {
-  env: { ...process.env, LUBAN_HOME: home, CREATOR_SMOKE_PLANS: "1", CREATOR_SMOKE_APPROVALS: "1", CREATOR_SMOKE_FORGET: "1" },
+  env: { ...process.env, LUBAN_HOME: home, CREATOR_SMOKE_PLANS: "1", CREATOR_SMOKE_APPROVALS: "1", CREATOR_SMOKE_FORGET: "1", CREATOR_SMOKE_MEMORY: "1" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
@@ -169,6 +180,36 @@ if (existsSync(approvalsJson)) {
   console.error("授权 页没有渲染出截图");
   process.exit(1);
 }
+// 记忆 has to show the facts the model kept and a journal line per run, with a
+// clear button that reaches the file rather than only the React tree.
+const memoryJson = shot.replace(/\.png$/u, "-memory.json");
+if (existsSync(memoryJson)) {
+  const memory = JSON.parse(readFileSync(memoryJson, "utf8"));
+  if (memory.title !== "项目记忆") {
+    console.error(`记忆 抽屉标题不对：${JSON.stringify(memory.title)}`);
+    process.exit(1);
+  }
+  const shown = `${memory.projects.join(" ")} ${memory.rows.join(" ")}`;
+  for (const needle of ["禅道 bug 项目的 id 是 42", "用户偏好 pnpm", "扫了本周新增 bug", "整理了文档"]) {
+    if (!shown.includes(needle)) {
+      console.error(`记忆 抽屉里没有「${needle}」：\n${JSON.stringify(memory, null, 2).slice(0, 700)}`);
+      process.exit(1);
+    }
+  }
+  if (!memory.clear.some(label => label.includes("清除"))) {
+    console.error(`记忆 抽屉没有清除入口：${JSON.stringify(memory.clear)}`);
+    process.exit(1);
+  }
+  if (!memory.drawer || memory.drawer.w < 320) {
+    console.error(`记忆 抽屉没有展开：${JSON.stringify(memory.drawer)}`);
+    process.exit(1);
+  }
+  console.log(`  memory: ${memory.rows.length} rows in ${memory.projects.length} project(s), w=${memory.drawer.w}`);
+} else {
+  console.error("记忆 抽屉没有渲染出截图");
+  process.exit(1);
+}
+
 const plansShot = shot.replace(/\.png$/u, "-plans.png");
 const plans = JSON.parse(readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8"));
 const drawerText = readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8");

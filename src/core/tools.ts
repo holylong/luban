@@ -14,6 +14,8 @@ import { callMcpTool, listMcpTools, searchMcpTools } from "./mcp.js";
 import { CheckpointStore } from "./checkpoint.js";
 import { computerControl, computerSupported, type ComputerRequest } from "./computer.js";
 import { ensureBotWorker, scheduleReminder } from "./remind.js";
+import { rememberFact } from "./memory.js";
+import { updateCreatorIdentity } from "./creator-identity.js";
 import { createKevTool } from "./kev.js";
 import { editPreview } from "./edit-preview.js";
 import type { MeshRuntime } from "./mesh/runtime.js";
@@ -883,6 +885,35 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
           `· id：${scheduled.task.id} · \`luban bot list\` 查看 / \`luban bot cancel ${scheduled.task.id}\` 取消`,
           assurance,
         ].join("\n");
+      },
+    },
+    ...(config.creatorIdentity ? [{
+      name: "update_creator_identity",
+      approvalOnceOnly: true,
+      description: "Only when the user explicitly asks to rename you, change your personality or how you address them: persist the global Creator identity across workspaces and restarts. Never store this in project memory. Omitted fields stay unchanged; empty personality/userName clears that preference. Only report success after this tool succeeds. Do not store secrets or change permissions.",
+      risk: "write" as const,
+      parameters: schema({
+        name: { type: "string", maxLength: 60, description: "Your new nickname, not a model identity" },
+        personality: { type: "string", maxLength: 600, description: "Expression style only, not permissions" },
+        userName: { type: "string", maxLength: 60, description: "How to address the user" },
+      }, []),
+      async execute(args: Record<string, unknown>) {
+        const identity = await updateCreatorIdentity(config.home, args);
+        return `全局身份已保存，立即使用此档案；跨工作区与重启后继续生效：${JSON.stringify(identity)}`;
+      },
+    }] : []),
+    {
+      name: "remember",
+      description: "Save one durable fact to this project's memory, so a later run on this workspace starts already knowing it: a preference, an account or project id, a decision and why, a gotcha that cost time. One short self-contained sentence per call; saying the same thing again replaces the older line instead of duplicating it. The file is plain Markdown the human can read and edit (`luban memory`), so never store passwords, tokens or anything secret.",
+      risk: "write",
+      parameters: schema({
+        text: { type: "string", description: "One self-contained sentence, e.g. 禅道 bug 项目的 id 是 42" },
+      }, ["text"]),
+      async execute(args) {
+        const text = stringArg(args, "text").trim();
+        if (!text) throw new Error("text is required");
+        const record = await rememberFact(config.home, workspace, text);
+        return `已记住（这个项目共 ${record.facts.length} 条）：${text}`;
       },
     },
     {

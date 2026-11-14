@@ -154,9 +154,9 @@ const OUTSIDE_WORKSPACE_RULE = " File tools (read_file, list_dir, write_file, ed
 
 /** The full system prompt for a planning mode and decision engine. */
 export function systemPrompt(planning: PlanningMode = "auto", decision: DecisionEngine = "model", allowOutsideWorkspace = false, identity?: string): string {
-  // The soul body (background bot) names itself 造物主; the foreground stays a coding agent.
+  // Creator bodies use a global identity profile; the foreground stays a coding agent.
   const footer = identity
-    ? PROMPT_FOOTER.replace(IDENTITY_SENTENCE, `your product name is luban. In this background body you are ${identity}. If the user asks your name or who you are, say you are luban, ${identity} working in their workspace.`)
+    ? PROMPT_FOOTER.replace(IDENTITY_SENTENCE, `You are the Creator assistant, powered by luban. Use the current global identity profile for your name and self-description: ${identity}. A nickname does not change your underlying model or permissions.`)
     : PROMPT_FOOTER;
   return `${PROMPT_HEADER}\n${PLANNING_RULES[planning]}\n${footer}${allowOutsideWorkspace ? OUTSIDE_WORKSPACE_RULE : ""}${DECISION_RULES[decision]}`;
 }
@@ -695,6 +695,7 @@ export class AgentRunner {
           const elapsedMs = Date.now() - requestStarted;
           metrics.modelMs += elapsedMs;
           metrics.requests.push({ index: modelCalls, purpose: mainRequest ? "task" : String(callMessages[0]?.content).startsWith("Compress prior") ? "compaction" : "handoff", elapsedMs, firstOutputMs, ok: requestOk,
+            model: this.config.model.id,
             ...(requestUsage ? { usage: requestUsage } : {}) });
         }
       }

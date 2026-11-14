@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DRIVE_PROTOCOL, DriveSession, describeAction, screenshotPath, type DriveEvent } from "./drive";
+import { readProjectMemory, rememberFact } from "./memory";
+import { updateCreatorIdentity } from "./creator-identity";
 import type { AgentEvent, ChatMessage } from "./types";
 
 const homes: string[] = [];
@@ -313,5 +315,101 @@ describe("no mechanical shortcuts", () => {
     expect(events.some(event => event.type === "tool")).toBe(false);
     const end = events.find(event => event.type === "turn-end");
     expect(end?.type === "turn-end" ? end.usage.calls : 0).toBe(1);
+  });
+});
+
+describe("global identity in Creator", () => {
+  it("refreshes the identity each turn and carries it to a restarted session on another workspace", async () => {
+    const seen: string[] = [];
+    const runner = () => ({
+      async run(messages: ChatMessage[]) {
+        seen.push(String(messages[0]?.content));
+        return { ok: true, text: "好", steps: 1, messages, metrics: { requests: [] } };
+      }, close() {},
+    });
+    const { drive, home } = session(runner as never, []);
+    await drive.open();
+    await drive.say("你好");
+    await updateCreatorIdentity(home, { name: "小鲁", personality: "温柔", userName: "小林" });
+    await drive.say("你叫什么");
+    expect(seen[1]).toContain('"name":"小鲁"');
+    expect(seen[1]).not.toContain("你是造物主");
+    const restarted = new DriveSession({ home, workspace: tempHome(), emit: () => {}, createRunner: runner as never });
+    await restarted.open();
+    await restarted.say("你是谁");
+    expect(seen[2]).toContain('"userName":"小林"');
+    drive.close(); restarted.close();
+  });
+
+  it("requires fresh approval even if the identity tool was preapproved", async () => {
+    const events: DriveEvent[] = [];
+    let decision: string | undefined;
+    const { drive } = session(scripted(async approve => {
+      decision = await approve({ name: "update_creator_identity", risk: "write", approvalOnceOnly: true }, { name: "小鲁" });
+      return {};
+    }), events, { preapproved: ["update_creator_identity"] });
+    await drive.open();
+    const turn = drive.say("以后叫你小鲁");
+    for (let i = 0; i < 100 && !events.some(e => e.type === "approval"); i++) await new Promise(r => setTimeout(r, 10));
+    const approval = events.find(e => e.type === "approval");
+    expect(approval?.type).toBe("approval");
+    if (approval?.type === "approval") drive.approve(approval.id, true);
+    await turn;
+    expect(decision).toBe("once");
+    drive.close();
+  });
+});
+
+describe("cross-run memory", () => {
+  /** A runner that records the prompt the session actually sent. */
+  function capturing(seen: ChatMessage[][], text = "扫了本周新增 bug，找到 3 个。") {
+    return () => ({
+      async run(messages: ChatMessage[], _mode: string, _signal: AbortSignal, _onEvent: (event: AgentEvent) => void, _approve: Approve) {
+        seen.push(messages);
+        return { ok: true, text, steps: 1, messages, metrics: { requests: [{ usage: { input: 10, output: 2 } }] } };
+      },
+      close() {},
+    });
+  }
+
+  it("gives the model what this project already knows", async () => {
+    const events: DriveEvent[] = [];
+    const seen: ChatMessage[][] = [];
+    const { drive, home } = session(capturing(seen), events);
+    await rememberFact(home, home, "禅道 bug 项目的 id 是 42");
+    await drive.open();
+    await drive.say("再扫一下本周 bug");
+
+    const sent = seen[0]!;
+    const memory = sent.findIndex(message => message.role === "system" && String(message.content).includes("禅道 bug 项目的 id 是 42"));
+    expect(memory).toBeGreaterThan(-1);
+    // Immediately before the question, so it reads as context for this turn.
+    expect(sent[memory + 1]?.role).toBe("user");
+    expect(String(sent[memory + 1]?.content)).toBe("再扫一下本周 bug");
+  });
+
+  it("writes one journal line and keeps it out of the transcript", async () => {
+    const events: DriveEvent[] = [];
+    const seen: ChatMessage[][] = [];
+    const { drive, home } = session(capturing(seen), events);
+    await drive.open();
+    await drive.say("扫一下本周 bug");
+    const journal = await readProjectMemory(home, home);
+    expect(journal.runs.map(run => run.text)).toEqual(["扫了本周新增 bug，找到 3 个。"]);
+
+    // Second turn: one block, not two, and the first one is gone from history.
+    await drive.say("这次呢");
+    const blocks = seen[1]!.filter(message => message.role === "system" && String(message.content).startsWith("## 项目记忆（"));
+    expect(blocks).toHaveLength(1);
+    expect(String(blocks[0]!.content)).toContain("扫了本周新增 bug");
+  });
+
+  it("costs nothing on a project that has no memory yet", async () => {
+    const events: DriveEvent[] = [];
+    const seen: ChatMessage[][] = [];
+    const { drive } = session(capturing(seen), events);
+    await drive.open();
+    await drive.say("第一句话");
+    expect(seen[0]!.some(message => message.role === "system" && String(message.content).startsWith("## 项目记忆（"))).toBe(false);
   });
 });

@@ -387,6 +387,24 @@ button { cursor: pointer; }
 }
 .drawer-body .hint { margin: 4px 0 0; }
 
+/* 记忆 drawer — one card per project; facts and the run journal share a list -- */
+.memory-project {
+  margin: 0 0 12px; padding: 11px 12px 12px;
+  border: 1px solid var(--line); border-radius: 12px; background: #fff;
+}
+.memory-title {
+  display: flex; flex-direction: column; gap: 2px; margin: 0;
+  font-size: 12.5px; font-weight: 650; color: var(--fg);
+}
+.memory-title span { font-size: 11px; font-weight: 400; color: var(--faint); word-break: break-all; }
+.memory-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.memory-list li {
+  display: flex; gap: 8px; font-size: 12px; line-height: 1.45; color: var(--ink);
+  word-break: break-word;
+}
+.memory-list b { flex: none; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
+.memory-project .wide { margin-top: 10px; }
+
 .plans { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .plan { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
 .plan:hover { border-color: #e3e3e9; }

@@ -27,6 +27,10 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
   useTick(running);
   const live = useMemo(() => liveProgress(store.events), [store.events]);
   const activeModel = store.node?.models.find(model => model.id === (store.node?.model_id ?? `${store.node?.provider}/${store.node?.model}`));
+  const modelReason = !store.connected
+    ? store.connectionError ? `模型列表连接失败：${store.connectionError}` : "正在连接服务以加载模型列表…"
+    : !store.node?.models.length ? "未配置可用模型，请先在 luban 配置中添加模型"
+      : store.busy ? "正在提交任务，完成后可切换模型" : "";
 
   const resize = (): void => {
     const element = area.current;
@@ -70,7 +74,7 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
           }}
         />
         <div className="composer-row">
-          <select aria-label="模型" title="模型" value={activeModel?.id ?? ""} disabled={!store.connected || store.busy}
+          <select aria-label="模型" title={modelReason || "选择模型（下一轮生效）"} value={activeModel?.id ?? ""} disabled={Boolean(modelReason)}
             onChange={event => void store.setModel(event.target.value)}>
             {!activeModel && <option value="">选择模型</option>}
             {store.node?.models.map(model => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}
@@ -101,6 +105,7 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
           <button className="send" onClick={() => void send()} disabled={!value.trim() || store.busy} title="提交">↑</button>
         </div>
       </div>
+      {modelReason && <div className="queue-note" role="status">{modelReason}</div>}
       {running && (
         <div className={`queue-note${live?.stalled ? " stalled" : ""}`}>
           <span className={`dot ${live?.stalled ? "stalled" : "working"}`} />
