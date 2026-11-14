@@ -11,6 +11,18 @@ const bot = require("./bot.cjs");
 
 const MAX_EVENTS = 400;
 
+/**
+ * Fold one answered approval into the standing 允许 list. Only a tool name is
+ * kept — never arguments — so the list stays a coarse "this window may do that"
+ * and cannot replay one specific click. A later 拒绝 revokes the memory.
+ */
+function rememberApproval(list, tool, allow) {
+  const name = typeof tool === "string" ? tool.trim() : "";
+  if (!/^[a-z_][\w-]{0,63}$/i.test(name)) return Array.isArray(list) ? list.filter(item => typeof item === "string") : [];
+  const current = Array.isArray(list) ? list.filter(item => typeof item === "string" && item !== name) : [];
+  return allow === true ? [...current, name].slice(-64) : current;
+}
+
 class DriveBridge {
   /**
    * @param {object} options
@@ -22,7 +34,9 @@ class DriveBridge {
     this.child = undefined;
     this.buffer = "";
     this.ready = false;
-    this.computer = { supported: false, enabled: false };
+    // 屏幕操控 exists on macOS only; saying "unsupported" before the child has
+    // even started made a Mac window claim 只有 macOS is supported.
+    this.computer = { supported: process.platform === "darwin", enabled: false };
     this.events = [];
     this.lastError = "";
   }
@@ -47,8 +61,17 @@ class DriveBridge {
     this.workspace = workspace;
     // The drive child schedules reminders into the same queue this window lists,
     // so it must be given the same home the app resolved.
-    const env = bot.nodeEnv({ LUBAN_HOME: (options.home || bot.homeDir()), ...(options.computer ? { LUBAN_COMPUTER: "1" } : {}) });
+    const allow = Array.isArray(options.allow) ? options.allow.filter(name => typeof name === "string" && name) : [];
+    const env = bot.nodeEnv({
+      LUBAN_HOME: (options.home || bot.homeDir()),
+      ...(options.computer ? { LUBAN_COMPUTER: "1" } : {}),
+      ...(allow.length ? { LUBAN_DRIVE_ALLOW: allow.join(",") } : {}),
+    });
     delete env.LUBAN_GLOW_URL;
+    if (!allow.length) delete env.LUBAN_DRIVE_ALLOW;
+    // The switch the human set is the switch the window shows, even before the
+    // child has reported ready — otherwise a restart looks like 操控 was lost.
+    this.computer = { ...this.computer, supported: process.platform === "darwin", enabled: options.computer === true };
     const args = [bot.cliPath(), "drive", workspace];
     if (options.model) args.push("--model", options.model);
     if (!options.computer) args.push("--no-computer");
@@ -73,6 +96,7 @@ class DriveBridge {
   }
 
   stop() {
+    this.computer = { ...this.computer, enabled: false };
     if (!this.child) return this.snapshot();
     const child = this.child;
     this.send({ type: "stop" });
@@ -151,4 +175,4 @@ class DriveBridge {
   }
 }
 
-module.exports = { DriveBridge, MAX_EVENTS };
+module.exports = { DriveBridge, MAX_EVENTS, rememberApproval };

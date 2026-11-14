@@ -57,6 +57,13 @@ export interface DriveOptions {
    * can be exercised without a native helper or a real screen.
    */
   isComputerOn?: () => boolean;
+  /**
+   * Tools the human already answered 允许 for in an earlier session. Asking the
+   * same question on every launch is what makes the window tiring to use; the
+   * answer is recorded by the window and handed back here. Restart-style calls
+   * (`approvalOnceOnly`) never qualify: those are per command by design.
+   */
+  isPreapproved?: (tool: string) => boolean;
 }
 
 /** Actions that only read the screen; they never need a second pair of eyes. */
@@ -151,6 +158,8 @@ export class DriveSession {
   private turns = 0;
   private closing = false;
   private computer: DriveComputerState = { supported: computerSupported(), enabled: false };
+  /** Tools whose standing approval has already been announced in this session. */
+  private readonly announced = new Set<string>();
 
   constructor(options: DriveOptions) {
     this.options = options;
@@ -333,6 +342,16 @@ export class DriveSession {
       // the window into a dead end where every turn stalls on "read_file".
       return "once";
     }
+    // A standing 允许 the human gave earlier still holds — but only after the
+    // computer switch check above, so turning 操控 off can never be bypassed by
+    // an old approval. One status line says why nothing is asking this time.
+    if (!tool.approvalOnceOnly && this.options.isPreapproved?.(tool.name)) {
+      if (!this.announced.has(tool.name)) {
+        this.announced.add(tool.name);
+        this.emit({ type: "status", text: `沿用上次的授权：${tool.name} 不再逐次询问，可随时点停止` });
+      }
+      return "always";
+    }
     const id = randomUUID();
     const label = describeAction(tool.name, args);
     const reason = tool.name === "computer"
@@ -340,6 +359,9 @@ export class DriveSession {
       : tool.risk === "network" ? "这一步会访问网络" : "这一步会改动磁盘或执行命令";
     const allow = await this.ask(id, tool.name, label, args, reason);
     if (!allow) return "deny";
+    // A restart-style command is authorised per command only: the agent rejects
+    // "always" for it, and the next one must be asked again.
+    if (tool.approvalOnceOnly) return "once";
     // One yes is for this session, not per click: a person who allowed the
     // computer to be driven does not want seven prompts to type a number.
     this.emit({ type: "status", text: "已允许本次会话的屏幕操作；随时可以点停止" });

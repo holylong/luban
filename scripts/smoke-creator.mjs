@@ -67,6 +67,10 @@ for (const task of seed) {
 }
 mkdirSync(join(home, "workspace"), { recursive: true });
 
+// A standing 允许 and the 操控 switch: creator.json is what makes them survive a
+// relaunch, so the window is handed a real one instead of an empty default.
+writeFileSync(join(home, "creator.json"), JSON.stringify({ computer: true, allowed: ["computer", "bash"] }, null, 2));
+
 // Run history for the finished job: the 计划 drawer reads these rows, so seeding
 // them is what proves the drawer lists executions instead of only the last one.
 const runs = [
@@ -82,7 +86,7 @@ writeFileSync(join(tasks, "22222222-2222-4222-8222-222222222222", "runs.jsonl"),
 
 const electron = join(repo, "node_modules", "electron", "cli.js");
 const child = spawn(process.execPath, [electron, join(repo, "apps", "creator"), "--smoke", shot], {
-  env: { ...process.env, LUBAN_HOME: home, CREATOR_SMOKE_PLANS: "1" },
+  env: { ...process.env, LUBAN_HOME: home, CREATOR_SMOKE_PLANS: "1", CREATOR_SMOKE_APPROVALS: "1", CREATOR_SMOKE_FORGET: "1" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
@@ -137,6 +141,33 @@ if (existsSync(queueJson)) {
     console.error(`输入卡又自己猜排期了：「${composer.parsed}」`);
     process.exit(1);
   }
+}
+// The 操控 switch the human left on has to be on-screen after a relaunch.
+if (!text.includes("电脑操控已开启")) {
+  console.error(`重启后操控开关没有恢复：\n${text.slice(0, 600)}`);
+  process.exit(1);
+}
+// 授权 has to show what is remembered, and one click has to clear it for good.
+const approvalsJson = shot.replace(/\.png$/u, "-approvals.json");
+if (existsSync(approvalsJson)) {
+  const approvals = JSON.parse(readFileSync(approvalsJson, "utf8"));
+  if (!approvals.remembered.includes("computer、bash") || !approvals.forget) {
+    console.error(`授权 页没有列出已记住的授权：${JSON.stringify(approvals)}`);
+    process.exit(1);
+  }
+  const forgot = JSON.parse(readFileSync(approvalsJson.replace(/\.json$/u, "-forgot.json"), "utf8"));
+  if (forgot.page !== false || forgot.stored.allowed.length) {
+    console.error(`清空已记住的授权没有生效：${JSON.stringify(forgot)}`);
+    process.exit(1);
+  }
+  if (forgot.stored.computer !== true) {
+    console.error(`清空授权时把操控开关也关了：${JSON.stringify(forgot)}`);
+    process.exit(1);
+  }
+  console.log(`  approvals: remembered computer、bash → cleared to ${JSON.stringify(forgot.stored.allowed)}, switch kept on`);
+} else {
+  console.error("授权 页没有渲染出截图");
+  process.exit(1);
 }
 const plansShot = shot.replace(/\.png$/u, "-plans.png");
 const plans = JSON.parse(readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8"));

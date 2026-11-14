@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld("creator", Object.freeze({
   driveSay: text => ipcRenderer.invoke("creator:drive-say", text),
   driveApprove: (id, allow) => ipcRenderer.invoke("creator:drive-approve", id, allow),
   setComputer: on => ipcRenderer.invoke("creator:computer", on),
+  forgetApprovals: () => ipcRenderer.invoke("creator:forget"),
+  onSettings: handler => { const listener = (_event, payload) => handler(payload); ipcRenderer.on("creator:settings", listener); return () => ipcRenderer.removeListener("creator:settings", listener); },
   onDrive: handler => { const listener = (_event, payload) => handler(payload); ipcRenderer.on("creator:drive-event", listener); return () => ipcRenderer.removeListener("creator:drive-event", listener); },
   onDriveLog: handler => { const listener = (_event, payload) => handler(payload); ipcRenderer.on("creator:drive-log", listener); return () => ipcRenderer.removeListener("creator:drive-log", listener); },
 }));

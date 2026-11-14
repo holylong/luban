@@ -30,6 +30,16 @@ export function encodeEvent(event: DriveEvent): string {
   return `${JSON.stringify(event)}\n`;
 }
 
+/**
+ * Read the standing 允许 list the window hands to a fresh session. Anything that
+ * is not a plain tool name is dropped: this list only ever skips a prompt the
+ * human already answered, so a malformed value must not widen it.
+ */
+export function parseAllowlist(value: string | undefined): string[] {
+  const names = String(value ?? "").split(",").map(name => name.trim()).filter(name => /^[a-z_][\w-]{0,63}$/iu.test(name));
+  return [...new Set(names)].slice(0, 64);
+}
+
 /** Parse one stdin line. Unknown or malformed commands are dropped, not fatal. */
 export function decodeCommand(line: string): DriveCommand | undefined {
   const text = line.trim();
@@ -67,7 +77,11 @@ export async function runDrive(argv: string[]): Promise<number> {
   const config = loadConfig({ workspace, model: options.model, mesh: false, seedDefaults: true });
   if (!options.computer) delete process.env.LUBAN_COMPUTER;
 
-  const session = new DriveSession({ home: config.home, workspace, model: options.model, emit: write });
+  const allowed = new Set(parseAllowlist(process.env.LUBAN_DRIVE_ALLOW));
+  const session = new DriveSession({
+    home: config.home, workspace, model: options.model, emit: write,
+    isPreapproved: tool => allowed.has(tool),
+  });
   await session.open();
   write({ type: "status", text: "会话已就绪：说一句话就行——整理文档、设个闹钟，或者让我去操作屏幕" });
 

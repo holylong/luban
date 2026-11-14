@@ -14,7 +14,7 @@ const { existsSync, readFileSync, writeFileSync, mkdirSync } = require("node:fs"
 const { dirname, isAbsolute, join, resolve } = require("node:path");
 
 const bot = require("./bot.cjs");
-const { DriveBridge } = require("./drive.cjs");
+const { DriveBridge, rememberApproval } = require("./drive.cjs");
 
 const home = bot.homeDir();
 const dataDirectory = join(home, "bot");
@@ -26,8 +26,10 @@ let win;
 let tray;
 let quitting = false;
 let drive;
-/** Persisted 电脑操控 switch: the window may be closed and reopened mid-session. */
-let settings = { computer: false };
+/** Persisted 电脑操控 switch and standing 允许 list: the window may be closed and reopened mid-session. */
+let settings = { computer: false, allowed: [] };
+/** Approval ids still on screen, so a 允许 can be remembered by tool name. */
+const pendingApprovals = new Map();
 
 function webUi() {
   return join(dirname(bot.cliPath()), "web-ui");
@@ -50,8 +52,13 @@ function settingsPath() {
 }
 
 function loadSettings() {
-  try { settings = { computer: false, ...JSON.parse(readFileSync(settingsPath(), "utf8")) }; }
-  catch { settings = { computer: false }; }
+  try {
+    const stored = JSON.parse(readFileSync(settingsPath(), "utf8"));
+    settings = {
+      computer: stored?.computer === true,
+      allowed: Array.isArray(stored?.allowed) ? stored.allowed.filter(name => typeof name === "string" && name) : [],
+    };
+  } catch { settings = { computer: false, allowed: [] }; }
   return settings;
 }
 
@@ -109,6 +116,22 @@ function ensureDrive() {
       const forwarded = event.type === "tool-result" && shotPath
         ? { ...event, image: thumbnail(shotPath) }
         : event;
+      // A 允许 answers this prompt and every later one for the same tool: the
+      // window records the tool name, and the next session starts with it.
+      if (event.type === "approval" && event.id) pendingApprovals.set(event.id, event.tool);
+      if (event.type === "approval-settled" && event.id) {
+        const tool = pendingApprovals.get(event.id);
+        pendingApprovals.delete(event.id);
+        if (tool) {
+          const next = rememberApproval(settings.allowed, tool, event.allow === true);
+          if (next.join(",") !== settings.allowed.join(",")) {
+            settings = { ...settings, allowed: next };
+            saveSettings();
+            send("creator:settings", settings);
+          }
+        }
+      }
+      if (event.type === "exit") pendingApprovals.clear();
       send("creator:drive-event", forwarded);
     },
     onLog: line => { if (line) { appendLog(line); send("creator:drive-log", line); } },
@@ -207,7 +230,7 @@ ipcMain.handle("creator:drive-start", (_event, input) => {
     settings = { ...settings, computer: true };
     saveSettings();
   }
-  bridge.start(workspace, { computer: settings.computer === true, model: input?.model, home });
+  bridge.start(workspace, { computer: settings.computer === true, allow: settings.allowed, model: input?.model, home });
   return bridge.snapshot();
 });
 
@@ -227,6 +250,15 @@ ipcMain.handle("creator:computer", (_event, on) => {
   // Switching off closes the session: an open control process must never keep
   // driving the desktop after the human turned the switch back.
   if (!settings.computer) ensureDrive().stop();
+  return settings;
+});
+
+/** 忘掉已记住的授权: the next session asks again for every tool. */
+ipcMain.handle("creator:forget", () => {
+  settings = { ...settings, allowed: [] };
+  saveSettings();
+  // An open session already holds this list, so restart it to make the reset real.
+  ensureDrive().stop();
   return settings;
 });
 
@@ -322,6 +354,42 @@ else {
               };
             })()`);
             require("node:fs").writeFileSync(plansPath.replace(/\.png$/u, ".rects.json"), JSON.stringify(plans, null, 2));
+          }
+          // 授权 is where a standing 允许 becomes visible and revocable. Prove the
+          // page lists what creator.json remembered, or it is memory nobody sees.
+          if (process.env.CREATOR_SMOKE_APPROVALS === "1") {
+            const approvalsPath = smokePath.replace(/\.png$/u, "-approvals.png");
+            await window.webContents.executeJavaScript(`(() => {
+              const nav = [...document.querySelectorAll(".side-nav button")].find(node => node.textContent.includes("后台任务"));
+              if (nav) nav.click();
+            })()`);
+            await new Promise(resolve => setTimeout(resolve, 300));
+            await window.webContents.executeJavaScript(`(() => {
+              const tab = [...document.querySelectorAll("button")].find(node => node.textContent.trim() === "授权");
+              if (tab) tab.click();
+            })()`);
+            await new Promise(resolve => setTimeout(resolve, 400));
+            const approvals = await window.webContents.executeJavaScript(`(() => ({
+              remembered: document.querySelector('[aria-label="已记住的授权"]')?.innerText ?? "",
+              forget: !!document.querySelector('[aria-label="已记住的授权"] button'),
+              requests: [...document.querySelectorAll(".request")].map(el => el.innerText.slice(0, 80)),
+            }))()`);
+            require("node:fs").writeFileSync(approvalsPath, (await window.webContents.capturePage()).toPNG());
+            require("node:fs").writeFileSync(approvalsPath.replace(/\.png$/u, ".json"), JSON.stringify(approvals, null, 2));
+            process.stdout.write(`approvals ${JSON.stringify(approvals)}\n`);
+            // Forgetting has to be one click, not a trip to a JSON file: click it
+            // and read both the page and creator.json back.
+            if (process.env.CREATOR_SMOKE_FORGET === "1") {
+              await window.webContents.executeJavaScript(`(() => {
+                const button = document.querySelector('[aria-label="已记住的授权"] button');
+                if (button) button.click();
+              })()`);
+              await new Promise(resolve => setTimeout(resolve, 800));
+              const left = await window.webContents.executeJavaScript("!!document.querySelector('[aria-label=\"已记住的授权\"]')");
+              const stored = JSON.parse(require("node:fs").readFileSync(settingsPath(), "utf8"));
+              require("node:fs").writeFileSync(approvalsPath.replace(/\.png$/u, "-forgot.json"), JSON.stringify({ page: left, stored }, null, 2));
+              process.stdout.write(`forgot ${JSON.stringify({ page: left, stored })}\n`);
+            }
           }
           // The 后台任务 tab is the queue's face: its composer is one sentence box.
           // It used to carry 现在/定时/每隔 controls, so a smoke proves the form is

@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 type Script = (approve: Approve, onEvent: (event: AgentEvent) => void) => Promise<{ ok?: boolean; text?: string }>;
-type Approve = (tool: { name: string; risk?: string }, args: Record<string, unknown>) => Promise<"once" | "always" | "deny">;
+type Approve = (tool: { name: string; risk?: string; approvalOnceOnly?: boolean }, args: Record<string, unknown>) => Promise<"once" | "always" | "deny">;
 
 /** A runner that replays a fixed script instead of calling a model. */
 function scripted(script: Script) {
@@ -38,14 +38,15 @@ function scripted(script: Script) {
   });
 }
 
-function session(runner: () => ReturnType<ReturnType<typeof scripted>>, events: DriveEvent[], extra: { timeout?: number } = {}) {
+function session(runner: () => ReturnType<ReturnType<typeof scripted>>, events: DriveEvent[], extra: { timeout?: number; preapproved?: string[]; computerOn?: boolean } = {}) {
   const home = tempHome();
   const drive = new DriveSession({
     home, workspace: home, emit: event => events.push(event),
     createRunner: runner as never,
     approvalTimeoutMs: extra.timeout ?? 5_000,
     // Pretend the window's 电脑操控 switch is on; the policy is what is under test.
-    isComputerOn: () => true,
+    isComputerOn: () => extra.computerOn !== false,
+    isPreapproved: name => (extra.preapproved ?? []).includes(name),
   });
   return { drive, home };
 }
@@ -198,6 +199,51 @@ describe("approval policy", () => {
     await drive.open();
     await drive.say("改一下文件");
     expect(answers).toEqual(["once", "deny"]);
+  });
+
+  it("remembers a 允许 across sessions instead of asking every launch", async () => {
+    const events: DriveEvent[] = [];
+    let verdict = "";
+    const { drive } = session(scripted(async approve => {
+      verdict = await approve({ name: "computer", risk: "execute" }, { action: "click", x: 5, y: 6 });
+      return {};
+    }), events, { preapproved: ["computer"] });
+    await drive.open();
+    await drive.say("点一下");
+    expect(verdict).toBe("always");
+    expect(events.some(event => event.type === "approval")).toBe(false);
+    // One line explains why nothing asked; repeating it every click would be noise.
+    const notices = events.filter(event => event.type === "status" && event.text.includes("沿用上次的授权"));
+    expect(notices).toHaveLength(1);
+  });
+
+  it("never lets a remembered 允许 outlive the 操控 switch", async () => {
+    const events: DriveEvent[] = [];
+    let verdict = "";
+    const { drive } = session(scripted(async approve => {
+      verdict = await approve({ name: "computer", risk: "execute" }, { action: "click", x: 5, y: 6 });
+      return {};
+    }), events, { preapproved: ["computer"], computerOn: false });
+    await drive.open();
+    await drive.say("点一下");
+    expect(verdict).toBe("deny");
+    expect(events.some(event => event.type === "error" && event.text.includes("电脑操控未打开"))).toBe(true);
+  });
+
+  it("still asks for a restart command even when the tool is remembered", async () => {
+    const events: DriveEvent[] = [];
+    const answers: string[] = [];
+    const { drive } = session(scripted(async approve => {
+      const pending = approve({ name: "bash", risk: "execute", approvalOnceOnly: true }, { command: "npm run dev" });
+      drive.approve(events.find(event => event.type === "approval")!.id as string, true);
+      answers.push(await pending);
+      answers.push(await approve({ name: "bash", risk: "execute" }, { command: "npm test" }));
+      return {};
+    }), events, { preapproved: ["bash"] });
+    await drive.open();
+    await drive.say("重启一下");
+    expect(answers).toEqual(["once", "always"]);
+    expect(events.filter(event => event.type === "approval")).toHaveLength(1);
   });
 });
 

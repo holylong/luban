@@ -68,6 +68,23 @@ export interface DriveComputer {
   note?: string;
 }
 
+/**
+ * The switch to show on open. The child reports `enabled:false` until it is
+ * started, so while it is not ready the human's persisted choice wins — a merge
+ * that put `enabled` first read as "操控 lost" after every relaunch.
+ */
+export function restoredComputer(state: { ready?: boolean; computer?: DriveComputer; settings?: CreatorSettings }): DriveComputer {
+  const child = state.computer ?? {};
+  if (state.ready) return child;
+  return { ...child, enabled: state.settings?.computer === true };
+}
+
+/** creator.json in the app's home: the 操控 switch and the standing 允许 list. */
+export interface CreatorSettings {
+  computer: boolean;
+  allowed: string[];
+}
+
 /** A finished action, plus the inlined thumbnail the main process adds. */
 export interface ToolResultFrame {
   type: "tool-result";
@@ -96,13 +113,15 @@ interface CreatorBridge {
   openPolicy(): Promise<{ ok: boolean }>;
   openData(): Promise<{ ok: boolean }>;
   hide(): Promise<{ ok: boolean }>;
-  settings(): Promise<{ computer: boolean }>;
-  drive(): Promise<{ running: boolean; ready: boolean; computer: DriveComputer; events: DriveFrame[]; error: string; settings: { computer: boolean }; log: string }>;
+  settings(): Promise<CreatorSettings>;
+  drive(): Promise<{ running: boolean; ready: boolean; computer: DriveComputer; events: DriveFrame[]; error: string; settings: CreatorSettings; log: string }>;
   driveStart(input: { workspace?: string; computer?: boolean; model?: string }): Promise<{ running: boolean; ready: boolean; computer: DriveComputer; events: DriveFrame[]; error: string }>;
   driveStop(): Promise<unknown>;
   driveSay(text: string): Promise<{ sent: boolean }>;
   driveApprove(id: string, allow: boolean): Promise<boolean>;
-  setComputer(on: boolean): Promise<{ computer: boolean }>;
+  setComputer(on: boolean): Promise<CreatorSettings>;
+  forgetApprovals(): Promise<CreatorSettings>;
+  onSettings(handler: (settings: CreatorSettings) => void): () => void;
   onDrive(handler: (event: DriveFrame) => void): () => void;
   onDriveLog(handler: (line: string) => void): () => void;
 }
@@ -247,6 +266,18 @@ function ActionRow({ item }: { item: Extract<Item, { kind: "action" }> }): React
         {!item.image && item.ok === false && item.preview ? <pre className="act-fail">{item.preview.slice(0, 300)}</pre> : null}
       </div>
     </div>
+  );
+}
+
+/** The 授权 tab's standing memory: what will not ask again, and how to forget it. */
+export function RememberedApprovals({ allowed, onForget }: { allowed: string[]; onForget: () => void }): React.ReactElement | null {
+  if (!allowed.length) return null;
+  return (
+    <article className="request" aria-label="已记住的授权">
+      <p className="request-tool">已记住的授权</p>
+      <p className="request-reason">{allowed.join("、")} 不再每次询问；想重新确认时清空即可。</p>
+      <button className="wide" onClick={onForget}>清空已记住的授权</button>
+    </article>
   );
 }
 
@@ -505,6 +536,7 @@ function App(): React.ReactElement {
   // Control session
   const [frames, setFrames] = useState<DriveFrame[]>([]);
   const [computer, setComputer] = useState<DriveComputer>({});
+  const [allowed, setAllowed] = useState<string[]>([]);
   const [driving, setDriving] = useState(false);
   const [model, setModel] = useState("");
   const [sayError, setSayError] = useState("");
@@ -527,9 +559,12 @@ function App(): React.ReactElement {
     if (!bridge) return;
     void bridge.drive().then(state => {
       setFrames(state.events ?? []);
-      setComputer(state.computer ?? {});
+      setComputer(restoredComputer(state));
+      setAllowed(state.settings?.allowed ?? []);
       setDriving(state.running);
     }).catch(() => undefined);
+    void bridge.settings().then(state => { setAllowed(state.allowed ?? []); }).catch(() => undefined);
+    const offSettings = bridge.onSettings(state => setAllowed(state.allowed ?? []));
     const off = bridge.onDrive(event => {
       setDriving(true);
       if (event.type === "ready") {
@@ -540,7 +575,7 @@ function App(): React.ReactElement {
       setFrames(previous => [...previous, event].slice(-400));
     });
     const offLog = bridge.onDriveLog(line => { if (line.startsWith("error:")) setSayError(line.slice(6).trim()); });
-    return () => { off(); offLog(); };
+    return () => { off(); offLog(); offSettings(); };
   }, [bridge]);
 
   useEffect(() => {
@@ -598,6 +633,15 @@ function App(): React.ReactElement {
       setDriving(false);
       if (on) { await ensureSession(); }
     }
+  };
+
+  const forgetApprovals = async (): Promise<void> => {
+    if (!bridge) return;
+    const next = await bridge.forgetApprovals();
+    setAllowed(next.allowed ?? []);
+    // The main process stopped the session to make the reset real.
+    started.current = false;
+    setDriving(false);
   };
 
   const submit = async (): Promise<void> => {
@@ -781,7 +825,10 @@ function App(): React.ReactElement {
               </div>
             ) : null}
 
-            {!blank ? (
+            {/* A standing 允许 is memory the human must be able to see and undo, so
+                the queue head (and its 授权 tab) stays even on the empty landing
+                page once something has been remembered. */}
+            {!blank || allowed.length ? (
               <section className="queue">
                 <div className="queue-head">
                   <span>{tab === "active" ? "进行中" : tab === "done" ? "结果" : "授权"}</span>
@@ -793,19 +840,22 @@ function App(): React.ReactElement {
                   </span>
                 </div>
                 {tab === "approvals" ? (
-                  snapshot?.requests.length ? (
-                    <>
-                      {snapshot.requests.map(request => (
-                        <article className="request" key={request.id}>
-                          <p className="request-tool">{request.tool}</p>
-                          <p className="request-reason">{request.reason}</p>
-                          <pre>{JSON.stringify(request.args, null, 2)}</pre>
-                          <p className="request-meta">{request.workspace} · {request.createdAt}</p>
-                        </article>
-                      ))}
-                      <button className="wide" onClick={() => { void bridge.openPolicy(); }}>打开 permissions.json</button>
-                    </>
-                  ) : <p className="hint">没有待授权的调用。</p>
+                  <>
+                    <RememberedApprovals allowed={allowed} onForget={() => { void forgetApprovals(); }} />
+                    {snapshot?.requests.length ? (
+                      <>
+                        {snapshot.requests.map(request => (
+                          <article className="request" key={request.id}>
+                            <p className="request-tool">{request.tool}</p>
+                            <p className="request-reason">{request.reason}</p>
+                            <pre>{JSON.stringify(request.args, null, 2)}</pre>
+                            <p className="request-meta">{request.workspace} · {request.createdAt}</p>
+                          </article>
+                        ))}
+                        <button className="wide" onClick={() => { void bridge.openPolicy(); }}>打开 permissions.json</button>
+                      </>
+                    ) : <p className="hint">没有待授权的调用。</p>}
+                  </>
                 ) : shown.length ? (
                   shown.map(task => (
                     <TaskRow key={task.id} task={task} now={now}

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { DriveBridge } = require("./drive.cjs");
+const { DriveBridge, rememberApproval } = require("./drive.cjs");
 
 function fakeBridge(events) {
   const bridge = new DriveBridge({ onEvent: event => events.push(event) });
@@ -52,4 +52,31 @@ test("records the child's failure without killing the panel", () => {
   bridge.onLine(JSON.stringify({ type: "error", text: "model HTTP 403" }));
   assert.equal(bridge.snapshot().error, "model HTTP 403");
   assert.equal(events.length, 1);
+});
+
+test("remembers an allowed tool and forgets one that was denied", () => {
+  assert.deepEqual(rememberApproval([], "computer", true), ["computer"]);
+  assert.deepEqual(rememberApproval(["computer"], "bash", true), ["computer", "bash"]);
+  // Asking again for the same tool must not append a duplicate.
+  assert.deepEqual(rememberApproval(["computer"], "computer", true), ["computer"]);
+  assert.deepEqual(rememberApproval(["computer", "bash"], "computer", false), ["bash"]);
+  // Junk never becomes a standing permission.
+  assert.deepEqual(rememberApproval([], "rm -rf /", true), []);
+  assert.deepEqual(rememberApproval(["computer"], null, true), ["computer"]);
+});
+
+test("shows the switch the human set before the child reports ready", () => {
+  const bridge = new DriveBridge({});
+  assert.equal(bridge.snapshot().computer.enabled, false);
+  // start() spawns a real child, so the field the window reads is set here instead.
+  bridge.computer = { ...bridge.computer, enabled: true };
+  assert.equal(bridge.stop().computer.enabled, false);
+});
+
+test("a window that has not started the child still knows whether this machine can be driven", () => {
+  // The switch reads `supported` before anything runs; a hardcoded false told a
+  // Mac user 「这台机器不支持电脑操控（只有 macOS）」 on first open.
+  const bridge = new DriveBridge({ onEvent: () => undefined });
+  assert.equal(bridge.snapshot().computer.supported, process.platform === "darwin");
+  assert.equal(bridge.snapshot().computer.enabled, false);
 });

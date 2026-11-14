@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeCommand, encodeEvent, pumpCommands, type CommandTarget } from "./drive-command.js";
+import { decodeCommand, encodeEvent, parseAllowlist, pumpCommands, type CommandTarget } from "./drive-command.js";
 import type { DriveEvent } from "./drive.js";
 
 /** Feed the pump a fixed list of stdin lines. */
@@ -19,6 +19,12 @@ describe("drive command framing", () => {
 });
 
 describe("pumpCommands", () => {
+  it("reads a standing 允许 list without letting junk widen it", () => {
+    expect(parseAllowlist("computer,bash")).toEqual(["computer", "bash"]);
+    expect(parseAllowlist(" computer , , bash ,computer")).toEqual(["computer", "bash"]);
+    expect(parseAllowlist("rm -rf /;computer")).toEqual([]);
+    expect(parseAllowlist(undefined)).toEqual([]);
+  });
   it("answers an approval while the turn that raised it is still waiting", async () => {
     // The real deadlock: `approve` used to sit behind the `say` it unblocks, so
     // every turn that touched the screen waited for a reply that never arrived.
