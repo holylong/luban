@@ -23,6 +23,8 @@ export interface DaemonState {
   token: string;
   /** The workspace the daemon was born in; others are registered projects. */
   workspace: string;
+  /** Interface it bound: 0.0.0.0 means the phone can dial this machine by IP. */
+  host: string;
   startedAt: number;
   version: string;
 }
@@ -56,6 +58,7 @@ export function readDaemonState(home: string): DaemonState | undefined {
       port: raw.port,
       token: raw.token,
       workspace: typeof raw.workspace === "string" ? raw.workspace : "",
+      host: typeof raw.host === "string" ? raw.host : "127.0.0.1",
       startedAt: typeof raw.startedAt === "number" ? raw.startedAt : 0,
       version: typeof raw.version === "string" ? raw.version : "",
     };
@@ -183,6 +186,10 @@ export interface EnsureDaemonOptions {
   execPath?: string;
   entry?: string;
   token?: string;
+  /** Default 0.0.0.0: this backend exists so a phone can dial the machine. */
+  host?: string;
+  /** Default 8642: the phone keeps one address, so the port cannot be random. */
+  port?: number;
   timeoutMs?: number;
   spawnImpl?: (command: string, args: string[], options: Record<string, unknown>) => ChildProcess;
   probe?: (state: DaemonState) => Promise<boolean>;
@@ -257,7 +264,9 @@ export async function ensureDaemon(home: string, options: EnsureDaemonOptions): 
     try {
       child = spawnImpl(command, [
         options.entry ?? daemonEntry(), "web", options.workspace,
-        "--host", "127.0.0.1", "--port", "0", "--no-mesh", "--daemon-child", "--remote",
+        "--host", options.host ?? process.env.LUBAN_DAEMON_HOST ?? "0.0.0.0",
+        "--port", String(options.port ?? (process.env.LUBAN_DAEMON_PORT ? Number(process.env.LUBAN_DAEMON_PORT) : 8642)),
+        "--no-mesh", "--daemon-child", "--remote",
       ], {
         detached: true,
         stdio: ["ignore", logFd, logFd],

@@ -22,7 +22,7 @@ afterEach(() => {
 function state(home: string, patch: Partial<DaemonState> = {}): DaemonState {
   return {
     pid: process.pid, port: 38123, token: "t".repeat(32), workspace: join(home, "ws"),
-    startedAt: Date.now(), version: "9.9.9", ...patch,
+    host: "0.0.0.0", startedAt: Date.now(), version: "9.9.9", ...patch,
   };
 }
 
@@ -47,6 +47,33 @@ describe("daemon state", () => {
     expect(readDaemonState(home)).toEqual(value);
     clearDaemonState(home);
     expect(readDaemonState(home)).toBeUndefined();
+  });
+
+  it("keeps the interface it bound, defaulting an old file to loopback", () => {
+    const home = tempHome();
+    writeDaemonState(home, state(home, { host: "192.168.1.10" }));
+    expect(readDaemonState(home)?.host).toBe("192.168.1.10");
+    writeFileSync(daemonPaths(home).state, JSON.stringify({ pid: 12, port: 4000, token: "x".repeat(12) }));
+    // Files written before `host` existed were loopback-only daemons: never
+    // advertise them as reachable from the phone's network.
+    expect(readDaemonState(home)?.host).toBe("127.0.0.1");
+  });
+
+  it("honours an explicit host and port", async () => {
+    const home = tempHome();
+    const spawned: string[][] = [];
+    await ensureDaemon(home, {
+      workspace: join(home, "ws"), version: "9.9.9", entry: "/opt/luban/dist/cli.js",
+      host: "127.0.0.1", port: 9000,
+      probe: () => Promise.resolve(true),
+      spawnImpl: ((_command: string, args: string[]) => {
+        spawned.push(args);
+        writeDaemonState(home, state(home, { host: "127.0.0.1", port: 9000 }));
+        return { pid: 4242, unref: () => undefined, kill: () => true } as never;
+      }) as never,
+    });
+    expect(spawned[0]![spawned[0]!.indexOf("--host") + 1]).toBe("127.0.0.1");
+    expect(spawned[0]![spawned[0]!.indexOf("--port") + 1]).toBe("9000");
   });
 
   it("refuses a state file it cannot trust", () => {
@@ -121,6 +148,12 @@ describe("ensureDaemon", () => {
     expect(spawned[0]!.args.slice(0, 3)).toEqual(["/opt/luban/dist/cli.js", "web", join(home, "ws")]);
     expect(spawned[0]!.args).toContain("--daemon-child");
     expect(spawned[0]!.args).toContain("--remote");
+    // The phone keeps one address: a random port would break it on every start,
+    // and a loopback bind would make the phone unreachable by IP.
+    const at = spawned[0]!.args.indexOf("--host");
+    expect(spawned[0]!.args[at + 1]).toBe("0.0.0.0");
+    const portAt = spawned[0]!.args.indexOf("--port");
+    expect(spawned[0]!.args[portAt + 1]).toBe("8642");
     expect(spawned[0]!.options.detached).toBe(true);
     const env = spawned[0]!.options.env as Record<string, string>;
     // The child needs the token to write the state file every other caller reads.

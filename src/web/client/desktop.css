@@ -202,18 +202,21 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-welcome h1 { color: var(--fg); font-size: 20px; }
 .desktop-welcome .desktop-mark { width: 40px; height: 40px; font-size: 22px; }
 .desktop-console.terminal { max-height: 78%; }
-.desktop-console-pane { flex: 1; min-height: 0; display: flex; }
+.desktop-console-pane { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .desktop-console-pane[hidden] { display: none; }
-.desktop-terminal-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
+.desktop-terminal-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
 .desktop-terminal-bar { flex: none; display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 10px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .desktop-terminal-bar .desktop-terminal-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* xterm paints exactly its cols×rows grid; stretching it to 100% left a black
    band under the last row and hid that the pty was still the old size. */
-.desktop-terminal { flex: 1; min-height: 0; overflow: hidden; padding: 4px 6px; }
+.desktop-terminal { flex: 1; min-width: 0; min-height: 0; overflow: hidden; padding: 4px 6px; }
 .desktop-terminal .xterm { height: auto; }
 .desktop-terminal-size { color: var(--dim); font-variant-numeric: tabular-nums; }
 .queue-chip { color: var(--yellow); }
-.desktop-console { height: 190px; min-height: 130px; max-height: 72%; flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--side); }
+/* min-width:0 + overflow:hidden: xterm paints an exact cols×rows grid, and
+   without a clamp a wide grid grows the panel past the code column and paints
+   over the conversation panel instead of asking the pty for fewer columns. */
+.desktop-console { height: 190px; min-height: 130px; max-height: 72%; flex: none; min-width: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--side); }
 .desktop-console.collapsed { height: 30px; min-height: 30px; }
 .desktop-console-tabs { display: flex; align-items: center; flex: none; height: 30px; gap: 4px; padding: 0 6px; border-bottom: 1px solid var(--line); }
 .desktop-console-tabs button { border: 0; font-size: 11px; }

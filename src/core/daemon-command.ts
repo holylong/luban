@@ -6,7 +6,7 @@
  * has to type one is a phone that never connects.
  */
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { Command } from "commander";
 import { VERSION } from "../version.js";
@@ -21,6 +21,24 @@ function daemonHome(): string {
 
 export function phoneLink(state: DaemonState): string {
   return `http://127.0.0.1:${state.port}/m/?token=${encodeURIComponent(state.token)}`;
+}
+
+/** Every address a phone can actually dial, loopback first. */
+export function phoneLinks(state: DaemonState, interfaces = networkInterfaces()): string[] {
+  const token = encodeURIComponent(state.token);
+  const links = [`http://127.0.0.1:${state.port}/m/?token=${token}`];
+  // A loopback bind is deliberate (`--host 127.0.0.1`): advertising a LAN URL
+  // that refuses connections would send the phone hunting for a typo.
+  if (state.host === "127.0.0.1" || state.host === "localhost" || state.host === "::1") return links;
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (entry.family !== "IPv4" || entry.internal) continue;
+      // The host may be pinned to one interface; only that one answers.
+      if (state.host !== "0.0.0.0" && state.host !== entry.address) continue;
+      links.push(`http://${entry.address}:${state.port}/m/?token=${token}`);
+    }
+  }
+  return links;
 }
 
 function elapsed(startedAt: number): string {
@@ -88,14 +106,16 @@ export async function runDaemonCommand(argv: string[]): Promise<number> {
       process.stdout.write(`常驻服务：运行中（${describe(state)}）\n`);
       process.stdout.write(`版本 ${(info?.version ?? state.version) || "?"}${info?.model ? ` · 模型 ${info.model}` : ""}\n`);
       if (state.workspace) process.stdout.write(`出生目录 ${state.workspace}\n`);
-      process.stdout.write(`手机链接 ${phoneLink(state)}\n`);
+      for (const link of phoneLinks(state)) process.stdout.write(`手机链接 ${link}\n`);
       await printProjects(state);
     });
 
   program.command("start")
     .description("后台启动（已经在跑就复用，并把目录加进项目列表）")
     .argument("[path]", "workspace 目录", process.cwd())
-    .action(async (path: string) => {
+    .option("--host <host>", "监听的网卡：0.0.0.0 让手机按 IP 直连，127.0.0.1 只给本机", "0.0.0.0")
+    .option("--port <port>", "固定端口，手机地址才不会变", (value) => Number(value), 8642)
+    .action(async (path: string, flags: { host: string; port: number }) => {
       const workspace = resolve(path);
       if (!existsSync(workspace) || !statSync(workspace).isDirectory()) {
         process.stderr.write(`目录不存在：${workspace}\n`);
@@ -103,11 +123,14 @@ export async function runDaemonCommand(argv: string[]): Promise<number> {
         return;
       }
       const result = await ensureDaemon(home, {
-        workspace, version: VERSION,
+        workspace, version: VERSION, host: flags.host, port: flags.port,
         log: (message) => process.stdout.write(`${message}\n`),
       });
       process.stdout.write(`${result.started ? "已启动" : "已在运行"}（${describe(result.state)}）\n`);
-      process.stdout.write(`手机链接 ${phoneLink(result.state)}\n`);
+      for (const link of phoneLinks(result.state)) process.stdout.write(`手机链接 ${link}\n`);
+      if (flags.host !== "127.0.0.1") {
+        process.stdout.write("注意：同一网络里拿到上面链接（含令牌）的人都能操控这台电脑。\n");
+      }
       await printProjects(result.state);
     });
 
@@ -160,7 +183,7 @@ export async function runDaemonCommand(argv: string[]): Promise<number> {
         code = 1;
         return;
       }
-      process.stdout.write(`${phoneLink(found.state)}\n`);
+      process.stdout.write(`${phoneLinks(found.state).join("\n")}\n`);
     });
 
   await program.parseAsync(argv, { from: "user" });

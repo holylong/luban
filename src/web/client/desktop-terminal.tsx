@@ -49,6 +49,20 @@ export function terminalGrid(width: number, height: number, cell: TerminalCell):
   };
 }
 
+/**
+ * The terminal may never be wider than the panel that owns it.
+ *
+ * xterm paints exactly cols×rows cells, so a grid measured while the panel was
+ * hidden (or before the column was resized) is wider than the space available.
+ * Left alone it grows the panel instead of reflowing, and a wide terminal then
+ * paints over the conversation column on the right.
+ */
+export function terminalWidth(holder: number, owner?: number): number {
+  const usable = (value: number | undefined): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
+  if (!usable(holder)) return 0;
+  return usable(owner) ? Math.min(holder, owner) : holder;
+}
+
 /** Step through FONT_SIZES without running off either end. */
 export function stepFontSize(current: number, direction: 1 | -1): number {
   const sizes = FONT_SIZES;
@@ -105,7 +119,8 @@ export function DesktopTerminal(): React.ReactElement {
     // Measure every time: the ratio stays valid after a font change and needs no
     // private xterm APIs, and it self-corrects an early paint-less measurement.
     cell.current = measureCell(element, term);
-    const grid = terminalGrid(element.clientWidth - padX, element.clientHeight - padY, cell.current);
+    const width = terminalWidth(element.clientWidth, element.closest<HTMLElement>(".desktop-console")?.clientWidth);
+    const grid = terminalGrid(width - padX, element.clientHeight - padY, cell.current);
     if (grid.cols !== term.cols || grid.rows !== term.rows) term.resize(grid.cols, grid.rows);
   };
 
@@ -126,8 +141,10 @@ export function DesktopTerminal(): React.ReactElement {
       if (disposed) return;
       const style = getComputedStyle(element);
       const palette = terminalPalette(name => style.getPropertyValue(name));
+      const owner = element.closest<HTMLElement>(".desktop-console");
+      const born = terminalWidth(element.clientWidth || 800, owner?.clientWidth);
       const initial = terminalGrid(
-        element.clientWidth > 60 ? element.clientWidth - 16 : 800,
+        born > 60 ? born - 16 : 800,
         element.clientHeight > 60 ? element.clientHeight - 12 : 420,
         cell.current,
       );

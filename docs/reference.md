@@ -977,6 +977,10 @@ luban daemon add ~/work/shop # 再加一个常用目录，不启动第二个服�
 luban daemon url             # 只打印带令牌的手机链接
 luban daemon logs -n 100     # 常驻服务的日志尾部
 luban daemon stop            # 手机随即断开
+
+# 监听哪张网卡、用哪个端口
+luban daemon start ./demo --host 0.0.0.0 --port 8642   # 默认值：手机按 IP 直连
+luban daemon start ./demo --host 127.0.0.1             # 只给本机，手机走中继
 ```
 
 - **自动拉起**：打开任意一个 `luban` 会话语义上就保证后台在跑（`LUBAN_NO_DAEMON=1` 可关掉）；桌面 App 每次打开窗口也会执行同样的 `daemon start`。失败的细节写进 `~/.luban/daemon/daemon.log`，不打断 TUI 首帧。
@@ -984,6 +988,8 @@ luban daemon stop            # 手机随即断开
 - **手机上的效果**：`/m/` 的工作区列表就是这个后台的项目表。选一个目录就能开新会话，或接续该目录里已有的会话（会话在磁盘上，和哪个进程开的无关）；任务、审批、`ask_user` 都走同一个后台。
 - **远程**：后台用 `--remote` 按 `~/.luban/config.json` 的中继设置拨出隧道，一个设备只占一个中继槽位，所以桌面窗口自己的后台改为纯本地，中继槽位留给常驻后台。
 - **状态文件只属于一个 pid**：后台退出时只在 `state.json` 仍记着自己时才删除，否则会把接替它的那个后台的地址一起删掉。
+- **手机直接连电脑**：默认监听 `0.0.0.0:8642`（`--host` / `--port` 或 `LUBAN_DAEMON_HOST` / `LUBAN_DAEMON_PORT` 可改）。端口固定，手机里存的地址不会因为重启而失效；`daemon status` / `url` 会把每张网卡的链接连同令牌一起打印，例如 `http://192.168.1.10:8642/m/?token=…`，手机浏览器或 Android App 的地址栏直接粘这条。令牌始终生成，`/api/*` 无令牌一律 401。
+- **安全边界**：`0.0.0.0` 意味着同一网络里拿到链接（含令牌）的人都能操控这台电脑。只想本机用时用 `--host 127.0.0.1`，手机改走中继（`--remote`），中继上是账号登录而不是这条裸令牌。
 
 ## 手机远控：服务器、节点与 Android 客户端
 

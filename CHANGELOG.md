@@ -1,3 +1,23 @@
+## 2.4.19 — 2026-11-13
+
+- 桌面版「终端」横向撑破代码列、压住右侧会话栏：面板宽度改为跟着列走，xterm 不再按出生时的列数硬撑。
+  - 复现：真实 Electron 窗口在 1500px 下正常，缩到 900px 时 `.desktop-terminal` 仍是 734px 宽（右边缘 991），直接盖住从 580 开始的 Agent 栏，页面 scrollWidth 也还报 900 —— 因为溢出被上层裁掉，只有肉眼看得见。
+  - 根因两层：`.desktop-console-pane` / `.desktop-terminal-panel` / `.desktop-terminal` 都没有 `min-width: 0`，列 flex 容器的交叉轴被 xterm 的固定 `cols×cellWidth` 顶开，面板跟着内容变宽；面板一宽 `fit()` 量到的就是「变宽后的自己」，xterm 永远收不回来（宽度自洽的死循环）。
+  - 修法：`min-width: 0` 补到 console→pane→panel→holder 整条链；`fit()` 与首次建网格都改用新函数 `terminalWidth(holder, 所属 .desktop-console)` 取两者较小值，网格再宽也不会大过真正的列宽。`.desktop-terminal` 保留 `overflow: hidden` 作为兜底（console 本身不裁，否则高度拖拽条的 5px 抓取区会被切掉）。
+  - 实测（`npm run probe:desktop:terminal`，真 Electron + 真 pty）：1500px 96×23、900px 40×23（面板 316、xterm 304，Agent 栏 580 起分毫未犯）、1180px 77×23、再放大回 120×23——列数双向跟随面板。
+  - 新增 `src/web/client/desktop-terminal.test.ts`（12 例：`terminalWidth` 取小、隐藏面板回退、316px 列算 40 列而旧算法给 95 列、CSS 四层 `min-width: 0` 守卫）+ `scripts/desktop-terminal-probe.cjs` 真窗口回归探针。
+
+## 2.4.18 — 2026-11-13
+
+- 常驻后台默认让手机按 IP 直连：`--host 0.0.0.0`、固定端口 8642。
+  - 2.4.17 的后台监听 `127.0.0.1` + 随机端口：手机在局域网里按 `http://<电脑IP>:<端口>/m/` 根本连不上，而且每次重启端口都变，手机里存的地址必然失效——「关掉终端也能连」只对中继成立。
+  - `ensureDaemon` 默认改为 `--host 0.0.0.0 --port 8642`（`--host` / `--port` 或 `LUBAN_DAEMON_HOST` / `LUBAN_DAEMON_PORT` 可改）；`DaemonState` 记下绑定的网卡，旧状态文件缺这个字段时按 `127.0.0.1` 处理，不会被误报成局域网可达。
+  - `luban daemon start` 新增 `--host/--port`，输出把每张网卡的链接连同令牌一起打印（`http://192.168.1.10:8642/m/?token=…`），并提示「同一网络里拿到链接的人都能操控这台电脑」；`daemon url` 同样列出全部链接。
+  - `phoneLinks()`：循环地址在前，按绑定的网卡过滤——`--host 127.0.0.1` 时只给本机链接，绝不打印一张连不上的局域网地址。
+  - 实测：`daemon start` 后 `lsof -iTCP:8642` 显示 `TCP *:8642 (LISTEN)`；`http://192.168.1.10:8642/m/?token=…` 返回 200（2381B）并引用 `assets/mobile-N6T0ecwJ.js`，同地址 `/api/sessions` 无令牌 401，`/api/node` 带令牌返回 2.4.17 与项目表。
+  - 新增 `src/core/daemon-command.test.ts`（2 例：多网卡链接与令牌编码、只广播真正监听的地址），`daemon.test.ts` 增加绑定网卡/端口与旧状态迁移断言（15 例）。
+  - 顺带修掉 `luban … | head` 的 EPIPE 崩溃：标准输出管道被 reader 关掉时安静退出（退出码 0），不再打印 `unhandled exception: write EPIPE`。
+
 ## 2.4.17 — 2026-11-13
 
 - 常驻后台 `luban daemon`：一台机器一个入口，关掉终端/App 手机也连得上。

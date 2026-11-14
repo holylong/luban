@@ -344,7 +344,7 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
         // as soon as the port is up, not after the relay finishes dialling out.
         writeDaemonState(config.home, {
           pid: process.pid, port: web.port, token: token ?? "", workspace: config.workspace,
-          startedAt: Date.now(), version: VERSION,
+          host: options.host, startedAt: Date.now(), version: VERSION,
         });
         daemonStateWritten = true;
       }
@@ -1066,6 +1066,12 @@ traceBoot("modules");
 // promise ends the process, and a long-lived mesh/web node then appears to peers
 // as a port that keeps changing and refusing connections.
 installProcessGuard({ label: "luban" });
+
+// `luban … | head` closes the pipe while we are still writing. That is the
+// reader's decision, not a crash: exit quietly instead of printing a stack.
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE") process.exit(0);
+});
 
 const command = process.argv[2];
 const entry = command === "login" && process.argv[3] === "codex"
