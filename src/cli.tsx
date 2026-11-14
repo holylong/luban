@@ -22,6 +22,8 @@ import { flushUsageStatsOnExit, scheduleUsageFlush } from "./core/usage-stats.js
 import { sharedHistory } from "./core/session-history.js";
 import { runHistory } from "./core/history-command.js";
 import { runStats } from "./core/stats-command.js";
+import { runDaemonCommand } from "./core/daemon-command.js";
+import { clearDaemonStateIfOwner, ensureDaemon, writeDaemonState } from "./web/daemon.js";
 import { runMcp } from "./core/mcp-command.js";
 import { runBot } from "./core/bot-command.js";
 import { runDrive } from "./core/drive-command.js";
@@ -83,6 +85,8 @@ interface DaemonOptions {
   relayDeviceToken?: string;
   remote?: boolean;
   parentPid?: number;
+  /** Set by `luban daemon`: publish state and outlive the terminal that asked. */
+  daemonChild?: boolean;
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -226,6 +230,7 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     .option("--relay-ca <path>", "PEM CA to trust when the relay URL is https with a self-signed certificate")
     .option("--remote", "use the remote relay settings from ~/.luban/config.json")
     .option("--parent-pid <pid>", "exit when this parent process goes away (headless backend under the desktop app)", (value) => Number(value))
+    .option("--daemon-child", "hidden: started by `luban daemon`, publishes ~/.luban/daemon/state.json and outlives this terminal")
     .showHelpAfterError();
   program.parse(argv, { from: "user" });
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -262,6 +267,7 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
   });
   let web: LubanWebServer | undefined;
   let tunnel: TunnelClient | undefined;
+  let daemonStateWritten = false;
   try {
     await mesh.start();
     const announcedJobs = new Set<string>();
@@ -327,9 +333,21 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
       // the workspace world-writable. One is generated instead of refused, and
       // printed with the link that carries it.
       const exposed = !LOOPBACK.has(options.host);
-      const token = options.token?.trim() || process.env.LUBAN_WEB_TOKEN?.trim() || (exposed ? generateToken() : undefined);
+      // A daemon child is always token-protected: that token is what lets a
+      // second luban (or the desktop window) reuse this backend instead of
+      // starting a rival one on another port.
+      const token = options.token?.trim() || process.env.LUBAN_WEB_TOKEN?.trim() || (exposed || options.daemonChild ? generateToken() : undefined);
       web = new LubanWebServer(config, mesh, { host: options.host, port: options.port, approvals, questions, token });
       const url = await web.start();
+      if (options.daemonChild) {
+        // Published before anything else so a waiting `ensureDaemon` can connect
+        // as soon as the port is up, not after the relay finishes dialling out.
+        writeDaemonState(config.home, {
+          pid: process.pid, port: web.port, token: token ?? "", workspace: config.workspace,
+          startedAt: Date.now(), version: VERSION,
+        });
+        daemonStateWritten = true;
+      }
       process.stdout.write(`luban web ${url}\n`);
       process.stdout.write(`workspace ${config.workspace}\nmesh ${config.mesh.enabled ? `${config.mesh.nodeName}:${config.mesh.port}` : "disabled"}\n`);
       if (web.requiresToken) {
@@ -403,6 +421,9 @@ async function runDaemon(argv: string[], webMode: boolean): Promise<number> {
     tunnel?.stop();
     await web?.stop();
     await mesh.stop();
+    // Only if the file still names this process: a replacement daemon may have
+    // published its own address while this one was shutting down.
+    if (daemonStateWritten) clearDaemonStateIfOwner(config.home, process.pid);
   }
 }
 
@@ -768,7 +789,7 @@ async function main(): Promise<number> {
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
     .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
     .option("-p, --prompt <text>", "run once without the TUI")
-    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban login relay   sign in to a relay account and enroll this computer\n  luban login codex   sign in to Codex through the official CLI\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
+    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban daemon        one always-on backend per machine (status/start/stop/logs)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban login relay   sign in to a relay account and enroll this computer\n  luban login codex   sign in to Codex through the official CLI\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
   program.parse();
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -789,6 +810,14 @@ async function main(): Promise<number> {
     seedDefaults: true,
   });
   traceBoot("config");
+  // The phone must find *something* listening after this terminal quits, so an
+  // interactive start makes sure the per-machine backend is up. It runs
+  // detached; silence on failure keeps the TUI's first frame clean and the
+  // reason lands in ~/.luban/daemon/daemon.log instead.
+  if (process.stdin.isTTY && !options.prompt && !process.env.LUBAN_NO_DAEMON) {
+    void ensureDaemon(config.home, { workspace: config.workspace, version: VERSION })
+      .catch(() => undefined);
+  }
   // Without an interactive switch, only an explicit environment flag may open
   // a control session (see docs/computer-control.md).
   if (await beginFromEnvironment(config.home, config.workspace)) {
@@ -1054,6 +1083,8 @@ const entry = command === "login" && process.argv[3] === "codex"
     })
   : command === "login" && process.argv[3] === "relay"
   ? runRelayLogin(process.argv.slice(4))
+  : command === "daemon"
+  ? runDaemonCommand(process.argv.slice(3))
   : command === "bot"
   ? runBot(process.argv.slice(3))
   : command === "drive"

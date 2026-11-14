@@ -80,6 +80,7 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
   - [远程任务和本地任务一样可见](#远程任务和本地任务一样可见)
   - [排障](#排障)
 - [原生 Web 后台](#原生-web-后台)
+- [常驻后台：一台机器一个入口](#常驻后台一台机器一个入口)
 - [手机远控：服务器、节点与 Android 客户端](#手机远控服务器节点与-android-客户端)
 - [脚本模式](#脚本模式)
 - [运行中补充指令](#运行中补充指令)
@@ -964,6 +965,25 @@ luban ./demo --web-port 8642
 | GET/POST | `/api/questions` | 查询/答复 `ask_user` 提问（含终端里正在等待的提问） |
 | GET | `/api/file`、`/api/file-versions` | 读取工作区文件与 Git HEAD 版本 |
 | GET | `/api/diff`、`/api/sessions`、`/api/sessions/:id` | Git 变更、会话列表与会话详情 |
+
+## 常驻后台：一台机器一个入口
+
+终端会随窗口关闭，桌面 App 退出后它启动的后台也随之结束，于是手机过一会儿再打开就只剩一张连不上的设备卡片。`luban daemon` 解决这件事：**每台机器一个常驻后台**，由最先启动的 luban 顺手拉起，之后终端关掉、App 退出，手机仍然连得上。
+
+```bash
+luban daemon                 # 简写：status
+luban daemon start ./demo    # 后台启动（已在跑就复用），并把 ./demo 加进项目
+luban daemon add ~/work/shop # 再加一个常用目录，不启动第二个服务
+luban daemon url             # 只打印带令牌的手机链接
+luban daemon logs -n 100     # 常驻服务的日志尾部
+luban daemon stop            # 手机随即断开
+```
+
+- **自动拉起**：打开任意一个 `luban` 会话语义上就保证后台在跑（`LUBAN_NO_DAEMON=1` 可关掉）；桌面 App 每次打开窗口也会执行同样的 `daemon start`。失败的细节写进 `~/.luban/daemon/daemon.log`，不打断 TUI 首帧。
+- **为什么不重复起服务**：状态写在 `~/.luban/daemon/state.json`（权限 0600，含 pid、端口、令牌、出生目录），并用 `mkdir` 做互斥锁；后来者读到健康的后台就直接复用，只把当前目录注册成项目。健康检查是带令牌请求 `/healthz`——进程活着不等于服务可用。
+- **手机上的效果**：`/m/` 的工作区列表就是这个后台的项目表。选一个目录就能开新会话，或接续该目录里已有的会话（会话在磁盘上，和哪个进程开的无关）；任务、审批、`ask_user` 都走同一个后台。
+- **远程**：后台用 `--remote` 按 `~/.luban/config.json` 的中继设置拨出隧道，一个设备只占一个中继槽位，所以桌面窗口自己的后台改为纯本地，中继槽位留给常驻后台。
+- **状态文件只属于一个 pid**：后台退出时只在 `state.json` 仍记着自己时才删除，否则会把接替它的那个后台的地址一起删掉。
 
 ## 手机远控：服务器、节点与 Android 客户端
 

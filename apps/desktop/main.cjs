@@ -477,18 +477,35 @@ function stopBot() {
   botChild = undefined;
   child.kill("SIGTERM");
 }
+/**
+ * Ask the per-machine daemon to hold this folder open for the phone.
+ *
+ * The window's own backend dies with the app, so it must not be the thing the
+ * phone depends on. `luban daemon start` is idempotent: the first call starts a
+ * detached server, later calls only add the folder to the project list.
+ */
+function ensureDaemonFor(workspace) {
+  try {
+    const child = spawn(node, [cli, "daemon", "start", workspace], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env },
+    });
+    child.on("error", () => undefined);
+    child.unref();
+  } catch {
+    // A missing phone link must never stop a desktop window from opening.
+  }
+}
 function startBackend(session, workspace) {
   return new Promise((resolveStart, rejectStart) => {
     const token = randomBytes(32).toString("base64url");
-    // The window talks to a loopback-only backend. --remote dials the relay
-    // configured in ~/.luban/config.json so the phone's device list can see it;
-    // one device can only hold one relay slot, so extra windows stay local.
-    const remote = ![...sessions.values()].some(other => other !== session && other.backendAccess);
-    // --parent-pid: this backend dies with the app. Orphaned backends keep
-    // polling the relay, and the phone then lists one ghost device per run.
+    // The window talks to a loopback-only backend, and --parent-pid makes it die
+    // with the app. The relay slot belongs to the daemon instead (see
+    // ensureDaemonFor): one device can only hold one slot, and the phone must
+    // keep reaching this machine after the app is closed.
     const args = [cli, "web", workspace, "--host", "127.0.0.1", "--port", "0", "--no-mesh",
       "--parent-pid", String(process.pid)];
-    if (remote) args.push("--remote");
     const child = spawn(node, args, {
       env: {
         ...process.env,
@@ -683,6 +700,7 @@ async function loadInSession(session, workspace) {
 }
 /** Open a project in a brand new window and focus it. */
 async function openWorkspaceWindow(workspace) {
+  if (!process.env.LUBAN_NO_DAEMON) ensureDaemonFor(workspace);
   const session = createSession();
   try {
     await loadInSession(session, workspace);

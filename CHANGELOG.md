@@ -1,3 +1,14 @@
+## 2.4.17 — 2026-11-13
+
+- 常驻后台 `luban daemon`：一台机器一个入口，关掉终端/App 手机也连得上。
+  - 之前只有两种后台：`luban web` 前台进程，和桌面 App 每个窗口一个 `--parent-pid` 子进程——两者都跟着自己的进程死，手机过一会儿再打开就只剩一张连不上的设备卡片。
+  - `src/web/daemon.ts`：`~/.luban/daemon/state.json`（0600，pid/端口/令牌/出生目录/版本）作为唯一交接；健康检查是带令牌请求 `/healthz`（进程活着 ≠ 服务可用）；`mkdir ensure.lock` 做互斥，30s 过期锁可回收；后来者读到健康后台就复用并只把当前目录注册成项目（`POST /api/projects`）。
+  - `luban daemon [status|start|add|stop|logs|url]`（`src/core/daemon-command.ts`）：`start` 幂等，`url` 直接给出带令牌的 `/m/` 链接，`status` 列出项目表、版本、模型和运行时长；崩溃留下的 state.json 遇到死 pid 会被清掉而不是被当成“没响应”。
+  - 自动拉起：交互式 `luban` 启动时后台 ensure（`LUBAN_NO_DAEMON=1` 可关），失败只进 `daemon.log` 不打断 TUI 首帧；桌面 App 每个窗口 `daemon start <目录>`，窗口自己的后台改回纯本地——一个设备只占一个中继槽位，槽位留给常驻后台。
+  - 子进程即 `luban web … --daemon-child`（新增隐藏参数）：绑定后用 `writeDaemonState` 立刻公布地址再拨中继；退出时只在 state.json 仍记着自己时才删除（`clearDaemonStateIfOwner`），不会删掉接替者的地址。
+  - 实测：`daemon start /tmp/dh2/ws1` → pid 49617、port 65476、PPID=1；`add ws2` 后项目表 2 项；`/m/` 200、`/api/sessions?project=ws2` 200、无令牌 401；TUI（PTY）启动 8s 内自动起后台，退出 TUI 后 `healthz` 仍 200；`daemon stop` 后 state.json 消失、进程退出。
+  - 新增 `src/web/daemon.test.ts`（13 例）：state 文件权限与校验、死 pid/哑服务区分、复用并注册目录、陈旧状态换新子进程（参数/detached/令牌环境/锁释放）、超时后杀子进程、真实 `stopDaemon` 杀进程、`clearDaemonStateIfOwner` 只删自己的、`/api/node` 项目表解析、日志尾部。
+
 ## 2.4.16 — 2026-11-13
 
 - 通用 agent 化：不再用正则替模型做决定。删掉三处机械路径，一句话原样进模型。

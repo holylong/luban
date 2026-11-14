@@ -95,11 +95,18 @@ describe("relay launch settings", () => {
   });
 });
 
-it("starts the desktop backend with remote relay settings", () => {
+it("gives the desktop's relay slot to the daemon, not to a window backend", () => {
   const desktop = readFileSync(new URL("../../apps/desktop/main.cjs", import.meta.url), "utf8");
+  const daemon = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
   expect(desktop).toContain('"--no-mesh"');
-  expect(desktop).toContain('args.push("--remote")');
-  // The backend must die with the app, or the relay keeps listing the machine
-  // once per abandoned window.
+  // A device holds one relay slot, so exactly one process may dial it. The
+  // window backend dies with the app; the daemon outlives it and keeps the
+  // phone's device card alive, so the slot belongs to the daemon.
+  expect(desktop).not.toContain('args.push("--remote")');
+  expect(daemon).toContain('"--remote"');
+  // The window backend must still die with the app, or abandoned windows leave
+  // orphaned servers behind.
   expect(desktop).toContain('"--parent-pid", String(process.pid)');
+  // ...and every window hands its folder to the daemon for the phone.
+  expect(desktop).toContain('spawn(node, [cli, "daemon", "start", workspace]');
 });
