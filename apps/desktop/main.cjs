@@ -384,6 +384,14 @@ ipcMain.handle("luban:openPath", async (event, value) => {
   if (error) throw new Error(error);
   return { ok: true };
 });
+ipcMain.handle("luban:openExternal", async (event, value) => {
+  const session = trustedSession(event);
+  if (!session || session.opening) throw new Error("Untrusted or inactive workspace");
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) throw new Error("Only HTTP(S) links are supported");
+  const url = new URL(value);
+  await shell.openExternal(url.href);
+  return { ok: true };
+});
 // File-tree actions from the renderer. Each one resolves the path through the
 // workspace service first, so a crafted IPC message cannot reach outside it.
 ipcMain.handle("luban:revealPath", (event, value) => {

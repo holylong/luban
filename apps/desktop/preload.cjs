@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld("lubanDesktop", Object.freeze({
   readPreview: path => ipcRenderer.invoke("luban:readPreview", path),
   // Hand a file the preview cannot paint to the system application.
   openPath: path => ipcRenderer.invoke("luban:openPath", path),
+  openExternal: url => ipcRenderer.invoke("luban:openExternal", url),
   // File-tree menu: reveal in Finder, copy the absolute path, and the three
   // mutations the tree can perform without an editor round-trip.
   revealPath: path => ipcRenderer.invoke("luban:revealPath", path),

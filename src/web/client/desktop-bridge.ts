@@ -4,6 +4,8 @@ export interface DesktopFile { path: string; content: string; revision: string }
 export interface CommandEvent { id: string; kind: "output" | "exit"; text: string }
 export interface TerminalStart { id: string; pty: boolean; cols: number; rows: number; shell: string }
 export interface DesktopBridge {
+  /** Only validated HTTP(S) URLs reach the OS browser. */
+  openExternal?(url: string): Promise<{ ok: boolean }>;
   onPetJob?(listener: (id: string) => void): () => void;
   readFile(path: string): Promise<DesktopFile>;
   saveFile(input: DesktopFile): Promise<DesktopFile>;

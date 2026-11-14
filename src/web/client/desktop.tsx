@@ -19,6 +19,8 @@ import { reloadPaths, sameTree } from "./desktop-tree";
 import { DesktopFileIcon } from "./desktop-file-icon";
 import { FileMenu, joinPath, nameProblem, parentPath, type FileMenuAction, type FileMenuTarget } from "./desktop-file-menu";
 import { desktopErrorText } from "./desktop-bridge";
+import { followEdit, type EditView } from "./desktop-edit-view";
+import { openConversationLink } from "./conversation-links";
 import { DesktopCodexQuota } from "./desktop-codex-quota";
 
 type ExplorerTab = "files" | "sessions";
@@ -321,7 +323,7 @@ export function DesktopQuestions({ store }: { store: WorkbenchStore }): React.Re
 export function AgentPanel({ store, timeline }: { store: WorkbenchStore; timeline: TimelineItem[] }): React.ReactElement {
   const history = store.session ? historyBeforeRun(store.session, store.job) : undefined;
   const plan = latestDesktopPlan(timeline);
-  return <>
+  return <div style={{ display: "contents" }} onClick={event => { void openConversationLink(event, store); }}>
     <TopBar store={store} />
     <DesktopCodexQuota provider={store.node?.provider} modelId={store.node?.model_id} />
     {store.session && <div className="desktop-agent-tabs"><span>{store.session.title}</span><button onClick={store.startNew}>＋ 新会话</button></div>}
@@ -332,15 +334,19 @@ export function AgentPanel({ store, timeline }: { store: WorkbenchStore; timelin
       history={history && <DesktopSessionHistory session={history} />}
       onCancel={() => void store.cancel()} onResume={() => void store.resume()} />
     <Composer store={store} />
-  </>;
+  </div>;
 }
 
 export function DesktopCodeArea({ store, timeline }: { store: WorkbenchStore; timeline: TimelineItem[] }): React.ReactElement {
-  const [tab, setTab] = useState<"code" | "changes">("code");
+  const [view, setView] = useState<EditView>({ tab: "code" });
+  const tab = view.tab;
+  const setTab = (tab: EditView["tab"]): void => setView(current => ({ tab, seen: current.seen }));
   const latest = currentDesktopEdit(timeline);
-  useEffect(() => { if (latest) setTab("changes"); }, [latest?.id, latest?.preview]);
+  useEffect(() => { setView({ tab: "code" }); }, [store.project]);
+  useEffect(() => {
+    setView(current => followEdit(current, store.job?.id ?? "", store.job?.status, latest ? `${latest.id}:${latest.preview}` : undefined));
+  }, [store.project, store.job?.id, store.job?.status, latest?.id, latest?.preview]);
   useEffect(() => { if (store.file?.path) setTab("code"); }, [store.file?.path]);
-  useEffect(() => { setTab("code"); }, [store.project]);
   return <div className="desktop-code-area">
     <div className="desktop-code-tabs" role="tablist" aria-label="代码工作区">
       <button role="tab" aria-selected={tab === "code"} onClick={() => setTab("code")}>代码</button>

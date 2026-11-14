@@ -5,6 +5,18 @@ import { Markdown } from "./markdown";
 
 const html = (text: string): string => renderToStaticMarkup(<Markdown text={text} />);
 
+it("links bare URLs and code-wrapped file references, but not code blocks", () => {
+  const out = html("打开 https://example.com/a?q=1。以及 `src/a.ts:42` 和 [报告](docs/report.pdf)。\n\n```ts\nhttps://example.com/code\n```");
+  expect(out).toContain('href="https://example.com/a?q=1"');
+  expect(out).toContain('data-file-path="src/a.ts:42"');
+  expect(out).toContain('data-file-path="docs/report.pdf"');
+  expect(out).not.toContain('href="https://example.com/code"');
+});
+it("never emits executable or custom-scheme links from model output", () => {
+  const out = html("[bad](javascript:alert) [data](data:text/html,evil) [app](vscode://file/a)");
+  expect(out).not.toContain("href=");
+});
+
 it("gives a bold lead-in its own heading instead of burying it in prose", () => {
   const out = html("先说结论：可以。\n\n**契约**：`POST /match` 返回成员。\n\n**限制**：只支持本机。");
   expect(out).toContain('<h3 class="md-lead">契约</h3>');
@@ -16,7 +28,7 @@ it("gives a bold lead-in its own heading instead of burying it in prose", () => 
 
 it("moves a label's parenthetical beside the heading", () => {
   const out = html("**契约**（`identity.py`）：`POST /match` 返回成员。");
-  expect(out).toContain('<h3 class="md-lead">契约<span class="md-lead-note"> <code class="inline">identity.py</code></span></h3>');
+  expect(out).toContain('<h3 class="md-lead">契约<span class="md-lead-note"> <a href="#" data-file-path="identity.py"><code class="inline">identity.py</code></a></span></h3>');
   expect(out).toContain('<p><code class="inline">POST /match</code> 返回成员。</p>');
 });
 

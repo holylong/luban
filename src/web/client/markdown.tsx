@@ -1,4 +1,11 @@
 import React from "react";
+import { isFileLink, isWebLink } from "./conversation-links";
+
+function linkNode(value: string, label: React.ReactNode, key: string): React.ReactNode {
+  if (isWebLink(value)) return <a key={key} href={value} target="_blank" rel="noreferrer noopener">{label}</a>;
+  if (isFileLink(value) || /^file:\/\//iu.test(value)) return <a key={key} href="#" data-file-path={value}>{label}</a>;
+  return <React.Fragment key={key}>{label}</React.Fragment>;
+}
 
 /* A compact code tokenizer. Dependency-free on purpose: the bundle ships
    inside the npm package and the package runtime has no frontend deps. */
@@ -88,7 +95,7 @@ export const HighlightedLine = React.memo(function HighlightedLine({ line, langu
 function inline(text: string, keyPrefix: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   // Inline code first so its contents are never re-interpreted as emphasis.
-  const pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\s]+\))|(~~[^~]+~~)/gu;
+  const pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\s]+\))|(~~[^~]+~~)|(https?:\/\/[^\s<>`，。！？；）\]]+)/gu;
   let last = 0;
   let match: RegExpExecArray | null;
   let index = 0;
@@ -96,13 +103,17 @@ function inline(text: string, keyPrefix: string): React.ReactNode[] {
     if (match.index > last) nodes.push(text.slice(last, match.index));
     const token = match[0];
     const key = `${keyPrefix}-i${index++}`;
-    if (token.startsWith("`")) nodes.push(<code key={key} className="inline">{token.slice(1, -1)}</code>);
+    if (token.startsWith("`")) nodes.push(linkNode(token.slice(1, -1), <code className="inline">{token.slice(1, -1)}</code>, key));
+    else if (isWebLink(token)) {
+      const url = token.replace(/[.,;!?)]+$/u, "");
+      nodes.push(linkNode(url, url, key), token.slice(url.length));
+    }
     else if (token.startsWith("**")) nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>);
     else if (token.startsWith("~~")) nodes.push(<del key={key}>{token.slice(2, -2)}</del>);
     else if (token.startsWith("*")) nodes.push(<em key={key}>{token.slice(1, -1)}</em>);
     else {
       const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/u.exec(token);
-      if (link) nodes.push(<a key={key} href={link[2]} target="_blank" rel="noreferrer noopener">{link[1]}</a>);
+      if (link) nodes.push(linkNode(link[2]!, link[1], key));
       else nodes.push(token);
     }
     last = match.index + token.length;
