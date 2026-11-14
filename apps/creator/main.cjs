@@ -188,12 +188,12 @@ function createTray() {
   tray.on("click", toggleWindow);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "打开 Creator", click: () => createWindow() },
-    { label: "让后台开始干活", click: () => { bot.ensureWorker(home); refreshTray(); } },
+    { label: "立即开始执行任务", click: () => { bot.ensureWorker(home); refreshTray(); } },
     { type: "separator" },
     { label: "打开任务数据目录", click: () => { void shell.openPath(dataDirectory); } },
     { label: "允许的工具（permissions.json）", click: () => { void openPolicyFile(); } },
     { type: "separator" },
-    { label: "退出 Creator（后台任务继续）", click: () => { quitting = true; app.quit(); } },
+    { label: "退出 Creator（任务继续按时执行）", click: () => { quitting = true; app.quit(); } },
   ]));
   refreshTray();
 }
@@ -387,8 +387,8 @@ else {
           if (process.env.CREATOR_SMOKE_APPROVALS === "1") {
             const approvalsPath = smokePath.replace(/\.png$/u, "-approvals.png");
             await window.webContents.executeJavaScript(`(() => {
-              const nav = [...document.querySelectorAll(".side-nav button")].find(node => node.textContent.includes("后台任务"));
-              if (nav) nav.click();
+              // Selected by data-view: the visible label may be reworded, the hook may not break.
+              document.querySelector('[data-view="queue"]')?.click();
             })()`);
             await new Promise(resolve => setTimeout(resolve, 300));
             await window.webContents.executeJavaScript(`(() => {
@@ -418,14 +418,13 @@ else {
               process.stdout.write(`forgot ${JSON.stringify({ page: left, stored })}\n`);
             }
           }
-          // The 后台任务 tab is the queue's face: its composer is one sentence box.
+          // The 任务记录 tab is the queue's face: its composer is one sentence box.
           // It used to carry 现在/定时/每隔 controls, so a smoke proves the form is
           // gone and what is left is the textarea plus send.
           if (process.env.CREATOR_SMOKE_QUEUE === "1") {
             const queuePath = smokePath.replace(/\.png$/u, "-queue.png");
             await window.webContents.executeJavaScript(`(() => {
-              const button = [...document.querySelectorAll(".side-nav button")].find(node => node.textContent.includes("后台任务"));
-              if (button) button.click();
+              document.querySelector('[data-view="queue"]')?.click();
             })()`);
             await new Promise(resolve => setTimeout(resolve, 400));
             const composer = await window.webContents.executeJavaScript(`(() => {

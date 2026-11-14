@@ -141,7 +141,7 @@ const queueJson = shot.replace(/\.png$/u, "-queue.json");
 if (existsSync(queueJson)) {
   const composer = JSON.parse(readFileSync(queueJson, "utf8"));
   if (!composer.composer) {
-    console.error(`后台任务页没有输入卡：${JSON.stringify(composer)}`);
+    console.error(`任务记录页没有输入卡：${JSON.stringify(composer)}`);
     process.exit(1);
   }
   if (composer.controls.length) {

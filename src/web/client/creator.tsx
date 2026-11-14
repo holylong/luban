@@ -13,8 +13,11 @@ import "./creator.css";
  *                 Every action it takes is announced as a line ("点击 720,430"),
  *                 anything that changes the screen waits for 允许/拒绝, and 停止
  *                 kills the child process mid-turn.
- *  后台           the durable queue in ~/.luban/bot: scheduled scans, reminders,
- *                 nightly reports. Unattended, deny-by-default, survives restarts.
+ *  任务记录       the durable queue in ~/.luban/bot: scheduled scans, reminders,
+ *                 nightly reports, and what each run concluded. Unattended,
+ *                 deny-by-default, survives restarts. It is called 任务记录 and
+ *                 not 后台 because 「后台」 read as a hidden process rather than a
+ *                 list a person can open, read and re-run.
  *
  * They are deliberately separate processes: a job that scans GitLab every hour
  * must not be able to click, and a click must not need a queue task to exist. */
@@ -752,7 +755,7 @@ function App(): React.ReactElement {
     try {
       const result = await bridge.startWorker();
       setSnapshot(result.snapshot);
-      if (!result.started && result.reason === "launch-agent") setError("后台由 LaunchAgent 托管，无需手动启动");
+      if (!result.started && result.reason === "launch-agent") setError("执行器由 LaunchAgent 托管，无需手动启动");
     } catch (cause) { setError(String((cause as Error).message || cause)); }
   };
 
@@ -787,24 +790,24 @@ function App(): React.ReactElement {
         </button>
 
         <nav className="side-nav">
-          <button className={view === "drive" ? "on" : ""} onClick={() => setView("drive")}>
+          <button data-view="drive" className={view === "drive" ? "on" : ""} onClick={() => setView("drive")}>
             <CursorGlyph />操控电脑{computer.enabled ? <b className="live">●</b> : null}
           </button>
-          <button className={view === "queue" ? "on" : ""} onClick={() => setView("queue")}>
-            <ClockGlyph />后台任务{count.active ? <b>{count.active}</b> : null}
+          <button data-view="queue" className={view === "queue" ? "on" : ""} onClick={() => setView("queue")}>
+            <ClockGlyph />任务记录{count.active ? <b>{count.active}</b> : null}
           </button>
-          <button className={plans ? "on" : ""} onClick={() => setPlans(value => !value)}>
+          <button data-view="plans" className={plans ? "on" : ""} onClick={() => setPlans(value => !value)}>
             <ListGlyph />计划{tasks.length ? <b>{tasks.length}</b> : null}
           </button>
-          <button onClick={() => { void bridge.openPolicy(); }}>
+          <button data-view="policy" onClick={() => { void bridge.openPolicy(); }}>
             <FileGlyph />权限策略
           </button>
-          <button className={memoryRows ? "on" : ""} onClick={() => { void openMemory(); }}>
+          <button data-view="memory" className={memoryRows ? "on" : ""} onClick={() => { void openMemory(); }}>
             <ListGlyph />记忆
           </button>
         </nav>
 
-        <div className="side-label">后台（{tasks.length}）</div>
+        <div className="side-label">最近任务（{tasks.length}）</div>
         <div className="side-list">
           {tasks.length ? tasks.map(task => (
             <button key={task.id} className={`side-task ${task.status}`} onClick={() => { setView("queue"); setTab(["queued", "running", "paused"].includes(task.status) ? "active" : "done"); }}>
@@ -812,7 +815,7 @@ function App(): React.ReactElement {
               <span className="title">{task.prompt}</span>
               <span className="when">{task.every ? clock(task.at) : dayClock(task.at)}</span>
             </button>
-          )) : <p className="side-empty">暂无后台任务</p>}
+          )) : <p className="side-empty">还没有任务</p>}
         </div>
 
         <div className="side-label">空间</div>
@@ -855,8 +858,8 @@ function App(): React.ReactElement {
           <div className={`pane${blank ? "" : " compact"}`}>
             {blank ? (
               <header className="hero">
-                <h1>后台替你跑</h1>
-                <p className="hero-sub">不需要你盯着的事：定时扫描、日报、提醒。无人值守，关掉窗口也照样跑。</p>
+                <h1>交给它，自己跑完</h1>
+                <p className="hero-sub">定时扫描、日报、提醒都记在这里：排好后没人盯着也会跑，关掉窗口也不影响。</p>
               </header>
             ) : null}
 
@@ -914,10 +917,10 @@ function App(): React.ReactElement {
             {!blank || allowed.length ? (
               <section className="queue">
                 <div className="queue-head">
-                  <span>{tab === "active" ? "进行中" : tab === "done" ? "结果" : "授权"}</span>
+                  <span>{tab === "active" ? "进行中" : tab === "done" ? "已完成" : "授权"}</span>
                   <span className="count">{tab === "approvals" ? count.approvals : shown.length || "0"}</span>
                   <span className="segmented small">
-                    {([["active", "进行中"], ["done", "结果"], ["approvals", "授权"]] as Array<["active" | "done" | "approvals", string]>).map(([key, label]) => (
+                    {([["active", "进行中"], ["done", "已完成"], ["approvals", "授权"]] as Array<["active" | "done" | "approvals", string]>).map(([key, label]) => (
                       <button key={key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>{label}</button>
                     ))}
                   </span>
@@ -945,14 +948,14 @@ function App(): React.ReactElement {
                       onCancel={id => { if (bridge) void bridge.cancel(id).then(setSnapshot); }} />
                   ))
                 ) : (
-                  <p className="hint">{tab === "active" ? "没有在跑的后台任务。派发一句，它会在后台执行。" : "还没有结果。跑完的任务会带着结论出现在这里。"}</p>
+                  <p className="hint">{tab === "active" ? "没有正在执行的任务。说一句，它会自己排好时间跑。" : "还没有完成的记录。任务跑完会把结论留在这里。"}</p>
                 )}
               </section>
             ) : null}
 
             {!blank ? <button className="worker-inline" onClick={() => { void startWorker(); }}>
               <span className={`dot ${worker?.running ? (worker.task ? "busy" : "idle") : "off"}`} />
-              {worker?.running ? (worker.task ? "后台正在执行" : "后台待命") : worker?.launchAgent ? "后台由系统托管" : "后台未启动，点这里启动"}
+              {worker?.running ? (worker.task ? "执行器正在执行" : "执行器待命") : worker?.launchAgent ? "执行器由系统托管" : "执行器未启动，点这里启动"}
             </button> : null}
 
             <p className="disclaimer">内容由 AI 生成，请核实重要信息</p>
