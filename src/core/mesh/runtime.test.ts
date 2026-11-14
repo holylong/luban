@@ -59,6 +59,37 @@ afterEach(async () => {
 });
 
 describe("MeshRuntime", () => {
+  it("does not fail another live backend's jobs when sharing a jobs directory", async () => {
+    const root = await temporary("shared-job-owners");
+    const first = new MeshRuntime(config(root, "desktop"));
+    const second = new MeshRuntime(config(root, "daemon"));
+    first.config.mesh.enabled = second.config.mesh.enabled = false;
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    await once(child, "spawn");
+    try {
+      await first.start();
+      const fields = { source: "desktop", target: "desktop", instruction: "running", runtime: "nodejs", instance_id: first.instance };
+      const live = await first.store.create({ ...fields, status: "working", owner_pid: child.pid! });
+      const queued = await first.store.create({ ...fields, status: "queued", owner_pid: process.pid });
+      const legacy = await first.store.create({ ...fields, status: "pending" });
+      // A real exited process is stale; a UUID difference on its own is not.
+      const exited = once(child, "exit");
+      child.kill();
+      await exited;
+      const dead = await first.store.create({ ...fields, status: "working", owner_pid: child.pid! });
+      // Keep the live record owned by this still-running test process.
+      await first.store.update(live.id, { owner_pid: process.pid });
+      await second.start();
+      expect((await first.store.get(live.id))?.status).toBe("working");
+      expect((await first.store.get(queued.id))?.status).toBe("queued");
+      expect((await first.store.get(legacy.id))?.status).toBe("pending");
+      expect(await first.store.get(dead.id)).toMatchObject({ status: "failed", error: "job was still active when the Node process restarted" });
+    } finally {
+      child.kill();
+      await Promise.all([first.stop(), second.stop()]);
+    }
+  });
+
   it("keeps an existing instance and its active jobs intact on a port collision", async () => {
     const root = await temporary("multi-instance");
     const first = new MeshRuntime(config(root, "local"));
@@ -95,7 +126,7 @@ describe("MeshRuntime", () => {
     expect(attempts.filter(attempt => attempt.status === "fulfilled")).toHaveLength(1);
     await expect.poll(async () => (await runtime.store.get(job.id))?.status).toBe("done");
     const final = await runtime.store.get(job.id);
-    expect(final).toMatchObject({ id: job.id, instruction: "original", session_id: "saved-history", resume_count: 1 });
+    expect(final).toMatchObject({ id: job.id, instruction: "original", session_id: "saved-history", resume_count: 1, owner_pid: process.pid });
     expect(final?.logs.some(log => log.msg === "original failure")).toBe(true);
     await expect(runtime.resumeLocalJob(job.id)).rejects.toThrow("paused or failed");
     await runtime.stop();

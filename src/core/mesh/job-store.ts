@@ -32,6 +32,8 @@ export interface MeshJob {
   lease_deadline?: number;
   runtime?: string;
   instance_id?: string;
+  /** Local process owning the job; absent on older records. */
+  owner_pid?: number;
   session_id?: string;
   /** A new job that appends its instruction to an existing session. */
   continues_session?: boolean;
@@ -77,6 +79,7 @@ export class MeshJobStore {
       ...(fields.lease_deadline ? { lease_deadline: fields.lease_deadline } : {}),
       ...(fields.runtime ? { runtime: fields.runtime } : {}),
       ...(fields.instance_id ? { instance_id: fields.instance_id } : {}),
+      ...(fields.owner_pid ? { owner_pid: fields.owner_pid } : {}),
       ...(fields.session_id ? { session_id: fields.session_id } : {}),
       ...(fields.continues_session ? { continues_session: true } : {}),
     };

@@ -682,6 +682,7 @@ export class MeshRuntime {
       lease_deadline: input.leaseSeconds ? now() + input.leaseSeconds : undefined,
       runtime: "nodejs",
       instance_id: this.instanceId,
+      owner_pid: process.pid,
       ...(input.session_id ? { session_id: input.session_id } : {}),
       ...(input.continuesSession ? { continues_session: true } : {}),
     });
@@ -695,6 +696,17 @@ export class MeshRuntime {
   private async failStaleNodeJobs(): Promise<void> {
     for (const job of await this.store.list(500)) {
       if (job.runtime !== "nodejs" || job.instance_id === this.instanceId || !["queued", "pending", "working"].includes(job.status)) continue;
+      // Desktop windows and the detached daemon share this directory. A different
+      // UUID is not evidence of a restart: only clean up a known dead owner.
+      // Legacy records have no owner evidence, so leave them untouched.
+      if (!Number.isInteger(job.owner_pid) || job.owner_pid! <= 0) continue;
+      try {
+        process.kill(job.owner_pid!, 0);
+        continue;
+      } catch (error) {
+        // EPERM (or an unexpected error) does not prove the process is gone.
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") continue;
+      }
       try {
         await this.store.finish(job.id, "failed", "", "job was still active when the Node process restarted");
         await this.store.log(job.id, "error", "job was still running when the Node process restarted");
@@ -850,7 +862,7 @@ export class MeshRuntime {
     if (previous.status !== "paused" && previous.status !== "failed") throw new Error("only a paused or failed job can be resumed");
     const job = await this.store.transition(id, previous.status, { status: "queued", done_at: null,
       result: "", error: "", resume_count: (previous.resume_count || 0) + 1,
-      instance_id: this.instanceId, lease_seconds: 0, lease_deadline: 0,
+      instance_id: this.instanceId, owner_pid: process.pid, lease_seconds: 0, lease_deadline: 0,
       queued_at: now() });
     if (!job) throw new Error("only a paused or failed job can be resumed");
     this.ownedJobs.add(id);
