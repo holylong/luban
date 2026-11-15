@@ -107,6 +107,10 @@ function createElectron() {
     isDestroyed() { return this.destroyed; }
     isMinimized() { return false; }
     isVisible() { return this.visible; }
+    // Closing to the tray must leave full screen first; the stub tracks it so
+    // the guard's ordering is exercised here too.
+    isFullScreen() { return this.fullScreen === true; }
+    setFullScreen(value) { this.fullScreen = value; this.emit("leave-full-screen"); }
     restore() {}
     destroy() {
       this.emit("close", { preventDefault() {} });

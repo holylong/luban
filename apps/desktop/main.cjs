@@ -1,5 +1,6 @@
 const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, ipcMain, protocol, screen, shell, Tray, globalShortcut } = require("electron");
 const { preparePetTask } = require("./pet-task.cjs");
+const { hideForTray } = require("./window-close.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
 let petJob;
@@ -625,8 +626,9 @@ function installWindowGuards(session) {
   win.once("ready-to-show", () => win.show());
   win.on("focus", () => { lastSession = session; updateTray(); });
   // Closing hides the window: its backend keeps running and the tray icon
-  // reopens it. Without a usable tray the close stays a real one.
-  win.on('close', event => { if (!quitting && tray && !tray.isDestroyed()) { event.preventDefault(); win.hide(); } });
+  // reopens it. Without a usable tray the close stays a real one. A full-screen
+  // window must leave full screen first, or its Space stays occupied and black.
+  win.on('close', event => { if (!quitting && tray && !tray.isDestroyed()) { event.preventDefault(); hideForTray(win); } });
   win.on("closed", () => {
     // The webContents is already gone here, so the id was captured at creation.
     if (session.webContentsId) sessions.delete(session.webContentsId);
@@ -811,7 +813,7 @@ app.whenReady().then(async () => {
     { label: "文件", submenu: [
       { label: "打开项目文件夹…", accelerator: "CmdOrCtrl+O", click: async () => { const path = await chooseWorkspace(focusedSession()); if (path) await openFolder(path).catch(reportOpenError); } },
       { label: "新建窗口", accelerator: "CmdOrCtrl+Shift+N", click: () => { void newWindow().catch(reportOpenError); } },
-      { label: "隐藏到托盘", click: () => { const session = focusedSession(); if (session?.window && !session.window.isDestroyed()) session.window.hide(); } },
+      { label: "隐藏到托盘", click: () => { const session = focusedSession(); if (session?.window) hideForTray(session.window); } },
       { type: "separator" }, { role: "quit", label: "退出" },
     ] },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
