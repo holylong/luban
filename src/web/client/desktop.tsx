@@ -26,6 +26,18 @@ import { DesktopCodexQuota } from "./desktop-codex-quota";
 type ExplorerTab = "files" | "sessions";
 
 /**
+ * The last segment of a workspace path, which is what the user names the
+ * project by. Keeping it a pure function lets the button label be tested
+ * without a renderer.
+ */
+export function folderLabel(path: string | undefined): string {
+  const text = (path ?? "").trim();
+  if (!text) return "";
+  const parts = text.split(/[\\/]+/u).filter(Boolean);
+  return parts.at(-1) ?? "";
+}
+
+/**
  * Desktop mode pins the backend to the folder it was launched with, so the
  * project list cannot switch anything there: the folder picker (same path as
  * 文件 → 打开项目文件夹) is the only honest control. The browser workbench keeps
@@ -35,19 +47,25 @@ export function ProjectSwitcher({ store }: { store: WorkbenchStore }): React.Rea
   const bridge = typeof window === "undefined" ? undefined : window.lubanDesktop;
   const [error, setError] = useState("");
   const path = store.node?.projects?.[store.project];
+  // With a folder already open the button is a label as much as a control, so
+  // it names the project instead of repeating the instruction on every window.
+  const opened = folderLabel(path) || folderLabel(store.project);
   if (bridge?.openWorkspace) {
     return (
       <div className="desktop-project">
         <label htmlFor="desktop-open-workspace">项目</label>
         <button
           id="desktop-open-workspace"
-          className="desktop-open-workspace"
-          title="选择文件夹；桌面端会问你在新窗口打开还是替换当前窗口的项目"
+          className={`desktop-open-workspace ${opened ? "opened" : ""}`}
+          aria-label={opened ? `当前项目 ${opened}，点击更换文件夹` : "打开文件夹"}
+          title={opened
+            ? `${path ?? store.project} · 点击更换文件夹（Ctrl+O）`
+            : "选择文件夹；桌面端会问你在新窗口打开还是替换当前窗口的项目"}
           onClick={() => {
             void bridge.openWorkspace!().then(reply => { if (!reply.canceled) setError(""); })
               .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
           }}
-        >打开文件夹…<small>Ctrl+O</small></button>
+        ><span className="desktop-open-workspace-name">{opened || "打开文件夹…"}</span><small>Ctrl+O</small></button>
         {bridge.openWorkspaceWindow && (
           <button
             className="desktop-open-workspace"

@@ -474,7 +474,12 @@ function RunList({ task, bridge }: { task: CreatorTask; bridge: CreatorBridge })
   );
 }
 
-/** The 计划 drawer: every background job, its schedule, its next fire, its history. */
+/**
+ * The 交互记录 drawer: every sentence Creator was given, its schedule, its next
+ * fire and its history. It was called 计划, but a plain question ("你叫什么
+ * 名字") is booked like any other instruction, so "plan" promised a form the
+ * person never filled and hid the fact that this is their record of contact.
+ */
 function Plans({ tasks, now, bridge, onClose, onCancel }: {
   tasks: CreatorTask[]; now: number; bridge: CreatorBridge; onClose: () => void; onCancel: (id: string) => void;
 }): React.ReactElement {
@@ -520,7 +525,7 @@ function Plans({ tasks, now, bridge, onClose, onCancel }: {
       <aside className="drawer">
         <header>
           <div>
-            <h2>全部计划</h2>
+            <h2>交互记录</h2>
             <p>{tasks.length} 条 · 循环 {repeating.length} · 一次 {once.length} · 正在跑 {running} · 待触发 {upcoming}</p>
           </div>
           <button className="drawer-close" onClick={onClose}>✕</button>
@@ -797,7 +802,7 @@ function App(): React.ReactElement {
             <ClockGlyph />任务记录{count.active ? <b>{count.active}</b> : null}
           </button>
           <button data-view="plans" className={plans ? "on" : ""} onClick={() => setPlans(value => !value)}>
-            <ListGlyph />计划{tasks.length ? <b>{tasks.length}</b> : null}
+            <ListGlyph />交互记录{tasks.length ? <b>{tasks.length}</b> : null}
           </button>
           <button data-view="policy" onClick={() => { void bridge.openPolicy(); }}>
             <FileGlyph />权限策略
@@ -897,7 +902,7 @@ function App(): React.ReactElement {
                 <FolderGlyph />{workspace ? workspace.split("/").slice(-1)[0] : "选择工作空间"}<i>⌄</i>
               </button>
               <button onClick={() => { void bridge.openPolicy(); }}><ShieldGlyph />默认权限<i>⌄</i></button>
-              <button onClick={() => setPlans(true)}><ClockGlyph />计划 {tasks.length}</button>
+              <button onClick={() => setPlans(true)}><ClockGlyph />交互记录 {tasks.length}</button>
             </div>
 
             {error ? <p className="error">{error}</p> : null}

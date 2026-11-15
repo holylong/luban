@@ -327,12 +327,12 @@ else {
             };
           })()`);
           require("node:fs").writeFileSync(smokePath.replace(/\.png$/u, ".rects.json"), JSON.stringify(rects, null, 2));
-          // The 计划 drawer is the "did it get booked" surface; smoke it on request so
+          // The 交互记录 drawer is the "did it get booked" surface; smoke it on request so
           // its schedule rows and run history are proven to render, not just to exist.
           if (process.env.CREATOR_SMOKE_PLANS === "1") {
             const plansPath = smokePath.replace(/\.png$/u, "-plans.png");
             await window.webContents.executeJavaScript(`(() => {
-              const button = [...document.querySelectorAll(".side-nav button")].find(node => node.textContent.includes("计划"));
+              const button = [...document.querySelectorAll(".side-nav button")].find(node => node.textContent.includes("交互记录"));
               if (button) button.click();
             })()`);
             await new Promise(resolve => setTimeout(resolve, 400));

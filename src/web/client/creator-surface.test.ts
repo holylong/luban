@@ -34,6 +34,19 @@ describe("Creator wording", () => {
     expect(source).toContain("执行器未启动");
   });
 
+  it("names the drawer 交互记录, because a plain question is booked too", () => {
+    // Every sentence is a queue entry, scheduled or not, so 「计划」 promised a
+    // form nobody filled in. The drawer is the record of what was asked.
+    const visible = source.split("\n").filter(line => !/^\s*(\*|\/\/|\/\*)/u.test(line)).join("\n");
+    expect(visible).toContain("交互记录");
+    expect(visible).not.toContain("全部计划");
+    expect(visible).not.toMatch(/>\s*计划\s*\{/u);
+    expect(visible).not.toContain("计划 {tasks.length}");
+    // The dropdown that really is a schedule keeps its own words.
+    expect(visible).toContain("循环任务");
+    expect(visible).toContain("一次任务");
+  });
+
   it("keeps stable data-view hooks so rewording cannot break the smoke run", () => {
     for (const view of ["drive", "queue", "plans", "policy", "memory"]) {
       expect(source).toContain(`data-view="${view}"`);

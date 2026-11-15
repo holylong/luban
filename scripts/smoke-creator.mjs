@@ -82,7 +82,7 @@ await noteRun(home, workspace, "整理了文档里的过期截图。", startedAt
 // relaunch, so the window is handed a real one instead of an empty default.
 writeFileSync(join(home, "creator.json"), JSON.stringify({ computer: true, allowed: ["computer", "bash"] }, null, 2));
 
-// Run history for the finished job: the 计划 drawer reads these rows, so seeding
+// Run history for the finished job: the 交互记录 drawer reads these rows, so seeding
 // them is what proves the drawer lists executions instead of only the last one.
 const runs = [
   { from: now - 3 * 3600_000, to: now - 3 * 3600_000 + 240_000, status: "completed", nextAt: now - 2 * 3600_000,
@@ -134,7 +134,7 @@ for (const needle of expected) {
     process.exit(1);
   }
 }
-// The 计划 drawer must list every job with its schedule, next fire and history.
+// The 交互记录 drawer must list every job with its schedule, next fire and history.
 // The queue tab's composer is one sentence box: no 现在/定时/每隔 form, no
 // locally guessed schedule. Anything else means a regex came back to life.
 const queueJson = shot.replace(/\.png$/u, "-queue.json");
@@ -214,18 +214,18 @@ const plansShot = shot.replace(/\.png$/u, "-plans.png");
 const plans = JSON.parse(readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8"));
 const drawerText = readFileSync(plansShot.replace(/\.png$/u, ".rects.json"), "utf8");
 const haystack = `${plans.title} ${drawerText}`;
-for (const needle of ["全部计划", "循环任务", "一次任务", "每天 23:00", "每 6 小时", "一次 · ", "次执行"]) {
+for (const needle of ["交互记录", "循环任务", "一次任务", "每天 23:00", "每 6 小时", "一次 · ", "次执行"]) {
   if (!haystack.includes(needle)) {
-    console.error(`计划 抽屉里没有「${needle}」：\n${JSON.stringify(plans, null, 2).slice(0, 900)}`);
+    console.error(`交互记录 抽屉里没有「${needle}」：\n${JSON.stringify(plans, null, 2).slice(0, 900)}`);
     process.exit(1);
   }
 }
 if (!plans.runs.length) {
-  console.error(`计划 抽屉没有列出执行记录：\n${JSON.stringify(plans, null, 2).slice(0, 700)}`);
+  console.error(`交互记录 抽屉没有列出执行记录：\n${JSON.stringify(plans, null, 2).slice(0, 700)}`);
   process.exit(1);
 }
 if (!plans.drawer || plans.drawer.w < 320) {
-  console.error(`计划 抽屉没有展开：${JSON.stringify(plans.drawer)}`);
+  console.error(`交互记录 抽屉没有展开：${JSON.stringify(plans.drawer)}`);
   process.exit(1);
 }
 console.log(`plan drawer ok: ${plansShot} (${plans.plans.length} plans, ${plans.runs.length} runs, w=${plans.drawer.w})`);

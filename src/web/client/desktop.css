@@ -72,7 +72,11 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-project select { flex: 1 1 120px; width: auto; min-width: 0; padding: 4px 6px; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; }
 .desktop-open-workspace { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 7px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 6px; font-size: 12px; cursor: pointer; }
 .desktop-open-workspace:hover { border-color: var(--blue); }
-.desktop-open-workspace small { color: var(--dim); font-size: 10px; }
+.desktop-open-workspace small { flex: none; color: var(--dim); font-size: 10px; }
+/* An opened project shows its folder name, which can be long: keep the
+   Ctrl+O hint in place and let the name ellipsize instead of pushing it out. */
+.desktop-open-workspace .desktop-open-workspace-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-open-workspace.opened .desktop-open-workspace-name { color: var(--fg); font-weight: 600; }
 .desktop-workspace-path { overflow: hidden; color: var(--dim); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .desktop-explorer-tabs { display: flex; padding: 0 8px; border-bottom: 1px solid var(--line); }
 .desktop-explorer-tabs button { flex: 1; padding: 6px 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; }
