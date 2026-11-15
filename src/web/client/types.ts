@@ -152,6 +152,7 @@ export interface DiffPayload {
 }
 
 export interface SessionSummary {
+  running?: boolean;
   id: string;
   title: string;
   project: string;

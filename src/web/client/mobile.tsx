@@ -1,5 +1,6 @@
 import type { RelayDeviceStatus } from "./mobile-device";
 import { MobileDeviceCard } from "./mobile-device-card";
+import { MobileWorkspaces } from "./mobile-workspaces";
 import { MobileCollapse } from "./mobile-collapse";
 import { continuationForPrompt, type Continuation } from "./mobile-continue";
 import { pickDefaultSession } from "./mobile-session-pick";
@@ -449,20 +450,25 @@ export function MobileApp(): React.ReactElement {
       : "电脑上已有目录的绝对路径（例如 /home/me/project）");
     const value = answer?.trim();
     if (!value) return;
+    const requestNode = localStorage.getItem(NODE_KEY);
     setWorkspaceBusy(true);
     try {
       const reply = await api.addProject(kind === "new" ? { name: value } : { path: value });
       await refresh();
+      if (localStorage.getItem(NODE_KEY) !== requestNode) return;
       selectedRef.current = undefined;
       setSelectedId(undefined);
       setJob(undefined);
       setEvents([]);
       setContinueSession(undefined);
+      setSentSession(undefined);
       setSessionDetail(undefined);
       setSessionError(undefined);
       setSessionListError(undefined);
       setSessions([]);
       setProject(reply.project);
+      projectRef.current = reply.project;
+      sessionPinned.current = true;
       localStorage.removeItem(JOB_KEY);
       setTab("live");
       notify(`工作区已${reply.created ? "创建" : "添加"}：${reply.project}`);
@@ -476,12 +482,12 @@ export function MobileApp(): React.ReactElement {
     const requestNode = localStorage.getItem(NODE_KEY);
     try {
       const list = await api.sessions(project || node.project || "");
-      if (localStorage.getItem(NODE_KEY) === requestNode) {
+      if (localStorage.getItem(NODE_KEY) === requestNode && projectRef.current === project) {
         setSessions(list.filter(item => item.messages > 0));
         setSessionListError(undefined);
       }
     } catch (error) {
-      if (localStorage.getItem(NODE_KEY) !== requestNode) return;
+      if (localStorage.getItem(NODE_KEY) !== requestNode || projectRef.current !== project) return;
       setSessionListError(error instanceof Error ? error.message : String(error));
     }
   }, [ready, node, project]);
@@ -874,6 +880,10 @@ export function MobileApp(): React.ReactElement {
     setSentSession(undefined);
     sessionPinned.current = false;
     setProject("");
+    projectRef.current = "";
+    setSessionDetail(undefined);
+    setSessionError(undefined);
+    setSessionListError(undefined);
     void refresh();
   }, [refresh]);
 
@@ -929,11 +939,10 @@ export function MobileApp(): React.ReactElement {
     localStorage.removeItem(JOB_KEY);
     setSentSession(undefined);
     setTab("live");
-    if (next) setProject(next.project);
+    if (next) { projectRef.current = next.project; setProject(next.project); }
   };
 
   const dotClass = !connected ? "offline" : running ? "working" : live ? "online" : "offline";
-  const nodeLabel = node ? `${node.name}${node.model ? ` · ${node.model}` : ""}` : connectionError ? "未连接" : "连接中";
   const activeJobs = jobs.filter(item => ACTIVE_STATUS.has(item.status)).length;
   const account = auth.state === "account" ? auth.account : undefined;
   const modelCatalog = node?.models ?? [];
@@ -952,10 +961,10 @@ export function MobileApp(): React.ReactElement {
     <div className={`m-app ${tab === "live" ? "m-app-compose" : ""}`}>
       {/* One line of orientation, nothing more: the transcript is the page. */}
       <header className="m-head">
-        <button type="button" className="m-head-bar" onClick={() => setTab("settings")} title={nodeLabel}>
+        <button type="button" className="m-head-bar" onClick={() => setTab("devices")} title="切换工作区或会话">
           <span className={`m-dot ${dotClass}`} />
           <span className="m-head-name">{node?.name || (connectionError ? "未连接" : "连接中")}</span>
-          {node?.model && <span className="m-head-model">{node.model}</span>}
+          {project && <span className="m-head-model">{project} · {continueSession?.title || continuation?.title || "新会话"}</span>}
           {activeJobs > 0 && <span className="m-chip working">{activeJobs} 个进行中</span>}
         </button>
       </header>
@@ -979,7 +988,7 @@ export function MobileApp(): React.ReactElement {
                 <div className="m-banner m-session-bar">
                   <span className="m-session-tag">接续</span>
                   <span className="m-session-title" title={continueSession.title}>{continueSession.title}</span>
-                  <button className="m-session-new" onClick={() => setContinueSession(undefined)}>＋ 新会话</button>
+                  <button className="m-session-new" onClick={() => chooseSession(undefined)}>＋ 新会话</button>
                 </div>
               )}
               {pendingApprovals.length + pendingQuestions.length > 0 && (
@@ -1062,8 +1071,13 @@ export function MobileApp(): React.ReactElement {
 
           {tab === "devices" && (
             <>
+              <p className="m-note">选择电脑下的工作区，点会话直接继续；也可以在工作区里新建会话。</p>
               {!relayMode && (
-                <div className="m-empty"><h2>直连模式</h2><p>当前页面直接连接本机 luban；登录中继账户后，这里会列出账户下的所有电脑。</p></div>
+                <div className="m-card"><h3>{node?.name || "当前电脑"}</h3>
+                  <MobileWorkspaces online={connected} selectedProject={project} selectedSession={continueSession?.id}
+                    onOpen={(target, session) => { chooseSession(session); projectRef.current = target; setProject(target); }}
+                    onAdd={kind => void addWorkspace(kind)} />
+                </div>
               )}
               {relayMode && relayNodes.length === 0 && (
                 <div className="m-empty"><h2>还没有 luban 实例</h2><p>在「设置 → 添加电脑」生成设备令牌，然后在电脑上启动 luban web 并接入中继。</p></div>
@@ -1072,7 +1086,17 @@ export function MobileApp(): React.ReactElement {
                 <MobileDeviceCard key={device.id} device={device} current={device.id === scope}
                   onOpen={() => openDevice(device.id)}
                   onJobs={() => { chooseNode(device.id); setTab("jobs"); }}
-                  onRemove={() => void removeDevice(device.id)} />
+                  onRemove={() => void removeDevice(device.id)}>
+                  <MobileWorkspaces nodeId={device.id} online={device.online}
+                    selectedProject={device.id === scope ? project : undefined}
+                    selectedSession={device.id === scope ? continueSession?.id : undefined}
+                    onOpen={(target, session) => {
+                      if (device.id !== scope) chooseNode(device.id);
+                      chooseSession(session);
+                      projectRef.current = target;
+                      setProject(target);
+                    }} onAdd={kind => { if (device.id !== scope) chooseNode(device.id); void addWorkspace(kind); }} />
+                </MobileDeviceCard>
               ))}
             </>
           )}

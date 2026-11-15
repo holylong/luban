@@ -18,9 +18,10 @@ export interface DeviceCardNode {
  * dispatched task) and sessions the terminal is running right now. Only the
  * first used to be visible, so a busy terminal reported "空闲".
  */
-export function MobileDeviceCard({ device, current, onOpen, onJobs, onRemove }: {
+export function MobileDeviceCard({ device, current, onOpen, onJobs, onRemove, children }: {
   device: DeviceCardNode;
   current: boolean;
+  children?: React.ReactNode;
   onOpen(): void;
   onJobs(): void;
   onRemove(): void;
@@ -59,9 +60,10 @@ export function MobileDeviceCard({ device, current, onOpen, onJobs, onRemove }: 
       </div>
     </> : running.length === 0 ? <div className="m-note">{device.online ? "空闲，等待派活" : "离线，状态已停止更新"}</div> : null}
     <div className="m-row" style={{ marginTop: 10, marginBottom: 0 }}>
-      <button className="m-btn primary" disabled={!device.online} onClick={onOpen}>打开并派活</button>
+      {!children && <button className="m-btn primary" disabled={!device.online} onClick={onOpen}>打开并派活</button>}
       <button className="m-btn" onClick={onJobs}>查看任务</button>
       {!device.online && <button className="m-btn" onClick={onRemove}>移除</button>}
     </div>
+    {children}
   </div>;
 }

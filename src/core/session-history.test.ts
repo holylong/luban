@@ -20,6 +20,26 @@ function record(store: SessionStore, messages: ChatMessage[] = []): SessionRecor
 }
 
 describe("SessionHistory", () => {
+  it("deletes mirrored rows and metadata with mirroring disabled and resets cursors", async () => {
+    const directory = await home();
+    const writer = SessionHistory.open(settings(), directory)!;
+    const store = new SessionStore(directory, writer);
+    const session = record(store, [{ role: "user", content: "needle" }]);
+    await store.save(session);
+    writer.delete(session.id, "other");
+    expect(writer.count(session.id)).toBe(1);
+    writer.delete(session.id, session.project);
+    expect(writer.sessions()).toEqual([]);
+    expect(writer.search("needle")).toEqual([]);
+    expect(writer.append(session)).toBe(1);
+    writer.close();
+    const cleanup = SessionHistory.openForDeletion(settings({ enabled: false }), directory)!;
+    await new SessionStore(directory, cleanup).delete(session.id, session.project);
+    expect(cleanup.count(session.id)).toBe(0);
+    expect(cleanup.sessions()).toEqual([]);
+    cleanup.close();
+    await rm(directory, { recursive: true, force: true });
+  });
   it("reports an unavailable database through the TUI-aware console", async () => {
     const directory = await home();
     const blocked = join(directory, "file");

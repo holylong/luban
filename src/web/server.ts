@@ -475,12 +475,13 @@ export class LubanWebServer {
       const project = url.searchParams.get("project") || this.config.project;
       const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 60)));
       const store = new SessionStore(this.config.home, sharedHistory(this.config.history, this.config.home));
-      const overlay = new Map((await store.list(project)).map(session => [session.id, session]));
+      const includeEmpty = url.searchParams.get("includeEmpty") === "1";
+      const overlay = new Map((await store.list(project, undefined, includeEmpty)).map(session => [session.id, session]));
       for (const live of liveSessions.list(this.config.home, project)) {
         const saved = overlay.get(live.session.id);
         if (live.running || !saved || live.session.updatedAt >= saved.updatedAt) overlay.set(live.session.id, live.session);
       }
-      const sessions = [...overlay.values()].filter(hasConversation).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit).map(session => ({
+      const sessions = [...overlay.values()].filter(session => includeEmpty || hasConversation(session)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit).map(session => ({
         id: session.id,
         title: session.title,
         project: session.project,
@@ -492,6 +493,7 @@ export class LubanWebServer {
         // The system prompt is harness plumbing, not a message the user sent.
         messages: session.messages.filter(message => message.role !== "system").length,
         edits: (session.edits || []).length,
+        running: liveSessions.get(this.config.home, project, session.id)?.running ?? false,
       }));
       return json(res, sessions);
     }
@@ -561,6 +563,34 @@ export class LubanWebServer {
 
   private async post(url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await readBody(req);
+    const deleteSessionMatch = /^\/api\/sessions\/([^/]+)\/delete$/u.exec(url.pathname);
+    if (deleteSessionMatch) {
+      const project = url.searchParams.get("project") || this.config.project;
+      const id = decodeURIComponent(deleteSessionMatch[1]!);
+      const assertInactive = async () => {
+        // An older queued/paused job still owns its session; never truncate.
+        const jobs = await this.mesh.jobs(Number.POSITIVE_INFINITY, project);
+        if (jobs.some(job => job.session_id === id && ["queued", "pending", "working", "paused"].includes(job.status))) {
+          throw new HttpError(409, "session belongs to an active or paused job");
+        }
+        // Recheck live activity after the asynchronous job scan.
+        if (liveSessions.get(this.config.home, project, id)?.running) throw new HttpError(409, "session is running");
+      };
+      await assertInactive();
+      const shared = sharedHistory(this.config.history, this.config.home);
+      const history = shared || SessionHistory.openForDeletion(this.config.history, this.config.home);
+      try {
+        const store = new SessionStore(this.config.home, history);
+        if (!await store.delete(id, project, assertInactive)) {
+          // Unsaved live drafts have no JSON record yet.
+          if (!liveSessions.get(this.config.home, project, id)) throw new HttpError(404, "unknown session");
+          await assertInactive();
+          history?.delete(id, project);
+        }
+        liveSessions.remove(this.config.home, project, id);
+        return json(res, { ok: true, id });
+      } finally { if (history && !shared) history.close(); }
+    }
     if (url.pathname === "/api/theme") {
       const theme = typeof body.id === "string" ? findTheme(body.id) : undefined;
       if (!theme) throw new HttpError(400, "unknown theme");

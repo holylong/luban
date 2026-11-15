@@ -101,6 +101,27 @@ export class SessionStore {
     return join(this.root, safeName(record.project), `${safeName(record.id)}.json`);
   }
 
+  /** Exact project-scoped removal, serialized with saves across processes. */
+  async delete(id: string, project: string, guard: () => Promise<void> = async () => {}): Promise<boolean> {
+    if (!id || id === "." || id === ".." || safeName(id) !== id) return false;
+    const path = this.path({ id, project });
+    await SessionStore.writes.get(path)?.catch(() => undefined);
+    try { await stat(join(this.root, safeName(project))); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    return withSessionLock(path, async () => {
+      const current = await this.read(path);
+      if (!current || current.id !== id || current.project !== project) return false;
+      await guard();
+      this.history?.delete(id, project);
+      await rm(path);
+      // Loaded records retain a non-null fingerprint, so saving them now
+      // conflicts with the missing JSON instead of resurrecting the session.
+      return true;
+    });
+  }
+
   async save(record: SessionRecord): Promise<void> {
     const edits = new Map((record.edits || []).map(edit => [edit.id, edit]));
     for (const message of record.messages) if (message.editPreview && message.tool_call_id) {

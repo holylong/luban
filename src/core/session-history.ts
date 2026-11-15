@@ -174,6 +174,32 @@ export class SessionHistory {
     }
   }
 
+  /** Open an existing mirror for cleanup even when new mirroring is disabled. */
+  static openForDeletion(settings: HistorySettings, home: string): SessionHistory | undefined {
+    if (!existsSync(join(settings.directory || join(home, "history"), "history.sqlite"))) return undefined;
+    const history = SessionHistory.open({ ...settings, enabled: true }, home);
+    if (!history) throw new Error("history database unavailable for session deletion");
+    return history;
+  }
+
+  /** Remove metadata and messages atomically and invalidate the append cursor. */
+  delete(sessionId: string, project: string): void {
+    if (this.closed) throw new Error("history database is closed");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare("SELECT project FROM sessions WHERE id = ?").get(sessionId);
+      if (row && row.project === project) {
+        this.dropSession.run(sessionId);
+        this.db.prepare("DELETE FROM sessions WHERE id = ? AND project = ?").run(sessionId, project);
+      }
+      this.db.exec("COMMIT");
+      this.windows.delete(sessionId);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   /**
    * Mirror the messages appended since the previous call for this session.
    *

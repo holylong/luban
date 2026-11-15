@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MeshRuntime } from "../core/mesh/runtime.js";
 import { AgentRunner } from "../core/agent.js";
 import { configureRemoteJobs } from "../core/mesh/agent-runner.js";
@@ -45,6 +45,63 @@ async function waitForJob(base: string, id: string, status: string): Promise<Rec
 }
 
 describe("LubanWebServer", () => {
+  it("deletes exact scoped sessions, protects jobs and races, and inventories drafts on request", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-web-delete-"));
+    const config = testConfig(root);
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh);
+    const store = new SessionStore(config.home);
+    const session = store.create(config.project, config.workspace, "agent", config.model.id, [{ role: "user", content: "hello" }]);
+    const draft = store.create(config.project, config.workspace, "agent", config.model.id, [{ role: "system", content: "harness" }]);
+    draft.inputHistory = ["/unfinished"];
+    await store.save(session);
+    await store.save(draft);
+    liveSessions.publish(config.home, session);
+    const base = await web.start();
+    const remove = (id = session.id, project = config.project) => jsonRequest(`${base}api/sessions/${encodeURIComponent(id)}/delete?project=${encodeURIComponent(project)}`, { method: "POST" });
+    try {
+      expect(await (await fetch(`${base}api/sessions`)).json()).toMatchObject([{ id: session.id, running: false }]);
+      expect(await (await fetch(`${base}api/sessions?includeEmpty=1`)).json()).toHaveLength(2);
+      expect((await remove(session.id.slice(0, -1))).status).toBe(404);
+      expect((await remove(session.id, "other")).status).toBe(404);
+      expect((await remove(`../${session.id}`)).status).toBe(404);
+      liveSessions.start(config.home, session);
+      expect(await (await fetch(`${base}api/sessions`)).json()).toMatchObject([{ id: session.id, running: true }]);
+      expect((await remove()).status).toBe(409);
+      liveSessions.finish(config.home, session);
+      const job = await mesh.store.create({ source: "test", target: "test", instruction: "continue", project_id: config.project, session_id: session.id });
+      for (const status of ["queued", "pending", "working", "paused"] as const) {
+        await mesh.store.update(job.id, { status });
+        expect((await remove()).status).toBe(409);
+      }
+      await mesh.store.update(job.id, { status: "done" });
+      const scan = mesh.jobs.bind(mesh);
+      let scans = 0;
+      const spy = vi.spyOn(mesh, "jobs").mockImplementation(async (limit, project) => {
+        const jobs = await scan(limit, project);
+        if (++scans === 2) liveSessions.start(config.home, session);
+        return jobs;
+      });
+      expect((await remove()).status).toBe(409);
+      spy.mockRestore();
+      liveSessions.finish(config.home, session);
+      expect((await remove()).body).toMatchObject({ ok: true, id: session.id });
+      expect(liveSessions.get(config.home, session.project, session.id)).toBeUndefined();
+      expect((await jsonRequest(`${base}api/sessions/${session.id}`)).status).toBe(404);
+      expect((await remove()).status).toBe(404);
+      await expect(store.save(session)).rejects.toMatchObject({ name: "SessionConflictError" });
+      expect((await remove(draft.id)).status).toBe(200);
+      // A live-only draft is also removable without a persisted JSON record.
+      const unsaved = store.create(config.project, config.workspace, "agent", config.model.id, []);
+      liveSessions.publish(config.home, unsaved);
+      expect((await remove(unsaved.id)).status).toBe(200);
+    } finally {
+      vi.restoreAllMocks();
+      liveSessions.remove(config.home, session.project, session.id);
+      await web.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("overlays unsaved terminal history and events, finishes cleanly, and guards running continuations", async () => {
     const root = await mkdtemp(join(tmpdir(), "luban-web-live-"));
     const config = testConfig(root);

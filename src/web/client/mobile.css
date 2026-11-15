@@ -658,6 +658,14 @@ html[data-shell="android"] .m-head-bar { padding-right: 46px; }
 }
 
 /* Device list ---------------------------------------------------------- */
+.m-session-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.m-session-row .m-pick { flex: 1; min-width: 0; }
+.m-workspaces { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; min-width: 0; }
+.m-workspaces-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.m-workspaces-heading strong { min-width: 0; overflow-wrap: anywhere; }
+.m-workspace { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.m-workspace .m-pick { width: 100%; min-height: 48px; text-align: left; }
+.m-workspace .m-pick-title { overflow-wrap: anywhere; white-space: normal; }
 .m-device { transition: border-color .15s ease, background .15s ease; }
 .m-device.active { border-color: var(--device-line); background: linear-gradient(180deg, var(--device-bg), var(--panel)); }
 .m-device-row { display: flex; align-items: center; gap: 8px; min-width: 0; }

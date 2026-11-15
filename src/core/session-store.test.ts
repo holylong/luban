@@ -6,6 +6,23 @@ import { SessionStore } from "./session-store.js";
 import type { ChatMessage } from "./types.js";
 
 describe("SessionStore", () => {
+  it("deletes exact scoped ids and conflicts with old loaded saves", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-delete-"));
+    const store = new SessionStore(home);
+    const record = store.create("demo", home, "agent", "model", [{ role: "user", content: "keep" }]);
+    await store.save(record);
+    const loaded = (await store.load(record.id, "demo"))!;
+    expect(await store.delete(record.id.slice(0, -1), "demo")).toBe(false);
+    expect(await store.delete(record.id, "other")).toBe(false);
+    expect(await store.delete(`../${record.id}`, "demo")).toBe(false);
+    await expect(store.delete(record.id, "demo", async () => { throw new Error("busy"); })).rejects.toThrow("busy");
+    expect(await store.load(record.id, "demo")).toBeDefined();
+    expect(await store.delete(record.id, "demo")).toBe(true);
+    await expect(store.save(loaded)).rejects.toMatchObject({ name: "SessionConflictError" });
+    record.messages.push({ role: "user", content: "late update" });
+    await expect(store.save(record)).rejects.toMatchObject({ name: "SessionConflictError" });
+    expect(await store.list("demo", undefined, true)).toEqual([]);
+  });
   it("re-derives a title that came from the opening user line but keeps a model-written one", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-title-"));
     const store = new SessionStore(home);
