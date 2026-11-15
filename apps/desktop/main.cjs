@@ -687,6 +687,14 @@ function ensureWindow(session) {
     webPreferences: { partition: `luban-workspace-${session.key}`, nodeIntegration: false, contextIsolation: true, sandbox: true, plugins: true, preload: join(__dirname, "preload.cjs") },
   });
   session.window = win;
+  // Protocol handlers are session-scoped. These windows deliberately use private
+  // partitions, so registering on Electron's default protocol does not reach
+  // PDF embeds (or any other workspace media) in this window.
+  win.webContents.session.protocol.handle(MEDIA_SCHEME, request => {
+    if (!session.workspaceService) return new Response("工作区尚未就绪", { status: 503 });
+    try { return mediaResponse(session.workspaceService, request); }
+    catch (error) { return new Response(error instanceof Error ? error.message : String(error), { status: 500 }); }
+  });
   // Keep credentials in the main process, independent of expiring/lost cookies.
   // Read current access per request so project switches rotate the credential.
   win.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {

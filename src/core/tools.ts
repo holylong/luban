@@ -763,7 +763,7 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
       // 电脑操控 session in the desktop app, and every action re-checks the abort
       // flag so ⌘. on the edge glow stops a running loop.
       name: "computer",
-      description: "Control the user's desktop the way a person does: look at the screen, then click, type and scroll. Start with action=windows (front app, every on-screen window with its bounds, and the screen size in points), then screenshot, then act. Coordinates are screen points, not screenshot pixels: a Retina screenshot is 2x its point size (screenshot returns both), and window bounds from windows are already in points. Prefer this tool over bash/osascript for anything on screen. Requires the user to switch on 「电脑操控」 (the screen edge glows while it is on); the call fails with an explanation otherwise.",
+      description: "Control the user's desktop the way a person does: look at the screen, then click, type and scroll. Start with action=windows (front app, every on-screen window with its bounds, and the screen size in points), then screenshot, then act. Coordinates are screen points, not screenshot pixels: a Retina screenshot is 2x its point size (screenshot returns both), and window bounds from windows are already in points. Prefer this tool over bash/osascript for anything on screen. Requires the user to enable 「电脑操控」 in luban (top-right button in Desktop/Web, or /computer on in terminal); the call fails with an explanation otherwise.",
       risk: "execute",
       parameters: schema({
         action: {

@@ -39,6 +39,13 @@ describe("agent column layout", () => {
     expect(desktop).toContain(".desktop-agent .banner { padding: 6px 0; }");
   });
 
+  it("keeps the computer-control switch visible while compacting the status pills", () => {
+    // The desktop agent column is narrow, so it hides status labels but must not
+    // hide the only UI that can authorize computer control for this backend.
+    expect(desktop).toMatch(/\.desktop-agent \.top \.pills > :not\(\.computer-toggle\)\s*\{\s*display:\s*none;\s*\}/u);
+    expect(desktop).not.toMatch(/\.desktop-agent \.top \.pills\s*\{\s*display:\s*none;/u);
+  });
+
   it("scrolls a table instead of collapsing its cells", () => {
     expect(markdown).toContain('<div className="md-table"');
     expect(css).toMatch(/\.md-table\s*\{[^}]*overflow-x:\s*auto/u);

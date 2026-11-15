@@ -62,7 +62,7 @@ const calls = async (): Promise<Array<Record<string, unknown>>> => {
 describe("computer control", { timeout: 30_000 }, () => {
   it("refuses every action until a human opens the session", async () => {
     const control = new ComputerControl({ home: root, workspace: root });
-    await expect(control.act("click", { x: 10, y: 20 })).rejects.toThrow(/电脑操控未开启/u);
+    await expect(control.act("click", { x: 10, y: 20 })).rejects.toThrow("电脑操控未开启：请先在 luban 界面打开「电脑操控」开关；终端 TUI 可运行 /computer on，然后重试。");
     expect(await calls()).toEqual([]);
     await control.begin();
     await control.act("click", { x: 10, y: 20 });

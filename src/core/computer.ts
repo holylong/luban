@@ -386,7 +386,7 @@ export class ComputerControl {
       throw new Error("用户已中止电脑操控（⌘.）。请让用户重新开启开关后再操作。");
     }
     if (!this.active) {
-      throw new Error("电脑操控未开启：用户需要在桌面端 Agent 栏打开「电脑操控」开关（会亮起屏幕边缘燃弧），再重试。");
+      throw new Error("电脑操控未开启：请先在 luban 界面打开「电脑操控」开关；终端 TUI 可运行 /computer on，然后重试。");
     }
   }
 

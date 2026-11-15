@@ -43,7 +43,10 @@ function createElectron() {
       this.mainFrame = { url: "about:blank" };
       this.url = "about:blank";
       this.sent = [];
-      this.session = { webRequest: { onBeforeSendHeaders: handler => { this.beforeHeaders = handler; } } };
+      this.session = {
+        protocol: { handle: (_scheme, handler) => { this.mediaHandler = handler; } },
+        webRequest: { onBeforeSendHeaders: handler => { this.beforeHeaders = handler; } },
+      };
     }
     getURL() { return this.url; }
     setWindowOpenHandler() {}
@@ -319,7 +322,10 @@ async function checkWindowAuth(win) {
   console.log("选择取消后窗口数:", workbench().length);
 
   // The shared media scheme must resolve to the window that named its port.
-  const readMedia = async win => (await smoke.protocol.handler(new Request(`luban-media://workspace/clip.mp4?port=${portOf(win)}`))).text();
+  const readMedia = async win => {
+    if (!win.webContents.mediaHandler) fail("private window session has no media protocol handler (PDF would be blank)");
+    return (await win.webContents.mediaHandler(new Request(`luban-media://workspace/clip.mp4?port=${portOf(win)}`))).text();
+  };
   const mediaA = await readMedia(first);
   const mediaB = await readMedia(second);
   if (mediaA !== "A" || mediaB !== "B") fail(`media served the wrong workspace: ${mediaA}/${mediaB}`);
