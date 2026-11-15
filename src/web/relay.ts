@@ -16,6 +16,7 @@ import {
   createFrameDecoder, filterForwardedHeaders, FRAME_CHUNK, FRAME_END, FRAME_FAIL, FRAME_HEAD,
   parseJson, type EndPayload, type FailPayload, type ResponseHead, type TunnelMessage,
 } from "./tunnel-frames.js";
+import { durableProjects } from "../core/project-registry.js";
 import { VERSION } from "../version.js";
 
 /**
@@ -588,7 +589,8 @@ export class LubanRelayServer {
       name: node?.name || device?.name || "luban",
       version: node?.version || "",
       workspace: node?.workspace || device?.workspace || "",
-      projects: node?.projects || device?.projects || {},
+      // A stored snapshot can predate the scratch filter; never replay it.
+      projects: durableProjects(node?.projects || device?.projects || {}),
       online: Boolean(node && Date.now() - node.lastSeenAt < NODE_OFFLINE_MS),
       last_seen: lastSeen / 1000,
       connected_at: (node?.connectedAt || device?.created_at || 0) / 1000,
@@ -656,7 +658,7 @@ export class LubanRelayServer {
     const id = `n-${randomUUID().replaceAll("-", "").slice(0, 10)}`;
     const name = String(body.name || "luban");
     const workspace = String(body.workspace || "");
-    const projects = record(body.projects) as Record<string, string>;
+    const projects = durableProjects(record(body.projects) as Record<string, string>);
     // One live connection per machine: a reconnecting node must replace its old
     // registration instead of leaving a ghost that still claims the device.
     if (account) {

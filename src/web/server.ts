@@ -10,6 +10,7 @@ import { liveSessions } from "../core/live-session.js";
 import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
 import { savePreferredModel, saveProject, saveTheme } from "../core/config.js";
+import { isTransientWorkspace, visibleProjects } from "../core/project-registry.js";
 import { THEMES, findTheme, resolveTheme } from "../ui/theme.js";
 import { consumeCodexReset, formatCodexResetOutcome, readCodexRateLimits } from "../core/codex-account.js";
 import { supportedReasoningEfforts } from "../core/model-controls.js";
@@ -361,7 +362,13 @@ export class LubanWebServer {
         port: this.config.mesh.port,
         udp_port: this.config.mesh.udpPort,
         capabilities: this.config.mesh.capabilities,
-        projects: this.mesh.projectMap(),
+        // Only spaces a phone can actually open: a dozen `luban-term-*` probe
+        // leftovers read as "my workspaces are a mess", and a directory that is
+        // gone (another machine's config, a deleted clone) cannot be opened.
+        projects: visibleProjects(this.mesh.projectMap(), {
+          keep: this.config.project, workspace: this.config.workspace,
+          allowTransient: process.env.LUBAN_ALLOW_TEMP_WORKSPACES === "1",
+        }),
         serving: this.mesh.isServing(),
         model: this.config.model.model,
         model_id: this.config.model.id,
@@ -662,6 +669,12 @@ export class LubanWebServer {
         }
         await mkdir(target, { recursive: true });
         workspace = await realpath(target);
+      }
+      // A scratch directory never becomes a durable workspace: it is what every
+      // probe leaves behind, and it can only clutter every phone that asks this
+      // node what it has. Explicit opt-in exists for harnesses that add temp dirs.
+      if (process.env.LUBAN_ALLOW_TEMP_WORKSPACES !== "1" && isTransientWorkspace(workspace)) {
+        throw new HttpError(400, "临时目录不能作为工作区，请选择要长期保留的目录");
       }
       // Registering the same directory twice should select it, not create a
       // second project id that points at the same files.

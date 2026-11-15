@@ -908,6 +908,33 @@ export async function saveProject(home: string, name: string, workspace: string)
   await rename(temporary, path);
 }
 
+/** Registered workspaces exactly as stored, without judging whether they exist. */
+export async function readProjects(home: string): Promise<Record<string, string>> {
+  return Object.fromEntries(Object.entries(record(readJson(join(home, "config.json")).projects))
+    .map(([name, path]) => [name, String(path)]));
+}
+
+/**
+ * Drop registrations from config.json.
+ *
+ * Deleting a workspace's folder is not a thing luban does; forgetting an entry
+ * only stops it being advertised, so a stale `/home/someone/dev/myapp` left by
+ * another machine stops reappearing on the phone.
+ */
+export async function forgetProjects(home: string, names: string[]): Promise<string[]> {
+  const path = join(home, "config.json");
+  const config = readJson(path);
+  const projects = record(config.projects);
+  const removed = names.filter((name) => Object.hasOwn(projects, name));
+  if (!removed.length) return [];
+  for (const name of removed) delete projects[name];
+  await mkdir(home, { recursive: true });
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ ...config, projects }, null, 2)}\n`, "utf8");
+  await rename(temporary, path);
+  return removed;
+}
+
 export async function saveMeshContact(home: string, contact: MeshContact): Promise<void> {
   await mkdir(home, { recursive: true });
   const path = join(home, "config.json");

@@ -7,18 +7,25 @@ import React, { useState } from "react";
  * screens of rows while the user came for one switch; the collapsed header
  * keeps the answer ("which model / which session") and hides the rest.
  */
-export function MobileCollapse({ label, summary, ariaLabel, children, defaultOpen = false }: {
+export function MobileCollapse({ label, summary, ariaLabel, children, defaultOpen = false, onToggle }: {
   label: string;
   /** What the section is currently set to, shown next to the label. */
   summary?: string;
   ariaLabel?: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  /** Lets the parent remember the choice, so a re-mount keeps the section open. */
+  onToggle?(open: boolean): void;
 }): React.ReactElement {
   const [open, setOpen] = useState(defaultOpen);
   return <>
     <button type="button" className={`m-collapse ${open ? "open" : ""}`}
-      aria-expanded={open} aria-label={ariaLabel ?? label} onClick={() => setOpen(current => !current)}>
+      aria-expanded={open} aria-label={ariaLabel ?? label}
+      onClick={() => {
+        const next = !open;
+        setOpen(next);
+        onToggle?.(next);
+      }}>
       <span className="m-collapse-label">{label}</span>
       {summary && <span className="m-collapse-summary">{summary}</span>}
       <span className="m-collapse-mark" aria-hidden="true">{open ? "▴" : "▾"}</span>

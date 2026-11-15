@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mobileProject, mobileProjects } from "./mobile-project";
+import { mobileProject, mobileProjects, scratchWorkspace } from "./mobile-project";
 
 describe("phone workspace selection", () => {
   const node = { project: "timeagent-cpp", workspace: "D:\\WorkStation\\timeagent-cpp", projects: { myapp: "D:\\myapp", "timeagent-cpp": "D:\\WorkStation\\timeagent-cpp" } };
@@ -22,5 +22,22 @@ describe("phone workspace selection", () => {
   it("supports legacy nodes without current workspace metadata", () => {
     expect(mobileProject({ projects: { legacy: "/work" } }, "")).toBe("legacy");
     expect(mobileProjects()).toEqual({});
+  });
+});
+
+describe("scratch workspaces", () => {
+  it("recognises the temp directories probes leave in a node's config", () => {
+    expect(scratchWorkspace("/private/var/folders/jw/prg5wwlx7gv3c37hf97v858h0000gn/T/luban-term-kKcgL5")).toBe(true);
+    expect(scratchWorkspace("/var/folders/x/T/luban-a-uafP5D")).toBe(true);
+    expect(scratchWorkspace("/tmp/luban-b-s9c5n3")).toBe(true);
+    expect(scratchWorkspace("/private/tmp/ws")).toBe(true);
+    expect(scratchWorkspace("C:\\Users\\me\\AppData\\Local\\Temp\\luban-term-1")).toBe(true);
+  });
+  it("leaves real workspaces and look-alike names alone", () => {
+    expect(scratchWorkspace("/Users/me/Documents/luban")).toBe(false);
+    expect(scratchWorkspace("/home/deploy/dev/myapp")).toBe(false);
+    expect(scratchWorkspace("/Users/me/tmp/app")).toBe(false);
+    expect(scratchWorkspace("/var/foldersx/app")).toBe(false);
+    expect(scratchWorkspace("/tmpish")).toBe(false);
   });
 });

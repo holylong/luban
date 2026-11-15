@@ -18,6 +18,9 @@ const Module = require("node:module");
 const { EventEmitter } = require("node:events");
 
 const repo = path.join(__dirname, "..");
+// The smoke opens three throwaway folders on purpose; without this the server
+// rightly refuses to register a temp directory as a durable workspace.
+process.env.LUBAN_ALLOW_TEMP_WORKSPACES = "1";
 
 function createElectron() {
   let idSeq = 0;

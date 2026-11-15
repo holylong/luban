@@ -1,4 +1,6 @@
 import type { RelayDeviceStatus } from "./mobile-device";
+import { groupRelayMachines, machineWorkspaceRoutes } from "./mobile-machines";
+import { scratchWorkspace } from "./mobile-project";
 import { MobileDeviceCard } from "./mobile-device-card";
 import { MobileWorkspaces } from "./mobile-workspaces";
 import { MobileCollapse } from "./mobile-collapse";
@@ -552,14 +554,16 @@ export function MobileApp(): React.ReactElement {
   }, []);
 
   /** Drop a device that is gone: an abandoned backend would otherwise stay in the list forever. */
-  const removeDevice = useCallback(async (id: string) => {
+  const removeDevice = useCallback(async (ids: string | string[]) => {
     try {
-      const response = await fetch(`/api/account/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(payload.error || `移除失败 (${response.status})`);
+      for (const id of (Array.isArray(ids) ? ids : [ids])) {
+        const response = await fetch(`/api/account/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({})) as { error?: string };
+          throw new Error(payload.error || `移除失败 (${response.status})`);
+        }
       }
-      notify("已移除该设备");
+      notify("已移除该电脑的所有工作区实例");
       await refreshRelayNodes();
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), true);
@@ -946,6 +950,9 @@ export function MobileApp(): React.ReactElement {
   const activeJobs = jobs.filter(item => ACTIVE_STATUS.has(item.status)).length;
   const account = auth.state === "account" ? auth.account : undefined;
   const modelCatalog = node?.models ?? [];
+  const relayMachines = useMemo(() => groupRelayMachines(relayNodes), [relayNodes]);
+  const routesByMachine = useMemo(() => new Map(relayMachines.map(machine => [machine.machineId,
+    machineWorkspaceRoutes(machine).filter(route => !scratchWorkspace(route.path))] as const)), [relayMachines]);
   const activeModel = modelCatalog.find(item => item.id === node?.model_id);
   const effortChoices: Array<ReasoningEffort | null> = [null, ...(activeModel?.reasoning_efforts ?? [])];
 
@@ -1082,22 +1089,32 @@ export function MobileApp(): React.ReactElement {
               {relayMode && relayNodes.length === 0 && (
                 <div className="m-empty"><h2>还没有 luban 实例</h2><p>在「设置 → 添加电脑」生成设备令牌，然后在电脑上启动 luban web 并接入中继。</p></div>
               )}
-              {relayNodes.map(device => (
-                <MobileDeviceCard key={device.id} device={device} current={device.id === scope}
-                  onOpen={() => openDevice(device.id)}
-                  onJobs={() => { chooseNode(device.id); setTab("jobs"); }}
-                  onRemove={() => void removeDevice(device.id)}>
-                  <MobileWorkspaces nodeId={device.id} online={device.online}
-                    selectedProject={device.id === scope ? project : undefined}
-                    selectedSession={device.id === scope ? continueSession?.id : undefined}
+              {relayMachines.map(machine => {
+                const routes = routesByMachine.get(machine.machineId) ?? [];
+                const machineCurrent = machine.members.some(member => member.id === scope);
+                const selectedProject = machineCurrent && routes.some(route => route.project === project) ? project : undefined;
+                const instanceNames = machine.members.map(member => member.workspace.split(String.fromCharCode(92)).join("/").split("/").filter(Boolean).at(-1) || member.workspace);
+                return <MobileDeviceCard key={machine.machineId} device={{
+                  ...machine,
+                  instanceCount: machine.members.length,
+                  instanceNames,
+                  machineName: machine.machineName,
+                }} current={machineCurrent}
+                  onOpen={() => openDevice(machine.id)}
+                  onJobs={() => { chooseNode(machine.id); setTab("jobs"); }}
+                  onRemove={() => void removeDevice(machine.members.map(member => member.device_id || member.id))}>
+                  <MobileWorkspaces nodeId={machine.id} online={machine.online} routes={routes}
+                    selectedProject={selectedProject}
+                    selectedSession={machineCurrent ? continueSession?.id : undefined}
                     onOpen={(target, session) => {
-                      if (device.id !== scope) chooseNode(device.id);
-                      chooseSession(session);
+                      const owner = routes.find(route => route.project === target)?.nodeId ?? machine.id;
+                      if (owner !== scope) chooseNode(owner);
                       projectRef.current = target;
                       setProject(target);
-                    }} onAdd={kind => { if (device.id !== scope) chooseNode(device.id); void addWorkspace(kind); }} />
-                </MobileDeviceCard>
-              ))}
+                      chooseSession(session);
+                    }} onAdd={kind => { if (machine.id !== scope) chooseNode(machine.id); void addWorkspace(kind); }} />
+                </MobileDeviceCard>;
+              })}
             </>
           )}
 

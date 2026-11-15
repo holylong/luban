@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { deleteMobileSession, loadDeviceWorkspaces, MobileWorkspaces } from "./mobile-workspaces";
+import { deleteMobileSession, loadDeviceWorkspaces, MobileWorkspaces, splitWorkspaces, workspaceLoadKey } from "./mobile-workspaces";
 import { MobileDeviceCard } from "./mobile-device-card";
 
 const summary = (id: string, project: string, messages = 2) => ({
@@ -51,6 +51,28 @@ describe("device workspace inventory", () => {
     expect(urls).toHaveLength(3);
     expect(urls.every(url => url.searchParams.get("node") === "node & b")).toBe(true);
     expect(urls[1]?.searchParams.get("limit")).toBe("200");
+  });
+
+  it("skips probe workspaces a stale node still advertises", async () => {
+    const urls: URL[] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const parsed = new URL(String(url), "http://local");
+      urls.push(parsed);
+      return Response.json(parsed.pathname === "/api/node"
+        ? {
+          project: "luban", workspace: "/Users/me/Documents/luban",
+          projects: {
+            luban: "/Users/me/Documents/luban",
+            "luban-term-kKcgL5": "/private/var/folders/jw/T/luban-term-kKcgL5",
+            "luban-a-uafP5D": "/private/var/folders/jw/T/luban-a-uafP5D",
+            splitvoice: "/Users/me/Documents/splitvoice",
+          },
+        }
+        : [summary("s", parsed.searchParams.get("project")!)]);
+    }) as unknown as typeof fetch;
+    const entries = await loadDeviceWorkspaces(undefined, new AbortController().signal, fetcher);
+    expect(entries.map(entry => entry.project)).toEqual(["luban", "splitvoice"]);
+    expect(urls.map(url => url.searchParams.get("project")).filter(Boolean)).toEqual(["luban", "splitvoice"]);
   });
 
   it("does not let one unreadable project's sessions hide the others", async () => {
@@ -108,4 +130,43 @@ it("explains offline devices without presenting stale sessions as live entry poi
   expect(html).toContain("电脑离线");
   expect(html).toContain("disabled");
   expect(html).not.toContain("正在读取");
+});
+
+describe("workspace reload key", () => {
+  const route = (project: string, nodeId = "n-a") => ({ project, path: `/work/${project}`, nodeId });
+  it("ignores the fresh route array the relay poll hands over every few seconds", () => {
+    // Two polls, two array objects, the same workspaces: the card must keep
+    // what it already shows instead of blanking and re-folding the session list.
+    const first = [route("cooler"), route("luban")];
+    const second = [route("cooler"), route("luban")];
+    expect(second).not.toBe(first);
+    expect(workspaceLoadKey("n-a", 0, second)).toBe(workspaceLoadKey("n-a", 0, first));
+  });
+  it("also holds when a workspace moves to another instance of the same computer", () => {
+    expect(workspaceLoadKey("n-a", 0, [route("cooler", "n-b")])).toBe(workspaceLoadKey("n-a", 0, [route("cooler", "n-a")]));
+  });
+  it("still reloads for a real change: another device, a retry or a new workspace", () => {
+    const base = workspaceLoadKey("n-a", 0, [route("cooler")]);
+    expect(workspaceLoadKey("n-b", 0, [route("cooler")])).not.toBe(base);
+    expect(workspaceLoadKey("n-a", 1, [route("cooler")])).not.toBe(base);
+    expect(workspaceLoadKey("n-a", 0, [route("cooler"), route("luban")])).not.toBe(base);
+  });
+});
+
+describe("workspace grouping", () => {
+  const entry = (project: string, sessions: ReturnType<typeof summary>[], error?: string) => ({ project, path: `/work/${project}`, sessions, error });
+  it("keeps workspaces with sessions on top, newest first, and folds empty ones", () => {
+    const older = { ...summary("a", "alpha"), updatedAt: "2026-11-14T09:00:00Z" };
+    const newer = { ...summary("b", "beta"), updatedAt: "2026-11-14T12:00:00Z" };
+    const { active, idle } = splitWorkspaces([
+      entry("idle", []), entry("alpha", [older]), entry("beta", [newer]), entry("documents", []),
+    ]);
+    expect(active.map(item => item.project)).toEqual(["beta", "alpha"]);
+    expect(idle.map(item => item.project)).toEqual(["documents", "idle"]);
+  });
+  it("keeps the open workspace and read failures visible", () => {
+    const { active, idle } = splitWorkspaces([entry("empty", []), entry("broken", [], "permission denied")], "empty");
+    expect(active.map(item => item.project)).toEqual(["broken", "empty"]);
+    expect(idle).toEqual([]);
+  });
 });

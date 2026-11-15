@@ -11,6 +11,10 @@ import { sharedHistory } from "../core/session-history.js";
 import type { LubanConfig } from "../core/types.js";
 import { LubanWebServer } from "./server.js";
 
+// Every case below runs inside a temporary directory on purpose. The scratch
+// guard is covered by its own case, which removes the opt-in while it runs.
+process.env.LUBAN_ALLOW_TEMP_WORKSPACES = "1";
+
 function testConfig(root: string): LubanConfig {
   const workspace = join(root, "workspace");
   const model = { id: "test/model", provider: "test", model: "model", name: "Test Model", baseUrl: "http://127.0.0.1", apiKey: "" };
@@ -354,6 +358,65 @@ describe("LubanWebServer", () => {
       expect(finished.result).toContain("summarize: web context");
       expect(finished.logs).toEqual(expect.arrayContaining([expect.objectContaining({ level: "tool" })]));
     } finally {
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
+
+  it("refuses to register a scratch directory as a durable workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-scratch-"));
+    const config = testConfig(root);
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh, { port: 0 });
+    await mesh.start();
+    const base = await web.start();
+    const post = (path: string) => jsonRequest(`${base}api/projects`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path }),
+    });
+    const previous = process.env.LUBAN_ALLOW_TEMP_WORKSPACES;
+    delete process.env.LUBAN_ALLOW_TEMP_WORKSPACES;
+    try {
+      const scratch = join(root, "scratch");
+      await mkdir(scratch);
+      const refused = await post(scratch);
+      expect(refused.status).toBe(400);
+      expect(String(refused.body.error)).toContain("临时目录");
+      expect(JSON.parse(await readFile(join(config.home, "config.json"), "utf8").catch(() => "{}"))).not.toMatchObject({ projects: expect.objectContaining({ scratch }) });
+      // The opt-in keeps probe harnesses working without weakening the default.
+      process.env.LUBAN_ALLOW_TEMP_WORKSPACES = "1";
+      expect((await post(scratch)).status).toBe(200);
+    } finally {
+      if (previous === undefined) delete process.env.LUBAN_ALLOW_TEMP_WORKSPACES;
+      else process.env.LUBAN_ALLOW_TEMP_WORKSPACES = previous;
+      await web.stop();
+      await mesh.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
+  }, 15_000);
+
+  it("advertises only workspaces a phone could open", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luban-visible-"));
+    const config = testConfig(root);
+    const real = join(root, "real");
+    await mkdir(real, { recursive: true });
+    config.workspace = real;
+    config.project = "real";
+    config.mesh.projects = {
+      real,
+      scratch: join(tmpdir(), "luban-term-leftover"),
+      gone: join(root, "deleted-clone"),
+    };
+    const mesh = new MeshRuntime(config);
+    const web = new LubanWebServer(config, mesh, { port: 0 });
+    await mesh.start();
+    const base = await web.start();
+    const previous = process.env.LUBAN_ALLOW_TEMP_WORKSPACES;
+    delete process.env.LUBAN_ALLOW_TEMP_WORKSPACES;
+    try {
+      expect((await jsonRequest(`${base}api/node`)).body.projects).toEqual({ real });
+    } finally {
+      process.env.LUBAN_ALLOW_TEMP_WORKSPACES = previous ?? "1";
       await web.stop();
       await mesh.stop();
       await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });

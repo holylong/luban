@@ -1,6 +1,6 @@
 import React from "react";
 import { relativeTime, STATUS_LABELS } from "./timeline";
-import { deviceActivity, type RelayDeviceStatus } from "./mobile-device";
+import { deviceActivity, type RelayDeviceStatus } from "./mobile-device.js";
 
 /** The subset of a relay node a card needs; the phone page passes far more. */
 export interface DeviceCardNode {
@@ -9,15 +9,13 @@ export interface DeviceCardNode {
   workspace: string;
   online: boolean;
   status?: RelayDeviceStatus;
+  /** Number of per-workspace relay registrations represented by this computer. */
+  instanceCount?: number;
+  instanceNames?: string[];
+  machineName?: string;
 }
 
-/**
- * One laptop on the phone's device tab.
- *
- * The card merges both kinds of work: mesh jobs (a workbench turn or a
- * dispatched task) and sessions the terminal is running right now. Only the
- * first used to be visible, so a busy terminal reported "空闲".
- */
+/** One physical computer on the phone's device tab. */
 export function MobileDeviceCard({ device, current, onOpen, onJobs, onRemove, children }: {
   device: DeviceCardNode;
   current: boolean;
@@ -36,12 +34,14 @@ export function MobileDeviceCard({ device, current, onOpen, onJobs, onRemove, ch
   return <div className={`m-card m-device ${current ? "active" : ""}`}>
     <div className="m-device-row">
       <span className={`m-dot ${device.online ? "online" : "offline"}`} />
-      <strong>{device.name}</strong>
+      <strong>{device.machineName || device.name}</strong>
+      {(device.instanceCount ?? 0) > 1 && <span className="m-chip">{device.instanceCount} 个工作区</span>}
       <span className={`m-chip ${device.online ? "done" : "failed"}`}>{device.online ? "在线" : "离线"}</span>
       {busy > 1 && <span className="m-chip working">{busy} 个进行中</span>}
     </div>
     <div className="m-device-path">{device.workspace || "未报告工作区"}{device.status?.model ? ` · ${device.status.model}` : ""}</div>
-    {running.map(session => <div className="m-device-job" key={session.id}>
+    {(device.instanceNames?.length ?? 0) > 1 && <div className="m-note">运行实例：{device.instanceNames!.join("、")}</div>}
+    {running.map(session => <div className="m-device-job" key={`${session.project}/${session.id}`}>
       <span className="m-chip working">正在工作</span>
       <span>{session.title || session.id}</span>
     </div>)}

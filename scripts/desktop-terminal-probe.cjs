@@ -15,6 +15,9 @@ const { spawn } = require("node:child_process");
 const electronPath = require("electron");
 
 const repo = path.join(__dirname, "..");
+// This probe deliberately opens a throwaway workspace: allow the one temp
+// registration it needs instead of leaving a `luban-term-*` entry behind.
+process.env.LUBAN_ALLOW_TEMP_WORKSPACES = "1";
 const port = 9334;
 const fail = message => { console.error("PROBE FAIL:", message); process.exitCode = 1; throw new Error(message); };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
