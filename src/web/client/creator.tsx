@@ -227,7 +227,18 @@ export function timeline(frames: DriveFrame[], fallback = Date.now()): Item[] {
       } else if (frame.text.trim()) {
         items.push({ kind: "reply", text: frame.text, at: fallback });
       }
-      if (!frame.ok) items.push({ kind: "note", text: frame.stopReason === "max_steps" ? "达到步数上限，先停在这里" : "这一轮没有正常结束", tone: "error", at: fallback });
+      // The reply placeholder precedes the tools. Move the final answer after
+      // them, otherwise the last visible item is still an operation command.
+      if (reply) {
+        const index = items.indexOf(reply);
+        if (index >= 0) items.splice(index, 1);
+        reply.text = frame.text.trim() || reply.text;
+        if (reply.text.trim()) items.push(reply);
+      }
+      items.push({ kind: "note", text: !frame.ok
+        ? frame.stopReason === "max_steps" ? "本轮未完成：达到步数上限，已停止" : "本轮未正常完成，请查看上方错误或结果"
+        : "本轮执行已结束" + (frame.text.trim() || reply?.text.trim() ? "" : "，但没有返回结果说明，任务是否达成尚未确认"),
+      tone: frame.ok ? "status" : "error", at: fallback });
       reply = undefined;
       continue;
     }
@@ -262,7 +273,14 @@ export function timeline(frames: DriveFrame[], fallback = Date.now()): Item[] {
     }
     if (frame.type === "error") { items.push({ kind: "note", text: frame.text, tone: "error", at: fallback }); continue; }
     if (frame.type === "status") { items.push({ kind: "note", text: frame.text, tone: "status", at: fallback }); continue; }
-    if (frame.type === "exit") items.push({ kind: "note", text: "操控会话已结束", tone: "status", at: fallback });
+    if (frame.type === "exit") {
+      if (reply?.open) {
+        reply.open = false;
+        items.push({ kind: "note", text: "本轮已中断，任务是否完成尚未确认", tone: "error", at: fallback });
+        reply = undefined;
+      }
+      items.push({ kind: "note", text: "操控会话已结束", tone: "status", at: fallback });
+    }
   }
   return items;
 }
@@ -436,7 +454,11 @@ export function TaskRow({ task, now, onCancel }: { task: CreatorTask; now: numbe
         {active ? <button className="ghost" onClick={event => { event.stopPropagation(); onCancel(task.id); }}>取消</button> : null}
         {canOpen ? <span className="chev">{open ? "▴" : "▾"}</span> : null}
       </header>
-      {open && task.result ? <div className="task-result"><Markdown text={task.result} /></div> : null}
+      {!active && <div className="task-result" aria-label="执行结论">
+        <strong>执行结论</strong>
+        {task.result ? <Markdown text={open ? task.result : task.result.replace(/\s+/gu, " ").slice(0, 180)} />
+          : <p>{STATUS_LABEL[task.status]}；没有返回结果说明，任务是否达成尚未确认。</p>}
+      </div>}
     </article>
   );
 }
@@ -667,7 +689,8 @@ function App(): React.ReactElement {
   const done = useMemo(() => tasks.filter(task => !["queued", "running", "paused"].includes(task.status)), [tasks]);
   const blank = tasks.length === 0;
   const items = useMemo(() => timeline(frames), [frames]);
-  const running = driving && !frames.slice().reverse().some(frame => frame.type === "turn-end" || frame.type === "exit");
+  const lastTurnEvent = [...frames].reverse().find(frame => frame.type === "turn-start" || frame.type === "turn-end" || frame.type === "exit");
+  const running = driving && lastTurnEvent?.type === "turn-start";
 
   const ensureSession = async (): Promise<void> => {
     if (!bridge) return;
