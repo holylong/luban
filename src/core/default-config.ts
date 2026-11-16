@@ -53,6 +53,10 @@ export const STARTER_CONFIG = {
     ],
     conflict_policy: "auto",
   },
+  sandbox: {
+    mode: "soft",
+    allow_outside_workspace: true,
+  },
   max_workers: 12,
   max_steps: 1000,
   // Approval stays on for shell and network tools. A shipped "allow" default

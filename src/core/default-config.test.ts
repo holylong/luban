@@ -69,6 +69,10 @@ describe("starter configuration", () => {
       provider: "opencode-zen",
       apiKey: "",
     });
+    expect(config.sandbox).toMatchObject({ mode: "soft", allowOutsideWorkspace: true });
+    expect(JSON.parse(await readFile(join(home, "config.json"), "utf8"))).toMatchObject({
+      sandbox: { mode: "soft", allow_outside_workspace: true },
+    });
     expect(config.permissionMode).toBe("edits");
     expect(config.temperature).toBe(0.2);
     expect(config.mesh.maxWorkers).toBe(12);
@@ -83,6 +87,15 @@ describe("starter configuration", () => {
     const config = loadConfig({ workspace, seedDefaults: true });
     expect(config.model.id).toBe("deepseek/deepseek-flash");
     expect(config.maxSteps).toBe(42);
+    expect(await readFile(join(home, "config.json"), "utf8")).toBe(existing);
+  });
+
+  it("preserves an existing explicit outside-workspace restriction", async () => {
+    await mkdir(home);
+    const existing = JSON.stringify({ sandbox: { mode: "soft", allow_outside_workspace: false } });
+    await writeFile(join(home, "config.json"), existing);
+    const config = loadConfig({ workspace, seedDefaults: true });
+    expect(config.sandbox.allowOutsideWorkspace).toBe(false);
     expect(await readFile(join(home, "config.json"), "utf8")).toBe(existing);
   });
 

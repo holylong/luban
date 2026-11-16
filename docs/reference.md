@@ -452,7 +452,9 @@ TUI 里输入 `/mcp` 打开同一份列表：`Enter` 现场试连（连不上会
 只需 Codex 登录和模型设置时，使用 [config.codex.example.json](../config.codex.example.json)。
 
 新安装（`~/.luban/config.json` 不存在）首次启动会写入一份可移植的起始配置：端口、超时、
-上下文、同步忽略、worker/step 上限与 `permission.mode: "edits"`，默认模型为免密的
+上下文、同步忽略、worker/step 上限与 `permission.mode: "edits"`，并显式设置
+`sandbox: { mode: "soft", allow_outside_workspace: true }`，允许文件工具与 shell 访问工作区外路径，
+但不关闭执行审批或危险命令检查；`apply_patch` 与代码智能仍限当前工作区。默认模型为免密的
 `opencode-zen/deepseek-v4.1-flash-free`。模板不包含 API Key、私有网关、内网节点、
 relay 地址或项目路径；已有配置不会被覆盖，删除该文件即可在下次启动重新生成。
 API Key 建议用 `/models` 里的 `Ctrl+A` 面板写入用户目录，而不是写进项目配置。
