@@ -26,25 +26,20 @@ export interface CompletionClient {
   ): Promise<CompletionResult>;
 }
 
-/** auto (default) prefers the backend and falls back to the CLI; the others force one path. */
+/** Direct backend by default, including legacy auto; CLI requires explicit opt-in. */
 export type CodexTransport = "native" | "cli";
 
-export function codexTransport(configured?: string): CodexTransport | "auto" {
+export function codexTransport(configured?: string): CodexTransport {
   const raw = String(configured ?? process.env.LUBAN_CODEX_MODE ?? "").trim().toLowerCase();
-  return raw === "cli" || raw === "native" ? raw : "auto";
+  return raw === "cli" ? "cli" : "native";
 }
 
 export interface CodexBackendDeps {
   loadAuth?: () => Promise<CodexAuth | undefined>;
   refresh?: (auth: CodexAuth) => Promise<CodexAuth | undefined>;
-  /** The official CLI, used when the backend cannot serve the turn. */
+  /** The official CLI, used only when explicitly selected. */
   fallback?: CompletionClient;
   mode?: string;
-}
-
-function describe(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/\s+/g, " ").slice(0, 160);
 }
 
 function unauthorized(error: unknown): boolean {
@@ -75,17 +70,7 @@ export class CodexBackendClient implements CompletionClient {
   ): Promise<CompletionResult> {
     const mode = codexTransport(this.deps.mode);
     if (mode === "cli") return this.fallback.complete(messages, tools, signal, onDelta, onNotice, options);
-    let streamed = false;
-    const tracked: DeltaHandler | undefined = onDelta
-      ? (text, kind) => { streamed = true; onDelta(text, kind); }
-      : undefined;
-    try {
-      return await this.native(messages, tools, signal, tracked, onNotice, options);
-    } catch (error) {
-      if (mode === "native" || signal.aborted || streamed) throw error;
-      onNotice?.(`Codex 直连后端不可用（${describe(error)}），本轮改用官方 codex CLI`);
-      return this.fallback.complete(messages, tools, signal, onDelta, onNotice, options);
-    }
+    return this.native(messages, tools, signal, onDelta, onNotice, options);
   }
 
   private async native(

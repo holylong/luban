@@ -35,13 +35,13 @@ Anthropic Messages、Responses API，以及通过 Codex 的 ChatGPT 登录（默
 （实测每次调用约 1.5 万输入 token）以及子进程开销：同一句「Reply with exactly: OK」的实测单次
 调用从约 8 秒降到约 2–3 秒，带一次工具调用的两轮任务从约 17 秒降到约 5 秒。
 
-- 默认 `auto`：优先直连；直连不可用（没有登录、接口变更、5xx、401 且刷新失败）时本轮改用
-  官方 CLI，并在界面提示一句。
-- `LUBAN_CODEX_MODE=cli`：始终走 `codex exec`（旧行为，直连出问题或想对比时使用）。
-- `LUBAN_CODEX_MODE=native`：只用直连，失败直接报错，不静默回退。
+- 默认 `native`：只用直连；没有登录、接口变更、5xx、401 且刷新失败时报告错误，绝不自动切换 CLI。
+  旧配置 `LUBAN_CODEX_MODE=auto` 同样按直连处理，不再回退。
+- `LUBAN_CODEX_MODE=cli`：仅在显式设置时走 `codex exec`（兼容、对比用；默认不会使用）。
+- `LUBAN_CODEX_MODE=native`：显式指定只用直连，与默认行为一致。
 - access token 过期时用 `auth.json` 中的 refresh token 刷新，并把新 token 原子写回
   `~/.codex/auth.json`，Codex CLI 与 luban 的登录因此保持一致。
-- 直连时图片附件按 Responses 规范发送；回退到 CLI 时仍只支持文字。
+- 直连时图片附件按 Responses 规范发送；请求失败不会改用 CLI 重发上下文。
 
 以下说明仅针对 CLI 模式。
 

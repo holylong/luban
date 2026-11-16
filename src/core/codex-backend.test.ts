@@ -72,11 +72,15 @@ async function withFetch<T>(impl: typeof fetch, run: () => Promise<T>): Promise<
 }
 
 describe("codex backend transport", () => {
-  it("defaults to auto and honours cli/native", () => {
+  it("defaults to native, maps legacy auto to native and requires explicit cli", () => {
     const saved = process.env.LUBAN_CODEX_MODE;
     try {
       delete process.env.LUBAN_CODEX_MODE;
-      expect(codexTransport()).toBe("auto");
+      expect(codexTransport()).toBe("native");
+      expect(codexTransport("auto")).toBe("native");
+      expect(codexTransport("unknown")).toBe("native");
+      process.env.LUBAN_CODEX_MODE = "auto";
+      expect(codexTransport()).toBe("native");
       expect(codexTransport("cli")).toBe("cli");
       expect(codexTransport(" NATIVE ")).toBe("native");
       process.env.LUBAN_CODEX_MODE = "cli";
@@ -166,25 +170,46 @@ describe("codex backend transport", () => {
     expect(tokens).toEqual(["Bearer token-old", "Bearer token-new"]);
   });
 
-  it("falls back to the codex CLI when the backend fails before streaming", async () => {
+  it.each([undefined, "auto", "native"])("never uses CLI for backend errors in mode %s", async (mode) => {
     const cli = fakeCli();
     const notices: string[] = [];
-    const client = new CodexBackendClient(config(), { loadAuth: async () => auth, fallback: cli });
+    const client = new CodexBackendClient(config(), { loadAuth: async () => auth, fallback: cli, mode });
     await withFetch((async () => new Response("{\"detail\":\"boom\"}", { status: 502 })) as unknown as typeof fetch, async () => {
-      const result = await client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal, undefined,
-        (text) => notices.push(text));
-      expect(result.content).toBe("from-cli");
+      await expect(client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal, undefined,
+        (text) => notices.push(text))).rejects.toThrow(/model HTTP 502/u);
     });
-    expect(cli.calls).toBe(1);
-    expect(notices.join("\n")).toContain("改用官方 codex CLI");
+    expect(cli.calls).toBe(0);
+    expect(notices.join("\n")).not.toContain("改用官方 codex CLI");
   });
 
-  it("falls back to the CLI when no ChatGPT login exists", async () => {
+  it("reports a missing ChatGPT login without using CLI", async () => {
     const cli = fakeCli();
     const client = new CodexBackendClient(config(), { loadAuth: async () => undefined, fallback: cli });
-    const result = await client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal);
-    expect(result.content).toBe("from-cli");
-    expect(cli.calls).toBe(1);
+    await expect(client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal))
+      .rejects.toThrow(/codex login/u);
+    expect(cli.calls).toBe(0);
+  });
+
+  it("reports failed login refresh without using CLI", async () => {
+    const cli = fakeCli();
+    const client = new CodexBackendClient(config(), {
+      loadAuth: async () => auth, refresh: async () => undefined, fallback: cli,
+    });
+    await withFetch((async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch, async () => {
+      await expect(client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal))
+        .rejects.toThrow(/model HTTP 401/u);
+    });
+    expect(cli.calls).toBe(0);
+  });
+
+  it("propagates network failures without using CLI", async () => {
+    const cli = fakeCli();
+    const client = new CodexBackendClient(config(), { loadAuth: async () => auth, fallback: cli });
+    await withFetch((async () => { throw new TypeError("fetch failed"); }) as typeof fetch, async () => {
+      await expect(client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal))
+        .rejects.toThrow(/fetch failed/u);
+    });
+    expect(cli.calls).toBe(0);
   });
 
   it("fails loudly in forced native mode instead of silently using the CLI", async () => {

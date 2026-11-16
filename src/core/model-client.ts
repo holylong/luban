@@ -9,8 +9,8 @@ export type ModelClient = CompletionClient;
 
 /**
  * One place decides which wire protocol serves a model. Codex keeps its ChatGPT
- * login but talks to the backend directly, falling back to the official CLI
- * when that path is unavailable (`LUBAN_CODEX_MODE=cli` forces the CLI).
+ * login but talks to the backend directly without automatic CLI fallback.
+ * Only an explicit `LUBAN_CODEX_MODE=cli` selects the official CLI.
  */
 export function modelClientFor(config: LubanConfig): ModelClient {
   if (isZenFreeModel(config.model)) return new OpenCodeZenClient(config);
