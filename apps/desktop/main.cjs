@@ -1,5 +1,6 @@
 const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, ipcMain, protocol, screen, shell, Tray, globalShortcut } = require("electron");
 const { preparePetTask } = require("./pet-task.cjs");
+const { chooseNewWorkspace } = require("./new-workspace.cjs");
 const { hideForTray } = require("./window-close.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
@@ -332,6 +333,7 @@ function trayTemplate() {
     { type: "separator" },
     { label: "新建窗口", click: () => { void newWindow().catch(reportOpenError); } },
     { label: "打开项目文件夹…", click: async () => { const path = await chooseWorkspace(); if (path) await openFolder(path).catch(reportOpenError); } },
+    { label: "新建工作区…", click: async () => { const path = await createWorkspaceFolder(focusedSession()); if (path) await openFolder(path).catch(reportOpenError); } },
     { type: "separator" },
     { label: "退出 luban", click: quitApp },
   ];
@@ -562,6 +564,13 @@ async function chooseWorkspace(session) {
   const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
   return result.canceled ? undefined : result.filePaths[0];
 }
+/** Ask for a name and location, then create the folder. Returns undefined when
+ * the user cancels; the caller decides which window opens the new root. */
+async function createWorkspaceFolder(session) {
+  const win = session && session.window && !session.window.isDestroyed() ? session.window : undefined;
+  if (win) win.show();
+  return chooseNewWorkspace(dialog, win, session?.workspace || savedWorkspace() || homedir());
+}
 function reportOpenError(error) {
   dialog.showErrorBox("无法打开项目", error instanceof Error ? error.message : String(error));
 }
@@ -587,15 +596,14 @@ function findWindowFor(workspace) {
 }
 // The window's own project dropdown is disabled in desktop mode (the backend is
 // pinned to one root), so the renderer needs a way to reach the same folder
-// picker as the File menu instead of making the native menu the only path.
+// picker and workspace creator as the File menu instead of making the native
+// menu the only path.
 ipcMain.handle("luban:createWorkspace", event => pickAndOpenWorkspace(event, true));
 ipcMain.handle("luban:openWorkspace", event => pickAndOpenWorkspace(event));
 async function pickAndOpenWorkspace(event, create = false) {
   const session = trustedSession(event);
   if (!session || session.opening || petSubmitting) throw new Error("当前无法切换工作区");
-  const target = create
-    ? await require("./new-workspace.cjs").chooseNewWorkspace(dialog, session.window, session.workspace || savedWorkspace() || homedir())
-    : await chooseWorkspace(session);
+  const target = create ? await createWorkspaceFolder(session) : await chooseWorkspace(session);
   if (!target) return { canceled: true };
   const mode = await askOpenMode(session, target);
   if (mode === "cancel") return { canceled: true };
@@ -824,6 +832,7 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: "文件", submenu: [
       { label: "打开项目文件夹…", accelerator: "CmdOrCtrl+O", click: async () => { const path = await chooseWorkspace(focusedSession()); if (path) await openFolder(path).catch(reportOpenError); } },
+      { label: "新建工作区…", click: async () => { const path = await createWorkspaceFolder(focusedSession()); if (path) await openFolder(path).catch(reportOpenError); } },
       { label: "新建窗口", accelerator: "CmdOrCtrl+Shift+N", click: () => { void newWindow().catch(reportOpenError); } },
       { label: "隐藏到托盘", click: () => { const session = focusedSession(); if (session?.window) hideForTray(session.window); } },
       { type: "separator" }, { role: "quit", label: "退出" },

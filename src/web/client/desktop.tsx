@@ -17,8 +17,8 @@ import { clampAgent, clampConsole, clampExplorer, fitLayout, loadLayout, saveLay
 import { PaneSplitter } from "./desktop-panes";
 import { reloadPaths, sameTree } from "./desktop-tree";
 import { DesktopFileIcon } from "./desktop-file-icon";
-import { FileMenu, joinPath, nameProblem, parentPath, type FileMenuAction, type FileMenuTarget } from "./desktop-file-menu";
-import { desktopErrorText } from "./desktop-bridge";
+import { FileMenu, joinPath, menuPosition, nameProblem, parentPath, type FileMenuAction, type FileMenuTarget } from "./desktop-file-menu";
+import { desktopErrorText, type DesktopBridge } from "./desktop-bridge";
 import { followEdit, type EditView } from "./desktop-edit-view";
 import { openConversationLink } from "./conversation-links";
 import { DesktopCodexQuota } from "./desktop-codex-quota";
@@ -37,6 +37,23 @@ export function folderLabel(path: string | undefined): string {
   return parts.at(-1) ?? "";
 }
 
+/** One row of the project dropdown. The folder picker and the new-workspace
+ *  creator belong to the same list: both hand the app a root to open. */
+export interface WorkspaceMenuEntry {
+  action: "open" | "create" | "window";
+  label: string;
+  hint?: string;
+}
+
+/** The dropdown offers only what the installed desktop build can do, so an
+ *  older preload cannot render a button that would do nothing. */
+export function workspaceMenuEntries(bridge?: DesktopBridge): WorkspaceMenuEntry[] {
+  const entries: WorkspaceMenuEntry[] = [{ action: "open", label: "打开文件夹…", hint: "Ctrl+O" }];
+  if (bridge?.createWorkspace) entries.push({ action: "create", label: "新建工作区…" });
+  if (bridge?.openWorkspaceWindow) entries.push({ action: "window", label: "在新窗口打开…" });
+  return entries;
+}
+
 /**
  * Desktop mode pins the backend to the folder it was launched with, so the
  * project list cannot switch anything there: the folder picker (same path as
@@ -46,41 +63,66 @@ export function folderLabel(path: string | undefined): string {
 export function ProjectSwitcher({ store }: { store: WorkbenchStore }): React.ReactElement {
   const bridge = typeof window === "undefined" ? undefined : window.lubanDesktop;
   const [error, setError] = useState("");
+  const [menu, setMenu] = useState<{ left: number; top: number } | undefined>();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const holder = useRef<HTMLDivElement>(null);
   const path = store.node?.projects?.[store.project];
   // With a folder already open the button is a label as much as a control, so
   // it names the project instead of repeating the instruction on every window.
   const opened = folderLabel(path) || folderLabel(store.project);
+  const entries = workspaceMenuEntries(bridge);
+
+  useEffect(() => {
+    if (!menu) return;
+    const away = (event: MouseEvent): void => {
+      if (!holder.current?.contains(event.target as Node)) setMenu(undefined);
+    };
+    const key = (event: KeyboardEvent): void => { if (event.key === "Escape") setMenu(undefined); };
+    window.addEventListener("mousedown", away);
+    window.addEventListener("keydown", key);
+    return () => { window.removeEventListener("mousedown", away); window.removeEventListener("keydown", key); };
+  }, [menu]);
+
   if (bridge?.openWorkspace) {
+    const fire = async (action: WorkspaceMenuEntry["action"]): Promise<void> => {
+      setMenu(undefined);
+      try {
+        const reply = action === "open" ? await bridge.openWorkspace!()
+          : action === "create" ? await bridge.createWorkspace!()
+            : await bridge.openWorkspaceWindow!();
+        if (!reply.canceled) setError("");
+      } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    };
+    const toggle = (): void => {
+      if (menu) { setMenu(undefined); return; }
+      const rect = trigger.current?.getBoundingClientRect();
+      if (!rect) return;
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      setMenu(menuPosition(rect.left, rect.bottom + 2, entries.length, viewport));
+    };
     return (
-      <div className="desktop-project">
+      <div className="desktop-project" ref={holder}>
         <label htmlFor="desktop-open-workspace">项目</label>
         <button
           id="desktop-open-workspace"
+          ref={trigger}
           className={`desktop-open-workspace ${opened ? "opened" : ""}`}
-          aria-label={opened ? `当前项目 ${opened}，点击更换文件夹` : "打开文件夹"}
+          aria-haspopup="menu"
+          aria-expanded={Boolean(menu)}
+          aria-label={opened ? `当前项目 ${opened}，打开项目菜单` : "打开项目菜单"}
           title={opened
-            ? `${path ?? store.project} · 点击更换文件夹（Ctrl+O）`
+            ? `${path ?? store.project} · 打开项目菜单（Ctrl+O 直接换文件夹）`
             : "选择文件夹；桌面端会问你在新窗口打开还是替换当前窗口的项目"}
-          onClick={() => {
-            void bridge.openWorkspace!().then(reply => { if (!reply.canceled) setError(""); })
-              .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
-          }}
-        ><span className="desktop-open-workspace-name">{opened || "打开文件夹…"}</span><small>Ctrl+O</small></button>
-        {bridge.createWorkspace && (
-          <button className="desktop-open-workspace" title="创建新文件夹作为工作区" onClick={() => {
-            void bridge.createWorkspace!().then(reply => { if (!reply.canceled) setError(""); })
-              .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
-          }}>新建工作区…</button>
-        )}
-        {bridge.openWorkspaceWindow && (
-          <button
-            className="desktop-open-workspace"
-            title="换个文件夹并用新窗口打开，当前窗口的项目继续运行"
-            onClick={() => {
-              void bridge.openWorkspaceWindow!().then(reply => { if (!reply.canceled) setError(""); })
-                .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
-            }}
-          >新窗口…</button>
+          onClick={toggle}
+        ><span className="desktop-open-workspace-name">{opened || "打开文件夹…"}</span><small aria-hidden="true">{menu ? "▴" : "▾"}</small></button>
+        {menu && (
+          <div className="desktop-menu" role="menu" style={{ left: menu.left, top: menu.top }}>
+            {entries.map(entry => <button
+              key={entry.action}
+              role="menuitem"
+              onClick={() => { void fire(entry.action); }}
+            ><span>{entry.label}</span>{entry.hint && <small>{entry.hint}</small>}</button>)}
+          </div>
         )}
         <span className="desktop-workspace-path" title={path ?? store.project}>{path ?? store.project}</span>
         {error && <span className="desktop-error" role="alert">{error}</span>}

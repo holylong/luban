@@ -27,6 +27,10 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
   box-shadow: 0 14px 34px #0009;
 }
 .desktop-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
   width: 100%;
   padding: 7px 10px;
   border: 0;
@@ -37,6 +41,7 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
   text-align: left;
   cursor: pointer;
 }
+.desktop-menu button small { flex: none; color: var(--dim); font-size: 10.5px; }
 .desktop-menu button:hover:not(:disabled) { background: var(--panel-3); }
 .desktop-menu button:disabled { color: var(--dim); cursor: default; }
 .desktop-menu button.danger { color: var(--red); }

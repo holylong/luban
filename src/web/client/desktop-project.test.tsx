@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { folderLabel, PetToggle, ProjectSwitcher } from "./desktop";
+import { folderLabel, PetToggle, ProjectSwitcher, workspaceMenuEntries } from "./desktop";
 import type { WorkbenchStore } from "./store";
 
 function store(overrides: Partial<WorkbenchStore> = {}): WorkbenchStore {
@@ -37,7 +37,7 @@ describe("desktop project switcher", () => {
     expect(html).toContain(">luban<");
     expect(html).not.toContain("打开文件夹…");
     expect(html).toContain("当前项目 luban");
-    expect(html).toContain("点击更换文件夹");
+    expect(html).toContain('aria-haspopup="menu"');
   });
 
   it("keeps the prompt when no folder is open yet", () => {
@@ -47,22 +47,27 @@ describe("desktop project switcher", () => {
     expect(html).not.toContain("desktop-open-workspace-name\">luban");
   });
 
-  it("offers workspace creation when the native bridge supports it", () => {
-    const createWorkspace = vi.fn();
-    vi.stubGlobal("window", { lubanDesktop: { openWorkspace: vi.fn(), createWorkspace } });
-    expect(renderToStaticMarkup(<ProjectSwitcher store={store()} />)).toContain("新建工作区…");
-    expect(createWorkspace).not.toHaveBeenCalled();
+  it("lists the folder picker and the new workspace in one dropdown", () => {
+    // Both entries hand the app a root to open, so they belong to the same menu
+    // instead of one of them sitting next to it as a separate button.
+    const entries = workspaceMenuEntries({ openWorkspace: vi.fn(), createWorkspace: vi.fn(), openWorkspaceWindow: vi.fn() } as never);
+    expect(entries.map(entry => entry.label)).toEqual(["打开文件夹…", "新建工作区…", "在新窗口打开…"]);
+    expect(entries[0]?.hint).toBe("Ctrl+O");
   });
 
-  it("offers a second window for another folder", () => {
+  it("omits entries the installed desktop build cannot perform", () => {
+    expect(workspaceMenuEntries({ openWorkspace: vi.fn() } as never).map(entry => entry.action)).toEqual(["open"]);
+    expect(workspaceMenuEntries(undefined).map(entry => entry.label)).toEqual(["打开文件夹…"]);
+  });
+
+  it("keeps the dropdown closed until the project button is pressed", () => {
     const openWorkspace = vi.fn();
-    const openWorkspaceWindow = vi.fn();
-    vi.stubGlobal("window", { lubanDesktop: { openWorkspace, openWorkspaceWindow } });
-
+    vi.stubGlobal("window", { lubanDesktop: { openWorkspace, createWorkspace: vi.fn(), openWorkspaceWindow: vi.fn() } });
     const html = renderToStaticMarkup(<ProjectSwitcher store={store()} />);
-
-    expect(html).toContain("新窗口");
-    expect(openWorkspaceWindow).not.toHaveBeenCalled();
+    // Closed markup must not carry the items, or a click would be meaningless.
+    expect(html).not.toContain("新建工作区…");
+    expect(html).toContain('aria-expanded="false"');
+    expect(openWorkspace).not.toHaveBeenCalled();
   });
 
   it("keeps the project dropdown for the browser workbench", () => {
