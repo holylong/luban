@@ -3,6 +3,7 @@ import type { ChatMessage, LubanConfig } from "./types.js";
 import type { CompletionResult, DeltaHandler, ModelRequestOptions, NoticeHandler } from "./openai.js";
 import { CodexClient } from "./codex.js";
 import { ResponsesClient } from "./responses.js";
+import { interactionCompletion } from "./interaction-log.js";
 import { codexAuthExpired, readCodexAuth, refreshCodexAuth, type CodexAuth } from "./codex-auth.js";
 
 /**
@@ -88,15 +89,19 @@ export class CodexBackendClient implements CompletionClient {
       if (refreshed) { auth = refreshed; this.auth = refreshed; }
     }
     const request = { maxRetries: 0, ...options };
+    const complete = (credentials: CodexAuth, attempt: number) => interactionCompletion(
+      this.config, "codex-backend", attempt, { messages, tools },
+      () => new ResponsesClient(this.nativeConfig(credentials)).complete(messages, tools, signal, onDelta, onNotice, request),
+      [credentials.accessToken, credentials.refreshToken ?? "", credentials.accountId ?? ""]);
     try {
-      return await new ResponsesClient(this.nativeConfig(auth)).complete(messages, tools, signal, onDelta, onNotice, request);
+      return await complete(auth, 0);
     } catch (error) {
       if (!unauthorized(error) || signal.aborted) throw error;
       const refreshed = await this.refresh(auth);
       if (!refreshed) throw error;
       this.auth = refreshed;
       onNotice?.("ChatGPT 登录已刷新，正在重试");
-      return new ResponsesClient(this.nativeConfig(refreshed)).complete(messages, tools, signal, onDelta, onNotice, request);
+      return complete(refreshed, 1);
     }
   }
 
@@ -113,6 +118,8 @@ export class CodexBackendClient implements CompletionClient {
     const model = this.config.model;
     return {
       ...this.config,
+      // The logical boundary owns logging; avoid duplicate HTTP capture.
+      interactionLog: { enabled: false },
       model: {
         ...model,
         api: "responses",

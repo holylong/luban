@@ -4,6 +4,8 @@ luban 可以直接操作这台 Mac：截屏、移动指针、点击、拖拽、�
 
 ## 打开方式
 
+macOS 启动时默认开启电脑操控（CLI、Web、drive 与独立 TUI）。只读取可信的全局 `~/.luban/config.json` 中 `"computer": { "enabled": true }`，缺省为 true；项目配置不能授予或覆盖此权限。全局设置为 false 可关闭默认开启，`LUBAN_COMPUTER=0` 可明确禁用本次启动，`LUBAN_COMPUTER=1` 可明确启用。`drive --no-computer` 等同于环境变量 0。系统权限仍需用户授权；不支持的平台与启动失败不阻断其他功能。同一进程不会在手动关闭后因另一个入口初始化而重新开启；共享停止标志存在时也不会自动清除，须由用户重新打开开关。
+
 1. Desktop/Web 界面右上角点击「电脑操控」药丸（只在 macOS 出现）。Desktop Agent 栏会保留此开关，其他状态标签在窄栏中隐藏；终端 TUI 可运行 `/computer on`。
 2. 第一次使用需要在 **系统设置 › 隐私与安全性** 里给 luban 勾上「辅助功能」和「屏幕录制」；药丸会变成虚线并在悬停时说明还缺哪一项，然后重启 luban。
 3. 开启后：
@@ -30,7 +32,7 @@ luban 可以直接操作这台 Mac：截屏、移动指针、点击、拖拽、�
 | --- | --- | --- | --- |
 | 桌面 App（含 `luban.web` 的浏览器工作台） | 顶部「电脑操控」药丸 | 全屏四边燃弧 + 徽标 | `⌘.` 全局快捷键 |
 | 终端 TUI | `/computer on` / `off` / `status`，标题栏出现 `⌁ 电脑操控` | 四边燃弧（CLI 自己拉起 `luban-glow` 覆盖层） | 运行中 `Ctrl+C` 或 `Esc`，或 `/computer off` |
-| 无头 `luban --prompt`、管道输入 | `LUBAN_COMPUTER=1` 显式打开 | 四边燃弧（同上，`LUBAN_GLOW=off` 可关） | `SIGINT` |
+| 无头 `luban --prompt`、管道输入 | 默认开启；`LUBAN_COMPUTER=0` 禁用本次启动 | 四边燃弧（同上，`LUBAN_GLOW=off` 可关） | `SIGINT` |
 
 开关是**每进程**的（每个入口只对自己那个 agent 放开），但**停止标志是共享文件** `~/.luban/computer/stop`：桌面按了 `⌘.`，终端里的 agent 下一步也会被拒绝，反之亦然。终端或 `LUBAN_COMPUTER=1` 打开的会话不点亮桌面 App 的那圈覆盖层（桌面 App 在场时后端看到 `LUBAN_GLOW_URL` 就让位），而是由 CLI 自己拉起 `luban-glow` 画边框；两者都关了才完全没有光圈——产生输入前请确认你看着的是哪个窗口。
 

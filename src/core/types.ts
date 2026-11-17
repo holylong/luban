@@ -95,9 +95,13 @@ export interface MeshSettings {
 export type ThemeColors = Record<string, string>;
 
 export interface LubanConfig {
+  /** Trusted global desktop permission; projects cannot grant it. */
+  computerEnabled?: boolean;
   /** Only Creator bodies expose the global identity editor. */
   creatorIdentity?: boolean;
   home: string;
+  /** Opt-in private raw HTTP interaction capture; absent is disabled. */
+  interactionLog?: { enabled: boolean };
   workspace: string;
   project: string;
   /** Terminal color scheme id or alias; see `src/ui/theme.ts` for the catalog. */

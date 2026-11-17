@@ -1,5 +1,6 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
+import { interactionFetch } from "./interaction-log.js";
 import { finalizeCompletion, MAX_OUTPUT_TOKENS } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
 import { modelThinkingFields } from "./model-controls.js";
@@ -98,7 +99,7 @@ export class AnthropicClient {
       const timer = setTimeout(() => controller.abort(new Error(`model timed out after ${timeoutMs / 1_000}s`)), timeoutMs);
       signal.addEventListener("abort", abort, { once: true });
       try {
-        const response = await fetch(endpoint(this.config.model.baseUrl), {
+        const response = await interactionFetch(this.config, attempt, endpoint(this.config.model.baseUrl), {
           method: "POST",
           headers: {
             "content-type": "application/json",

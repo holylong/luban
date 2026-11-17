@@ -738,6 +738,8 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const remoteRaw = record(raw.remote);
   return {
     home,
+    // Desktop permission belongs to the trusted global config, never a project.
+    computerEnabled: record(globalConfig.computer).enabled !== false,
     workspace,
     project: basename(workspace) || text(nodeConfig.name, hostname()),
     theme: themeName.toLowerCase(),
@@ -810,6 +812,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     toolOutputMaxBytes: Math.max(1024 * 1024, integer(toolOutputRaw.max_bytes ?? toolOutputRaw.maxBytes, 500 * 1024 * 1024)),
     mcpMaxTools: Math.max(4, Math.min(256, integer(mcpRaw.max_tools ?? mcpRaw.maxTools, 128))),
     mcpLazy: mcpRaw.lazy === true || mcpRaw.lazy === "true",
+    interactionLog: { enabled: record(raw.interaction_log).enabled === true },
     history: {
       enabled: historyRaw.enabled === true || historyRaw.enabled === "true" || process.env.LUBAN_HISTORY === "1",
       directory: text(historyRaw.directory, ""),

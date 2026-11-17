@@ -29,7 +29,7 @@ import { liveSessions, type LiveSessionSnapshot } from "../core/live-session.js"
 import { toJobStreamEvent } from "../core/mesh/agent-runner.js";
 import { exportWorkReport, type ReportPeriod } from "../core/work-report.js";
 import { summarizeToolArgs } from "../core/tools.js";
-import { checkPermissions, computerControl, computerSupported } from "../core/computer.js";
+import { beginComputerAtStartup, checkPermissions, computerControl, computerSupported } from "../core/computer.js";
 import type {
   AgentEvent,
   AgentMode,
@@ -868,6 +868,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   // per-token path free of another state write; the one-second tick renders it.
   const lastOutputRef = useRef(0);
   const [notice, setNotice] = useState("Describe a goal, ask a question, or type / for commands.");
+  useEffect(() => {
+    let mounted = true;
+    void beginComputerAtStartup(initialConfig.home, initialConfig.workspace, initialConfig.computerEnabled ?? true)
+      .then(enabled => { if (mounted) setComputerOn(enabled); });
+    return () => { mounted = false; };
+  }, [initialConfig.home]);
   /** An interrupt is also a withdrawal: the flag makes the next action refuse. */
   const stopComputerControl = useCallback((): void => {
     const control = computerControl({ home: config.home, workspace: config.workspace });

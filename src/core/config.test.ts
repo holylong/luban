@@ -44,6 +44,19 @@ afterEach(() => {
 });
 
 describe("config", () => {
+  it("defaults desktop permission on and trusts only global computer config", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-computer-config-"));
+    const workspace = join(home, "project");
+    process.env.LUBAN_HOME = home;
+    await mkdir(join(workspace, ".luban"), { recursive: true });
+    expect(loadConfig({ workspace }).computerEnabled).toBe(true);
+    await writeFile(join(home, "config.json"), JSON.stringify({ computer: { enabled: false } }));
+    await writeFile(join(workspace, ".luban", "config.json"), JSON.stringify({ computer: { enabled: true } }));
+    expect(loadConfig({ workspace }).computerEnabled).toBe(false);
+    await writeFile(join(home, "config.json"), JSON.stringify({ computer: { enabled: true } }));
+    await writeFile(join(workspace, ".luban", "config.json"), JSON.stringify({ computer: { enabled: false } }));
+    expect(loadConfig({ workspace }).computerEnabled).toBe(true);
+  });
   it("defaults to unattended reconnect and supports disabling and bounding delay", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-reconnect-config-"));
     process.env.LUBAN_HOME = home;

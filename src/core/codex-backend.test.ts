@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -72,6 +72,22 @@ async function withFetch<T>(impl: typeof fetch, run: () => Promise<T>): Promise<
 }
 
 describe("codex backend transport", () => {
+  it("logs one logical backend request/reply with usage, without HTTP duplication or credentials", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-backend-log-"));
+    const cfg = { ...config(), home, interactionLog: { enabled: true } };
+    try {
+      const client = new CodexBackendClient(cfg, { mode: "native", loadAuth: async () => auth });
+      await withFetch((async () => sse(completed([{ type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] }]))) as typeof fetch, async () => {
+        await client.complete([{ role: "user", content: "hello" }], [], new AbortController().signal);
+      });
+      const directory = join(home, "logs", "interactions");
+      const text = await readFile(join(directory, (await readdir(directory))[0]!), "utf8");
+      const entries = text.trim().split("\n").map(line => JSON.parse(line));
+      expect(entries.map(row => row.event)).toEqual(["request", "reply", "end"]);
+      expect(JSON.parse(Buffer.from(entries[1].body, "base64").toString()).usage).toMatchObject({ input: 40, output: 6 });
+      expect(text).not.toMatch(/token-old|refresh-1|acct-1|authorization/);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
   it("defaults to native, maps legacy auto to native and requires explicit cli", () => {
     const saved = process.env.LUBAN_CODEX_MODE;
     try {

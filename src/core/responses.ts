@@ -1,5 +1,6 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
+import { interactionFetch } from "./interaction-log.js";
 import { finalizeCompletion, MAX_OUTPUT_TOKENS } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
 import { modelThinkingFields } from "./model-controls.js";
@@ -196,7 +197,7 @@ export class ResponsesClient {
       let response: Response | undefined;
       let failure: unknown;
       try {
-        response = await fetch(responsesEndpoint(this.config.model.baseUrl), {
+        response = await interactionFetch(this.config, attempt, responsesEndpoint(this.config.model.baseUrl), {
           method: "POST",
           headers: {
             "content-type": "application/json",

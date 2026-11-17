@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTools } from "./tools.js";
 import {
-  ComputerControl, beginFromEnvironment, checkPermissions, computerControl, computerHome, ensureHelper,
+  ComputerControl, beginComputerAtStartup, beginFromEnvironment, checkPermissions, computerControl, computerHome, ensureHelper,
   computerSupported, glowNotifier, helperSource, resetComputerControlForTests,
 } from "./computer.js";
 
@@ -156,6 +156,21 @@ process.stdin.on("end", () => console.log(JSON.stringify({ ok: true, accessibili
     expect(computerControl({ home: root, workspace: root }).enabled).toBe(false);
     expect(await beginFromEnvironment(root, root, { LUBAN_COMPUTER: "1" })).toBe(true);
     expect(computerControl({ home: root, workspace: root }).enabled).toBe(true);
+  });
+
+  it("accepts a configured default but explicit environment off wins", async () => {
+    expect(await beginFromEnvironment(root, root, { LUBAN_COMPUTER: "0" }, true)).toBe(false);
+    expect(await beginFromEnvironment(root, root, {}, true)).toBe(true);
+  });
+
+  it("does not reopen after manual off or a shared stop", async () => {
+    expect(await beginComputerAtStartup(root, root, true, {})).toBe(true);
+    await computerControl({ home: root, workspace: root }).end();
+    expect(await beginComputerAtStartup(root, root, true, {})).toBe(false);
+    resetComputerControlForTests();
+    await mkdir(join(root, "computer"), { recursive: true });
+    await writeFile(join(root, "computer", "stop"), "stopped");
+    expect(await beginComputerAtStartup(root, root, true, { LUBAN_COMPUTER: "1" })).toBe(false);
   });
 
   it("locates the Swift source and honours an explicit helper override", async () => {

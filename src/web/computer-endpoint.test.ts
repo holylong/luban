@@ -67,10 +67,10 @@ const call = async (path: string, body?: Record<string, unknown>) => {
 };
 
 describe("computer control endpoint", { timeout: 30_000 }, () => {
-  it("reports the switch off, with the permission state the OS actually has", async () => {
+  it("defaults the switch on, with the permission state the OS actually has", async () => {
     const reply = await call("/api/computer");
     expect(reply.status).toBe(200);
-    expect(reply.body).toMatchObject({ enabled: false, accessibility: true, screenRecording: false, displayScale: 2 });
+    expect(reply.body).toMatchObject({ enabled: true, accessibility: true, screenRecording: false, displayScale: 2 });
   });
 
   it("opens and closes the session, and ⌘. stops it", async () => {

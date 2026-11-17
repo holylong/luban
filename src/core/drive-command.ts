@@ -75,7 +75,7 @@ export async function runDrive(argv: string[]): Promise<number> {
   // Only this file's writer may touch stdout; everything else goes to stderr.
   const write = (event: DriveEvent): void => { process.stdout.write(encodeEvent(event)); };
   const config = loadConfig({ workspace, model: options.model, mesh: false, seedDefaults: true });
-  if (!options.computer) delete process.env.LUBAN_COMPUTER;
+  if (!options.computer) process.env.LUBAN_COMPUTER = "0";
 
   const allowed = new Set(parseAllowlist(process.env.LUBAN_DRIVE_ALLOW));
   const session = new DriveSession({

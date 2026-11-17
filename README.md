@@ -10,6 +10,8 @@
 
 luban 在你的项目里读代码、改文件、跑命令、验证结果，把一个想法做到能运行、能验证；也能把任务交给局域网里的其他电脑执行。
 
+macOS [电脑操控](docs/computer-control.md)默认在启动时开启（仍需系统授权）；全局配置 `computer.enabled: false` 或 `LUBAN_COMPUTER=0` 可关闭默认启动，项目配置不能授予此权限。
+
 **v2.0.0** 汇集桌面工作台、常驻 Bot、桌宠「造物主」以及进程、Agent 与任务 token 状态展示。升级说明与当前边界见 [版本记录](CHANGELOG.md)。
 
 ![luban 终端界面：对话、功能介绍与任务执行状态](docs/luban.jpg)
@@ -22,6 +24,13 @@ luban 在你的项目里读代码、改文件、跑命令、验证结果，把�
 - **模型自由**：云端与本地模型、OpenAI 兼容、Anthropic、Responses，也能复用 Codex 账号。
 - **按需扩展**：技能、MCP 与编辑器插件。
 - **不藏权限**：命令与文件操作都在你的机器上、以当前用户权限执行，不是沙箱。
+
+## 可选原始模型交互日志
+
+在配置文件中设置 `"interaction_log": { "enabled": true }` 开启，默认关闭。
+OpenAI、Anthropic 和 Responses HTTP 请求会记录实际发送的 JSON body，以及消费到的流式或非流式响应原始字节（包括原始 usage 字段）。日志位于 `<luban home>/logs/interactions/YYYY-MM-DD.jsonl`，按 UTC 日期分文件；每条带时间、请求 ID、模型、从 0 开始的重试 attempt、HTTP 状态或传输/流错误事件。`body` 是 Base64，按请求 ID 拼接 `response_bytes` 后解码即可查看原始响应。每次重试使用独立请求 ID。
+
+不会记录 URL、请求/响应 headers、认证元数据或错误消息；配置的当前模型 API key 会在 body 中替换为 `[REDACTED]`（跨响应块也会脱敏）。除此之外 body **可能包含完整提示词、工具结果、图片及其他敏感信息**；开启前请确认，日志不会自动上传或清理。目录和文件在 Unix 上分别使用 `0700` / `0600` 权限。只记录应用实际读取的响应字节，不会通过 clone 缓冲整份响应；日志写入失败不影响模型请求。Codex CLI 后端不在此 HTTP 日志范围内。
 
 ## 安装
 

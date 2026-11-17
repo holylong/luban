@@ -52,7 +52,11 @@ process.stdin.on("end", () => {
   try {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    // Off, and the missing Screen Recording grant is named instead of hidden.
+    // Startup follows the default-on config; explicit off remains effective.
+    await expect.poll(() => control.enabled, { timeout: 5000 }).toBe(true);
+    await type("/computer off");
+    await expect.poll(() => control.enabled, { timeout: 5000 }).toBe(false);
+    // The missing Screen Recording grant is named instead of hidden.
     await type("/computer status");
     await expect.poll(() => frame, { timeout: 5000 }).toContain("电脑操控：关");
     expect(frame).toContain("屏幕录制 ✗");

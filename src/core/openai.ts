@@ -1,5 +1,6 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
+import { interactionFetch } from "./interaction-log.js";
 import { parseModelEvent, sseData, validateCompletion, type CompletionCheck } from "./sse.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
 import { describeModelError } from "./model-errors.js";
@@ -184,7 +185,7 @@ export class OpenAiClient {
       let response: Response | undefined;
       let backoff: number | undefined;
       try {
-        response = await fetch(endpoint(this.config.model.baseUrl), {
+        response = await interactionFetch(this.config, attempt, endpoint(this.config.model.baseUrl), {
           method: "POST",
           headers: {
             "content-type": "application/json",

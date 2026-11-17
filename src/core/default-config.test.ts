@@ -45,7 +45,7 @@ describe("starter configuration", () => {
     const source = starterConfigSource();
     for (const forbidden of [
       "api_key", "apiKey", "OPEN_DESIGN_API_KEY", "OPENCODE_ZEN_API_KEY",
-      "contacts", "projects", "relay", "token", "sk-",
+      "sk-", // max_tokens is a budget, not a credential; empty maps contain no private data.
       "192.168.", "10.0.", "172.16.", "39.105.", "184.32.",
     ]) expect(source).not.toContain(forbidden);
     const secretKeys: string[] = [];
@@ -53,7 +53,7 @@ describe("starter configuration", () => {
       if (Array.isArray(value)) { value.forEach(walk); return; }
       if (!value || typeof value !== "object") return;
       for (const [key, entry] of Object.entries(value)) {
-        if (/api_?key|token|secret|password|cookie/i.test(key)) secretKeys.push(key);
+        if (/api_?key|(?:^|_)token(?:$|_)|secret|password|cookie/i.test(key)) secretKeys.push(key);
         walk(entry);
       }
     };
@@ -78,6 +78,25 @@ describe("starter configuration", () => {
     expect(config.mesh.maxWorkers).toBe(12);
     expect(config.maxSteps).toBe(1000);
     expect(await readFile(join(home, "config.json"), "utf8")).toBe(starterConfigSource());
+  });
+
+  it("loads portable additions without configuring private services or platform capabilities", async () => {
+    for (const name of ["LUBAN_KEV_MODE", "LUBAN_KEV_URL", "LUBAN_RELAY_PUBLIC_URL"]) vi.stubEnv(name, "");
+    const config = loadConfig({ workspace, seedDefaults: true });
+    const raw = JSON.parse(await readFile(join(home, "config.json"), "utf8"));
+    expect(raw.model.max_tokens).toBe(64000);
+    expect(config.maxTokens).toBe(64000);
+    expect(raw.remote).toEqual({ enabled: false, host: "127.0.0.1", port: 0 });
+    expect(config.remote).toMatchObject({ enabled: false, host: "127.0.0.1", port: 0, relayUrl: "" });
+    expect(raw.kev).toEqual({ mode: "model", url: "", timeout_seconds: 120 });
+    expect(config.kev).toMatchObject({ mode: "model", url: "", timeoutSeconds: 120 });
+    expect(raw.contacts).toEqual([]);
+    expect(raw.projects).toEqual({});
+    expect(config.mesh.contacts).toEqual([]);
+    expect(config.mesh.projects).toEqual({});
+    expect(raw.node).not.toHaveProperty("capabilities");
+    expect(config.mesh.capabilities).toContain(process.platform === "win32" ? "windows" : process.platform === "darwin" ? "darwin" : "linux");
+    for (const key of ["providers", "web", "mcp", "mcpServers", "workspace", "token"]) expect(raw).not.toHaveProperty(key);
   });
 
   it("keeps an existing configuration and its preferences untouched", async () => {

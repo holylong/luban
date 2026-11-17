@@ -14,6 +14,7 @@ import { join } from "node:path";
  * install can send a first message before the user configures any key.
  */
 export const STARTER_CONFIG = {
+  computer: { enabled: true },
   node: {
     host: "0.0.0.0",
     port: 17890,
@@ -21,6 +22,7 @@ export const STARTER_CONFIG = {
   },
   model: {
     active: "opencode-zen/deepseek-v4.1-flash-free",
+    max_tokens: 64000,
     temperature: 0.2,
     top_p: 1,
     top_k: 0,
@@ -56,6 +58,19 @@ export const STARTER_CONFIG = {
   sandbox: {
     mode: "soft",
     allow_outside_workspace: true,
+  },
+  interaction_log: { enabled: false },
+  contacts: [],
+  projects: {},
+  remote: {
+    enabled: false,
+    host: "127.0.0.1",
+    port: 0,
+  },
+  kev: {
+    mode: "model",
+    url: "",
+    timeout_seconds: 120,
   },
   max_workers: 12,
   max_steps: 1000,

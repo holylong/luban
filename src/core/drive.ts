@@ -21,7 +21,7 @@
 
 import { randomUUID } from "node:crypto";
 import { AgentRunner, initialMessages } from "./agent.js";
-import { beginFromEnvironment, checkPermissions, computerControl, computerSupported } from "./computer.js";
+import { beginComputerAtStartup, checkPermissions, computerControl, computerSupported } from "./computer.js";
 import { loadConfig } from "./config.js";
 import type { AgentEvent, ChatMessage, LubanConfig } from "./types.js";
 import type { DriveComputerState, DriveEvent, DriveUsage } from "./drive-events.js";
@@ -191,9 +191,8 @@ export class DriveSession {
     if (!computerSupported()) {
       return { supported: false, enabled: false, note: "电脑操控只支持 macOS" };
     }
-    // LUBAN_COMPUTER=1 is the window's switch: this process only drives the
-    // desktop when the human turned it on, never because the model asked.
-    const begun = await beginFromEnvironment(config.home, config.workspace).catch(error => {
+    // Trusted global permission defaults on; environment can explicitly opt out.
+    const begun = await beginComputerAtStartup(config.home, config.workspace, config.computerEnabled ?? true).catch(error => {
       this.emit({ type: "error", text: `电脑操控启动失败：${error instanceof Error ? error.message : String(error)}` });
       return false;
     });

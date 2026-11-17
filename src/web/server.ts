@@ -20,7 +20,7 @@ import { DASHBOARD_HTML, DOCS_HTML, webAssetPath, WEB_CONTENT_TYPES } from "./as
 import { ApprovalBroker, type ApprovalDecision } from "./approval.js";
 import { QuestionBroker } from "./question.js";
 import { AuthGate, clearCookie, rejectAuth, tokenCookie } from "./auth.js";
-import { checkPermissions, computerControl, computerSupported } from "../core/computer.js";
+import { beginComputerAtStartup, checkPermissions, computerControl, computerSupported } from "../core/computer.js";
 
 const MAX_BODY = 1024 * 1024;
 const MAX_JOBS = 100;
@@ -230,6 +230,7 @@ export class LubanWebServer {
 
   async start(): Promise<string> {
     if (this.server) return this.url();
+    await beginComputerAtStartup(this.config.home, this.config.workspace, this.config.computerEnabled ?? true);
     this.server = createServer((req, res) => { void this.route(req, res); });
     this.server.requestTimeout = 130_000;
     this.server.headersTimeout = 15_000;

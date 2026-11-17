@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, savePreferredModel } from "./config.js";
@@ -83,6 +83,16 @@ afterEach(() => {
 });
 
 describe("CodexClient", () => {
+  it("logs logical CLI requests and completed usage once", async () => {
+    const { client, config } = await recordingClient();
+    config.interactionLog = { enabled: true };
+    await client.complete([{ role: "user", content: "hello" }], [], new AbortController().signal);
+    const directory = join(config.home, "logs", "interactions");
+    const entries = (await readFile(join(directory, (await readdir(directory))[0]!), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(entries.map(row => row.event)).toEqual(["request", "reply", "end"]);
+    expect(entries[0].transport).toBe("codex-cli");
+    expect(JSON.parse(Buffer.from(entries[1].body, "base64").toString()).usage).toMatchObject({ input: 120, output: 30 });
+  });
   const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
   it("sends native image bytes initially and on resume, then accepts text-only follow-ups", async () => {

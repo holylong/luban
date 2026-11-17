@@ -8,6 +8,7 @@ import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions
 import { codexSpawn } from "./codex-command.js";
 import { PLAN_MARKER, VERIFICATION_MARKER } from "./plan.js";
 import { resolveImageParts } from "./vision.js";
+import { interactionCompletion } from "./interaction-log.js";
 
 const OUTPUT_SCHEMA = {
   type: "object",
@@ -96,7 +97,8 @@ export class CodexClient {
     for (let attempt = 0; ; attempt += 1) {
       signal.throwIfAborted();
       try {
-        return await this.completeAttempt(messages, tools, signal, onDelta, onNotice, options);
+        return await interactionCompletion(this.config, "codex-cli", attempt, { messages, tools },
+          () => this.completeAttempt(messages, tools, signal, onDelta, onNotice, options));
       } catch (error) {
         if (signal.aborted || !(error instanceof CodexOutputError) || attempt >= retries) throw error;
         onNotice?.(`Codex CLI 未返回有效结果，正在自动恢复（${attempt + 1}/${retries}）；已完成的工具操作保留`);

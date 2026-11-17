@@ -542,10 +542,11 @@ export function computerControl(options: ComputerOptions = {}): ComputerControl 
 /**
  * Headless opt-in. `luban --prompt` and piped stdin have no switch to click, so
  * `LUBAN_COMPUTER=1` is the human saying "yes, this run may drive the desktop".
- * Anything else (unset, 0, no) leaves the session closed.
+ * Unset uses the supplied trusted default (false for legacy callers); 0/no disables.
  */
-export async function beginFromEnvironment(home: string, workspace: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  if (!/^(1|on|true|yes)$/iu.test((env.LUBAN_COMPUTER ?? "").trim())) return false;
+export async function beginFromEnvironment(home: string, workspace: string, env: NodeJS.ProcessEnv = process.env, defaultEnabled = false): Promise<boolean> {
+  const flag = env.LUBAN_COMPUTER?.trim();
+  if (flag ? !/^(1|on|true|yes)$/iu.test(flag) : !defaultEnabled) return false;
   // A headless run on Linux/Windows must not die over an unsupported feature.
   if (!computerSupported()) {
     process.stderr.write(`${UNSUPPORTED(process.platform)}已忽略 LUBAN_COMPUTER。\n`);
@@ -555,7 +556,24 @@ export async function beginFromEnvironment(home: string, workspace: string, env:
   return true;
 }
 
+const startupHomes = new Set<string>();
+
+/** Initialize once per home; later entry points cannot undo a manual off/stop. */
+export async function beginComputerAtStartup(home: string, workspace: string, enabled = true, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const key = resolve(home);
+  if (startupHomes.has(key)) return computerControl({ home, workspace }).enabled;
+  startupHomes.add(key);
+  if (existsSync(stopPath(home))) return false;
+  try {
+    return await beginFromEnvironment(home, workspace, env, enabled);
+  } catch (error) {
+    process.stderr.write(`电脑操控启动失败：${error instanceof Error ? error.message : String(error)}\n`);
+    return false;
+  }
+}
+
 export function resetComputerControlForTests(): void {
+  startupHomes.clear();
   session = undefined;
   sessionKey = "";
 }
