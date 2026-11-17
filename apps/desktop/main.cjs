@@ -588,10 +588,14 @@ function findWindowFor(workspace) {
 // The window's own project dropdown is disabled in desktop mode (the backend is
 // pinned to one root), so the renderer needs a way to reach the same folder
 // picker as the File menu instead of making the native menu the only path.
-ipcMain.handle("luban:openWorkspace", async event => {
+ipcMain.handle("luban:createWorkspace", event => pickAndOpenWorkspace(event, true));
+ipcMain.handle("luban:openWorkspace", event => pickAndOpenWorkspace(event));
+async function pickAndOpenWorkspace(event, create = false) {
   const session = trustedSession(event);
   if (!session || session.opening || petSubmitting) throw new Error("当前无法切换工作区");
-  const target = await chooseWorkspace(session);
+  const target = create
+    ? await require("./new-workspace.cjs").chooseNewWorkspace(dialog, session.window, session.workspace || savedWorkspace() || homedir())
+    : await chooseWorkspace(session);
   if (!target) return { canceled: true };
   const mode = await askOpenMode(session, target);
   if (mode === "cancel") return { canceled: true };
@@ -601,7 +605,7 @@ ipcMain.handle("luban:openWorkspace", async event => {
     (mode === "switch" ? loadInSession(session, target) : openWorkspaceWindow(target)).catch(reportOpenError);
   });
   return { path: target, mode };
-});
+}
 // The multi-window path: the current project keeps running in its own window.
 ipcMain.handle("luban:openWorkspaceWindow", async event => {
   const session = trustedSession(event);

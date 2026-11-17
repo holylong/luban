@@ -26,6 +26,8 @@ export interface DesktopBridge {
   trashEntry?(path: string): Promise<{ ok: boolean; canceled?: boolean }>;
   /** Desktop mode only: pick a new project folder and restart the local backend there. */
   openWorkspace?(): Promise<{ canceled?: boolean; path?: string; mode?: "window" | "switch" }>;
+  /** Create a new folder using the native dialog, then open it as a workspace. */
+  createWorkspace?(): Promise<{ canceled?: boolean; path?: string; mode?: "window" | "switch" }>;
   /** Desktop mode only: pick a folder and open it in a second window. */
   openWorkspaceWindow?(): Promise<{ canceled?: boolean; path?: string }>;
   /** Whether the floating Creator window is on screen; absent on older builds. */

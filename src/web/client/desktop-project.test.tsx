@@ -47,6 +47,13 @@ describe("desktop project switcher", () => {
     expect(html).not.toContain("desktop-open-workspace-name\">luban");
   });
 
+  it("offers workspace creation when the native bridge supports it", () => {
+    const createWorkspace = vi.fn();
+    vi.stubGlobal("window", { lubanDesktop: { openWorkspace: vi.fn(), createWorkspace } });
+    expect(renderToStaticMarkup(<ProjectSwitcher store={store()} />)).toContain("新建工作区…");
+    expect(createWorkspace).not.toHaveBeenCalled();
+  });
+
   it("offers a second window for another folder", () => {
     const openWorkspace = vi.fn();
     const openWorkspaceWindow = vi.fn();

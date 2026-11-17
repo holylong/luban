@@ -66,6 +66,12 @@ export function ProjectSwitcher({ store }: { store: WorkbenchStore }): React.Rea
               .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
           }}
         ><span className="desktop-open-workspace-name">{opened || "打开文件夹…"}</span><small>Ctrl+O</small></button>
+        {bridge.createWorkspace && (
+          <button className="desktop-open-workspace" title="创建新文件夹作为工作区" onClick={() => {
+            void bridge.createWorkspace!().then(reply => { if (!reply.canceled) setError(""); })
+              .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
+          }}>新建工作区…</button>
+        )}
         {bridge.openWorkspaceWindow && (
           <button
             className="desktop-open-workspace"
