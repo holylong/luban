@@ -142,3 +142,91 @@ describe("OpenAiClient", () => {
     expect(requests).toBe(2);
   });
 });
+
+describe("parallel tool-call streaming", () => {
+  const chunk = (toolCalls: unknown[]) => JSON.stringify({ choices: [{ delta: { tool_calls: toolCalls } }] });
+  const serve = (lines: string[]) => {
+    server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      for (const line of lines) response.write(`data: ${line}\n\n`);
+      response.end("data: [DONE]\n\n");
+    });
+    return new Promise<string>(resolve => server!.listen(0, "127.0.0.1", () => {
+      const address = server!.address();
+      if (!address || typeof address === "string") throw new Error("no test address");
+      resolve(`http://127.0.0.1:${address.port}/v1`);
+    }));
+  };
+  const configFor = (baseUrl: string) => {
+    const model = { id: "test/model", provider: "test", model: "model", name: "model", baseUrl, apiKey: "" };
+    return { home: ".", workspace: ".", project: "test", model, models: [model], maxTokens: 100, temperature: 0, timeoutMs: 2_000, maxSteps: 2, backendUrl: "", permissionMode: "allow" } as LubanConfig;
+  };
+  const run = async (lines: string[], names: string[] = []) => {
+    const baseUrl = await serve(lines);
+    const tools = names.map(name => ({ type: "function", function: { name, parameters: { type: "object" } } }));
+    return new OpenAiClient(configFor(baseUrl)).complete([{ role: "user", content: "go" }], tools, new AbortController().signal);
+  };
+  const names = (calls: Array<{ function: { name: string; arguments: string } }>) => calls.map(call => call.function);
+
+  it("keeps calls apart when a gateway labels fragments only by id", async () => {
+    const result = await run([
+      chunk([{ id: "c1", function: { name: "record_verification", arguments: '{"pas' } }]),
+      chunk([{ function: { arguments: 's":true}' } }]),
+      chunk([{ id: "c2", function: { name: "update_plan", arguments: '{"plan":[]}' } }]),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+    ]);
+    // Concatenating the names produced "record_verificationupdate_plan", which
+    // the agent answered with "TOOL ERROR: unknown tool".
+    expect(names(result.toolCalls)).toEqual([
+      { name: "record_verification", arguments: '{"pass":true}' },
+      { name: "update_plan", arguments: '{"plan":[]}' },
+    ]);
+    expect(result.toolCalls.map(call => call.id)).toEqual(["c1", "c2"]);
+  });
+
+  it("keeps calls apart when a gateway always reports index 0", async () => {
+    const result = await run([
+      chunk([{ index: 0, id: "c1", function: { name: "edit_file", arguments: "{}" } }]),
+      chunk([{ index: 0, id: "c2", function: { name: "edit_file", arguments: "{}" } }]),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+    ]);
+    // Two identical edits used to collapse into the single name "edit_fileedit_file".
+    expect(names(result.toolCalls)).toEqual([
+      { name: "edit_file", arguments: "{}" },
+      { name: "edit_file", arguments: "{}" },
+    ]);
+    expect(result.toolCalls.map(call => call.id)).toEqual(["c1", "c2"]);
+  });
+
+  it("keeps calls apart when a gateway sends neither index nor id", async () => {
+    const result = await run([
+      chunk([{ function: { name: "record_verification", arguments: '{"pass":true}' } }]),
+      chunk([{ function: { name: "update_plan", arguments: '{"plan":[]}' } }]),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+    ], ["record_verification", "update_plan"]);
+    // The advertised names decide: neither completes the other, so the second
+    // name is a second call rather than a fragment of the first.
+    expect(names(result.toolCalls)).toEqual([
+      { name: "record_verification", arguments: '{"pass":true}' },
+      { name: "update_plan", arguments: '{"plan":[]}' },
+    ]);
+  });
+
+  it("joins a split tool name instead of inventing a second call", async () => {
+    const result = await run([
+      chunk([{ function: { name: "read_" } }]),
+      chunk([{ function: { name: "file", arguments: '{"path":"a"}' } }]),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+    ], ["read_file"]);
+    expect(names(result.toolCalls)).toEqual([{ name: "read_file", arguments: '{"path":"a"}' }]);
+  });
+
+  it("ignores a repeated complete name on the same call", async () => {
+    const result = await run([
+      chunk([{ index: 0, id: "c1", function: { name: "read_file" } }]),
+      chunk([{ index: 0, function: { name: "read_file", arguments: "{}" } }]),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+    ]);
+    expect(names(result.toolCalls)).toEqual([{ name: "read_file", arguments: "{}" }]);
+  });
+});

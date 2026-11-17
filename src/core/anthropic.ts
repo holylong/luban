@@ -158,6 +158,9 @@ export class AnthropicClient {
 
   private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, signal?: AbortSignal, idleOverrideMs?: number): Promise<CompletionResult> {
     const toolSlots = new Map<number, ToolCall>();
+    // Declared block index -> slot. A relay that reuses one index for parallel
+    // tool_use blocks would otherwise overwrite the earlier call.
+    const blockKeys = new Map<number, number>();
     let finished = false;
     let finishReason: unknown;
     let content = "";
@@ -184,14 +187,18 @@ export class AnthropicClient {
         const index = Number(data.index ?? 0);
         const block = data.content_block && typeof data.content_block === "object" ? data.content_block as JsonObject : {};
         if (block.type === "tool_use") {
-          toolSlots.set(index, { id: String(block.id || ""), type: "function", function: { name: String(block.name || ""), arguments: "" } });
+          const id = String(block.id || "");
+          const held = toolSlots.get(index);
+          const key = held && id && held.id && held.id !== id ? Math.max(...toolSlots.keys()) + 1 : index;
+          blockKeys.set(index, key);
+          toolSlots.set(key, { id, type: "function", function: { name: String(block.name || ""), arguments: "" } });
         }
         const delta = data.delta && typeof data.delta === "object" ? data.delta as JsonObject : {};
         if (delta.stop_reason != null) finishReason = delta.stop_reason;
         if (typeof delta.text === "string") { content += delta.text; onDelta?.(delta.text, "content"); }
         if (typeof delta.thinking === "string") { reasoning += delta.thinking; onDelta?.(delta.thinking, "reasoning"); }
         if (typeof delta.partial_json === "string") {
-          const slot = toolSlots.get(index);
+          const slot = toolSlots.get(blockKeys.get(index) ?? index);
           if (slot) slot.function.arguments += delta.partial_json;
         }
       }

@@ -77,18 +77,76 @@ function endpoint(baseUrl: string): string {
   return `${value}/chat/completions`;
 }
 
-function mergeToolCall(slots: Map<number, ToolCall>, fragment: Record<string, unknown>): void {
-  const index = Number(fragment.index || 0);
-  const current = slots.get(index) ?? {
+/** The `index` a fragment declares, or undefined when the provider omits it. */
+function declaredIndex(fragment: Record<string, unknown>): number | undefined {
+  const raw = fragment.index;
+  const value = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : Number.NaN;
+  return Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** The `name` a fragment carries, if it carries one that can still change the call. */
+function fragmentName(fragment: Record<string, unknown>): string {
+  const fn = fragment.function && typeof fragment.function === "object" ? fragment.function as Record<string, unknown> : {};
+  return typeof fn.name === "string" ? fn.name : "";
+}
+
+/**
+ * Merge one streamed `tool_calls` fragment into its call slot.
+ *
+ * Some OpenAI-compatible gateways omit `index` and only label fragments by
+ * `id`; a fragment with neither continues the call that is still streaming.
+ * Treating every fragment as index 0 merged parallel calls into one, so two
+ * names arrived concatenated ("record_verificationupdate_plan") and the agent
+ * answered "TOOL ERROR: unknown tool". A provider that always reports index 0
+ * is repaired the same way: a different id opens the next call instead of
+ * corrupting the first, and without ids the advertised tool names decide
+ * whether a second name is another call or the rest of a split one.
+ */
+function mergeToolCall(slots: Map<number, ToolCall>, fragment: Record<string, unknown>, known: Set<string>): void {
+  const id = typeof fragment.id === "string" ? fragment.id : "";
+  const declared = declaredIndex(fragment);
+  const name = fragmentName(fragment);
+  const last = slots.size ? Math.max(...slots.keys()) : -1;
+  const open = last >= 0 ? slots.get(last) : undefined;
+  const byId = id ? [...slots].find(([, slot]) => slot.id === id)?.[0] : undefined;
+  let key: number;
+  if (declared !== undefined) {
+    const held = slots.get(declared);
+    // A repeated index carrying a different id can only be a second call.
+    key = byId ?? (held?.id && id && held.id !== id ? last + 1 : declared);
+  } else if (byId !== undefined) {
+    key = byId;
+  } else if (!id && open && name && name !== open.function.name && open.function.name) {
+    // No index and no id: a name that completes the open one is a fragment of
+    // it, anything else starts the next call.
+    key = known.has(`${open.function.name}${name}`) || !known.has(open.function.name) ? last : last + 1;
+  } else {
+    // No index: a fresh id opens a call, an id-less fragment continues the open one.
+    key = id || last < 0 ? last + 1 : last;
+  }
+  const current = slots.get(key) ?? {
     id: "",
     type: "function" as const,
     function: { name: "", arguments: "" },
   };
-  if (typeof fragment.id === "string") current.id = fragment.id;
+  if (id) current.id = id;
   const fn = fragment.function && typeof fragment.function === "object" ? fragment.function as Record<string, unknown> : {};
-  if (typeof fn.name === "string") current.function.name += fn.name;
+  // Gateways sometimes repeat the complete name on every chunk; appending it
+  // again would make the name undispatchable.
+  if (typeof fn.name === "string" && fn.name && fn.name !== current.function.name) current.function.name += fn.name;
   if (typeof fn.arguments === "string") current.function.arguments += fn.arguments;
-  slots.set(index, current);
+  slots.set(key, current);
+}
+
+/** The advertised tool names, which is how a name fragment is recognised as a
+ * fragment rather than the start of a second call. */
+function toolNames(tools: Array<Record<string, unknown>>): Set<string> {
+  const names = new Set<string>();
+  for (const tool of tools) {
+    const fn = tool.function && typeof tool.function === "object" ? tool.function as Record<string, unknown> : {};
+    if (typeof fn.name === "string" && fn.name) names.add(fn.name);
+  }
+  return names;
 }
 
 function retryableStatus(status: number): boolean {
@@ -211,7 +269,7 @@ export class OpenAiClient {
           if (!response.body) throw new Error("model returned an empty stream");
           // Do not retry after streaming starts: callbacks may already have rendered output.
           clearTimeout(timeout);
-          return await this.consumeStream(response.body, onDelta, controller, onNotice, options?.thinkingTimeoutMs, signal);
+          return await this.consumeStream(response.body, onDelta, controller, onNotice, options?.thinkingTimeoutMs, signal, toolNames(tools));
         }
       } catch (error) {
         if (signal.aborted || response?.ok || attempt >= retries) throw error;
@@ -248,7 +306,7 @@ export class OpenAiClient {
       { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0) });
   }
 
-  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, idleOverrideMs?: number, signal?: AbortSignal): Promise<CompletionResult> {
+  private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, idleOverrideMs?: number, signal?: AbortSignal, known = new Set<string>()): Promise<CompletionResult> {
     const toolSlots = new Map<number, ToolCall>();
     let finished = false;
     let finishReason: unknown;
@@ -291,7 +349,7 @@ export class OpenAiClient {
           onDelta?.(delta.content, "content");
         }
         if (Array.isArray(delta.tool_calls)) {
-          for (const fragment of delta.tool_calls) mergeToolCall(toolSlots, fragment as Record<string, unknown>);
+          for (const fragment of delta.tool_calls) mergeToolCall(toolSlots, fragment as Record<string, unknown>, known);
         }
       }
     } catch (error) {
