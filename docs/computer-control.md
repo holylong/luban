@@ -10,7 +10,7 @@ macOS 启动时默认开启电脑操控（CLI、Web、drive 与独立 TUI）。�
 2. 第一次使用需要在 **系统设置 › 隐私与安全性** 里给 luban 勾上「辅助功能」和「屏幕录制」；药丸会变成虚线并在悬停时说明还缺哪一项，然后重启 luban。
 3. 开启后：
 
-   - 屏幕四边燃起蓝色燃弧，顶部出现「luban 正在操控 · ⌘. 停止」徽标；
+   - 授权本身不点亮燃弧，也不启动覆盖层。只有模型真正执行点击、输入、移动等操作时才显示「luban 正在操控 · ⌘. 停止」；操作完成、失败或取消后立即清除，空闲仍保持授权。status/windows/screenshot/cursor 等只读观察不点亮；
    - `⌘.` 是全局快捷键，即使 agent 正在拖拽也会立刻中止（写入 `~/.luban/computer/stop`，后端每个动作前重读）；
    - 关掉开关或按 `⌘.` 后约 0.7s 熄火。
 
@@ -36,7 +36,7 @@ macOS 启动时默认开启电脑操控（CLI、Web、drive 与独立 TUI）。�
 
 开关是**每进程**的（每个入口只对自己那个 agent 放开），但**停止标志是共享文件** `~/.luban/computer/stop`：桌面按了 `⌘.`，终端里的 agent 下一步也会被拒绝，反之亦然。终端或 `LUBAN_COMPUTER=1` 打开的会话不点亮桌面 App 的那圈覆盖层（桌面 App 在场时后端看到 `LUBAN_GLOW_URL` 就让位），而是由 CLI 自己拉起 `luban-glow` 画边框；两者都关了才完全没有光圈——产生输入前请确认你看着的是哪个窗口。
 
-**终端为什么能看到光圈**：终端窗口盖不住别的 App，所以 CLI 在 `begin()` 时用 `swiftc` 把 `apps/desktop/native/glow.swift` 编译成 `~/.luban/bin/luban-glow-<hash>`（首次约 5 秒，之后命中缓存）并以子进程运行，`end()` / `Ctrl+C` / `/computer off` / 人按 `⌘.` 时退出。覆盖层走 `--parent-pid` 的父进程守护，后端崩了它自己也会退；它不再在 SIGTERM 时写停止标志，只有人按 `⌘.` 才写。`~/bin/luban-glow` 必须在真实的 macOS AppKit 里跑，`glow.html` 只对 Electron 有效。
+**终端为什么能看到光圈**：终端窗口盖不住别的 App，所以 CLI 只在实际输入操作开始时用 `swiftc` 把 `apps/desktop/native/glow.swift` 编译成 `~/.luban/bin/luban-glow-<hash>`（首次约 5 秒，之后命中缓存）并以不阻止 Node 退出的子进程运行；每个动作的 finally、TUI 卸载、服务停止、`end()` / `Ctrl+C` / `/computer off` / 人按 `⌘.` 时清理。启动编译期间停止也不会留下迟到的覆盖层。覆盖层走 `--parent-pid` 的父进程守护，后端崩了它自己也会退；它不再在 SIGTERM 时写停止标志，只有人按 `⌘.` 才写。`~/bin/luban-glow` 必须在真实的 macOS AppKit 里跑，`glow.html` 只对 Electron 有效。
 
 ## 后端结构
 

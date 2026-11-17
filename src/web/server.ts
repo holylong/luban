@@ -256,6 +256,7 @@ export class LubanWebServer {
   }
 
   async stop(): Promise<void> {
+    await computerControl({ home: this.config.home, workspace: this.config.workspace }).clearActivity();
     const server = this.server;
     this.server = undefined;
     this.detach?.();

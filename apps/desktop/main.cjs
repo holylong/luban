@@ -263,8 +263,8 @@ function startGlowServer() {
     request.on("end", () => {
       let event = {};
       try { event = JSON.parse(body || "{}"); } catch { return finish(400, { ok: false }); }
-      if (event.event === "begin") showGlow(event.label);
-      else if (event.event === "action") {
+      // Authorization is not activity; only actual operations light the rim.
+      if (event.event === "action") {
         if (!glow || glow.isDestroyed() || !glow.isVisible()) showGlow(event.label);
         else glowSend({ mode: "action", label: event.label || glowLabel });
       } else if (event.event === "end") hideGlow();

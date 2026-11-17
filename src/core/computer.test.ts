@@ -1,4 +1,7 @@
 import { mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -21,7 +24,7 @@ process.stdin.on("end", () => {
   if (request.action === "screenshot") { fs.writeFileSync(request.path, "png"); return console.log(JSON.stringify({ ok: true, path: request.path, bytes: 3 })); }
   if (request.action === "cursor") return console.log(JSON.stringify({ ok: true, x: 120, y: 340 }));
   if (request.action === "fail") return console.log(JSON.stringify({ ok: false, error: "模拟失败" }));
-  console.log(JSON.stringify({ ok: true }));
+  setTimeout(() => console.log(JSON.stringify({ ok: true })), 120);
 });
 `;
 
@@ -143,11 +146,15 @@ process.stdin.on("end", () => console.log(JSON.stringify({ ok: true, accessibili
     expect(notify).toBeTypeOf("function");
     const control = new ComputerControl({ home: root, workspace: root, notify });
     await control.begin("测试");
+    await control.windows();
+    await control.screenshot();
+    await control.act("cursor");
+    expect(seen).toEqual([]);
     await control.act("move", { x: 1, y: 1 });
     await control.end();
     await new Promise(resolveWait => setTimeout(resolveWait, 250));
     server.close();
-    expect(seen).toEqual(["t0ken:begin", "t0ken:action", "t0ken:end"]);
+    expect(seen).toEqual(["t0ken:action", "t0ken:end", "t0ken:end"]);
   });
 
   it("opens a session only for an explicit headless opt-in", async () => {
@@ -201,22 +208,63 @@ describe("rim overlay", { timeout: 30_000 }, () => {
     return rimLog;
   };
 
-  it("lights the screen when a session opens and clears it when it ends", async () => {
+  it("stays dark on authorization and clears after real activity", async () => {
     if (process.platform !== "darwin") return; // the overlay is macOS-only
     const rimLog = await fakeRim();
     const control = new ComputerControl({ home: root, workspace: root });
     await control.begin("luban 正在操控 · 终端");
+    expect(control.rimPid).toBeUndefined();
+    const operation = control.act("move", { x: 1, y: 2 });
     await waitFor(() => control.rimPid !== undefined);
     let args = "";
     for (let attempt = 0; attempt < 100 && !args; attempt += 1) {
       args = await readFile(rimLog, "utf8").catch(() => "");
       if (!args) await new Promise(done => setTimeout(done, 50));
     }
-    expect(args).toContain("luban 正在操控 · 终端");
+    expect(args).toContain("luban 正在操控");
     expect(args).toContain("--parent-pid");
     expect(args).toContain(join(root, "computer", "stop"));
-    await control.end();
+    await operation;
+    expect(control.enabled).toBe(true);
     expect(control.rimPid).toBeUndefined();
+    await control.end();
+  });
+
+  it("clears failed activity without disabling authorization", async () => {
+    await fakeRim();
+    const events: string[] = [];
+    const control = new ComputerControl({ home: root, notify: event => events.push(event.event) });
+    await control.begin();
+    await expect(control.act("fail")).rejects.toThrow("模拟失败");
+    expect(control.rimPid).toBeUndefined();
+    expect(control.enabled).toBe(true);
+    expect(events).toEqual(["action", "end"]);
+  });
+
+  it("lets an owned CLI process exit while its overlay is running", async () => {
+    if (process.platform !== "darwin") return;
+    await fakeRim();
+    const script = `import { ComputerControl } from ${JSON.stringify(resolve("src/core/computer.ts"))};
+      const c = new ComputerControl({home: ${JSON.stringify(root)}});
+      await c.begin();
+      c.activity = 1;
+      await c.startRim();
+      if (!c.rimPid) throw new Error('overlay missing');`;
+    await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { timeout: 5000 });
+  });
+
+  it("invalidates a pending overlay start when stopped", async () => {
+    if (process.platform !== "darwin") return;
+    await fakeRim();
+    const control = new ComputerControl({ home: root });
+    await control.begin();
+    const internals = control as unknown as { activity: number; startRim(): Promise<void> };
+    internals.activity = 1;
+    const starting = internals.startRim();
+    await control.requestStop();
+    await starting;
+    expect(control.rimPid).toBeUndefined();
+    expect(control.enabled).toBe(false);
   });
 
   it("leaves the rim to the desktop app, which draws its own overlay", async () => {

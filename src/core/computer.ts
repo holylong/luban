@@ -279,6 +279,9 @@ export class ComputerControl {
   private since = 0;
   /** The native rim process while a session is open (terminal runs). */
   private rim?: ChildProcess;
+  private activity = 0;
+  private generation = 0;
+  private readonly onExit = (): void => { this.rim?.kill("SIGTERM"); };
 
   constructor(options: ComputerOptions = {}) {
     this.home = computerHome(options);
@@ -302,8 +305,7 @@ export class ComputerControl {
     await unlink(stopPath(this.home)).catch(() => undefined);
     this.active = true;
     this.since = Date.now();
-    this.notify?.({ event: "begin", label });
-    void this.startRim(label);
+    // Authorization is independent of activity: idle sessions stay dark.
   }
 
   /** Exposed for tests and status: the overlay is a child process we own. */
@@ -324,9 +326,10 @@ export class ComputerControl {
 
   private async startRim(label?: string): Promise<void> {
     if (!this.rimAllowed() || this.rim) return;
+    const generation = this.generation;
     try {
       const binary = await ensureGlow(this.home);
-      if (!this.active) return; // stopped while swiftc was running
+      if (!this.enabled || !this.activity || generation !== this.generation || this.rim) return;
       const child = spawn(binary, [
         "--label", label || "luban 正在操控",
         "--stop-file", stopPath(this.home),
@@ -336,6 +339,9 @@ export class ComputerControl {
       child.on("error", () => { if (this.rim === child) this.rim = undefined; });
       child.on("exit", () => { if (this.rim === child) this.rim = undefined; });
       this.rim = child;
+      child.unref();
+      process.once("exit", this.onExit);
+      child.once("exit", () => process.removeListener("exit", this.onExit));
     } catch {
       // The rim is a signal, not a capability: never block control over it.
     }
@@ -348,30 +354,41 @@ export class ComputerControl {
    * look like a human abort.
    */
   private async stopRim(): Promise<void> {
+    this.generation++;
     const child = this.rim;
     this.rim = undefined;
+    process.removeListener("exit", this.onExit);
     if (!child || child.killed) return;
     const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
     child.kill("SIGTERM");
-    await Promise.race([exited, new Promise<void>(resolve => setTimeout(resolve, 1500))]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([exited, new Promise<void>(resolve => { timer = setTimeout(() => { child.kill("SIGKILL"); resolve(); }, 1500); })]);
+    if (timer) clearTimeout(timer);
+  }
+
+  /** Clear visual activity without withdrawing authorization. */
+  async clearActivity(): Promise<void> {
+    this.activity = 0;
+    await this.stopRim();
+    this.notify?.({ event: "end" });
   }
 
   /** Human pressed stop (⌘.) or the switch was turned off. */
   async end(): Promise<void> {
     if (!this.active) {
+      await this.clearActivity();
       await unlink(stopPath(this.home)).catch(() => undefined);
       return;
     }
     this.active = false;
-    await this.stopRim();
-    this.notify?.({ event: "end" });
+    await this.clearActivity();
     await unlink(stopPath(this.home)).catch(() => undefined);
   }
 
   /** Recorded by the desktop app so the next action aborts even mid-script. */
   async requestStop(): Promise<void> {
     this.active = false;
-    await this.stopRim();
+    await this.clearActivity();
     await mkdir(stateDir(this.home), { recursive: true });
     await writeFile(stopPath(this.home), String(Date.now()));
     this.notify?.({ event: "end", label: "stopped" });
@@ -406,7 +423,7 @@ export class ComputerControl {
     await mkdir(directory, { recursive: true });
     const path = join(directory, `shot-${new Date().toISOString().replace(/[:.]/gu, "-")}.png`);
     const reply = await helperCall(helper, { action: "screenshot", path, region });
-    this.notify?.({ event: "action", action: "screenshot" });
+
     await this.prune(directory);
     const pixels = sizeOf(reply.pixels);
     const screen = (reply.screen ?? {}) as { width?: unknown; height?: unknown; scale?: unknown };
@@ -432,7 +449,7 @@ export class ComputerControl {
     await this.ensureRunning();
     const helper = await ensureHelper(this.home);
     const reply = await helperCall(helper, { action: "windows" });
-    this.notify?.({ event: "action", action: "windows" });
+
     const rows = Array.isArray(reply.windows) ? reply.windows : [];
     return {
       front: (reply.front ?? {}) as { name?: string; bundle?: string; pid?: number },
@@ -481,9 +498,19 @@ export class ComputerControl {
     const target = HELPER_ACTIONS[action] ?? action;
     const payload: Record<string, unknown> = { action: target };
     for (const [key, value] of Object.entries(request)) if (value !== undefined) payload[key] = value;
-    const reply = await helperCall(helper, payload, options.signal);
-    this.notify?.({ event: "action", action });
-    return { summary: this.describe(action, request, reply), reply };
+    const mutating = !["windows", "cursor", "check"].includes(action);
+    if (mutating) {
+      this.activity++;
+      this.notify?.({ event: "action", action });
+      await this.startRim();
+    }
+    try {
+      await this.ensureRunning();
+      const reply = await helperCall(helper, payload, options.signal);
+      return { summary: this.describe(action, request, reply), reply };
+    } finally {
+      if (mutating && this.activity > 0 && --this.activity === 0) await this.clearActivity();
+    }
   }
 
   private describe(action: string, request: ComputerRequest, reply: HelperReply): string {
@@ -512,15 +539,16 @@ export class ComputerControl {
  */
 export function glowNotifier(env: NodeJS.ProcessEnv = process.env): ((event: ComputerEvent) => void) | undefined {
   const url = env.LUBAN_GLOW_URL;
-  if (!url) return undefined;
+  if (!url || env.LUBAN_GLOW?.toLowerCase() === "off") return undefined;
   const token = env.LUBAN_GLOW_TOKEN ?? "";
+  let pending = Promise.resolve();
   return event => {
-    void fetch(url, {
+    pending = pending.then(() => fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", "x-luban-glow-token": token },
       body: JSON.stringify(event),
       signal: AbortSignal.timeout(1200),
-    }).catch(() => undefined);
+    })).then(() => undefined, () => undefined);
   };
 }
 

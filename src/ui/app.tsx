@@ -872,7 +872,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     let mounted = true;
     void beginComputerAtStartup(initialConfig.home, initialConfig.workspace, initialConfig.computerEnabled ?? true)
       .then(enabled => { if (mounted) setComputerOn(enabled); });
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+      void computerControl({ home: initialConfig.home, workspace: initialConfig.workspace }).clearActivity();
+    };
   }, [initialConfig.home]);
   /** An interrupt is also a withdrawal: the flag makes the next action refuse. */
   const stopComputerControl = useCallback((): void => {
@@ -1969,7 +1972,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       const command = commandOf(value);
       const argument = argumentOf(value);
       if (value.startsWith("/") && command !== "/queue") {
-        if (command === "/exit") { rememberInput(); setInput(""); await save(); runnerRef.current.close(); exit(); return; }
+        if (command === "/exit") { rememberInput(); setInput(""); await save(); await computerControl({ home: config.home, workspace: config.workspace }).clearActivity(); runnerRef.current.close(); exit(); return; }
         if (RUN_IMMEDIATE_COMMANDS.has(command)) {
           rememberInput();
           setInput("");
@@ -2039,7 +2042,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     if (command === "/details") { setScrollOffset(0); setShowDetails((current) => !current); return; }
     if (command === "/diff") { setDiff(null); setDialog({ type: "diff", index: 0 }); void workspaceDiff(config.workspace).then(setDiff); return; }
     if (command === "/help") { setShowHelp(true); return; }
-    if (command === "/exit") { await save(); runnerRef.current.close(); exit(); return; }
+    if (command === "/exit") { await save(); await computerControl({ home: config.home, workspace: config.workspace }).clearActivity(); runnerRef.current.close(); exit(); return; }
     if (command === "/new" || command === "/clear") { await save(); newSession(); return; }
     if (command === "/branch") {
       const keep = argument ? Number(argument) : Number.POSITIVE_INFINITY;
