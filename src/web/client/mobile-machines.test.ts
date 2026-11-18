@@ -10,6 +10,14 @@ function instance(fields: Partial<RelayMachineInstance> = {}): RelayMachineInsta
 }
 
 describe("mobile machine/workspace aggregation", () => {
+  it("preserves device/member order and representative across alternating heartbeats", () => {
+    const nodes = [instance(), instance({ id: "n-two", last_seen: 40 }),
+      instance({ id: "other", device_id: "dev-fedcba9876543210-3333333333333333" })];
+    const shape = (items: RelayMachineInstance[]) => groupRelayMachines(items).map(machine => ({
+      machine: machine.machineId, representative: machine.id, members: machine.members.map(member => member.id),
+    }));
+    expect(shape([...nodes].reverse().map((node, i) => ({ ...node, last_seen: 1000 + i })))).toEqual(shape(nodes));
+  });
   it("renders per-workspace relay registrations as one physical computer card", () => {
     const machines = groupRelayMachines([
       instance(),

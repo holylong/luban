@@ -97,10 +97,9 @@ export function groupRelayMachines(nodes: RelayMachineInstance[]): RelayMachine[
     groups.set(key, members);
   }
   return [...groups].map(([machineId, unsorted]) => {
-    const members = [...unsorted].sort((left, right) => Number(right.online) - Number(left.online)
-      || right.last_seen - left.last_seen
-      || left.workspace.localeCompare(right.workspace));
-    const representative = members[0]!;
+    // Heartbeats must not reorder instance labels or change the default route.
+    const members = [...unsorted].sort((left, right) => left.id.localeCompare(right.id));
+    const representative = members.find(member => member.online) ?? members[0]!;
     return {
       ...representative,
       machineId,
@@ -110,9 +109,7 @@ export function groupRelayMachines(nodes: RelayMachineInstance[]): RelayMachine[
       workspace: members.length > 1 ? `${members.length} 个工作区` : representative.workspace,
       status: aggregateStatus(members),
     };
-  }).sort((left, right) => Number(right.online) - Number(left.online)
-    || right.last_seen - left.last_seen
-    || left.machineName.localeCompare(right.machineName));
+  }).sort((left, right) => left.machineId.localeCompare(right.machineId));
 }
 
 function normalizedPath(path: string): string {

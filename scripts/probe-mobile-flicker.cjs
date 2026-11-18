@@ -40,7 +40,7 @@ if (!process.versions.electron) {
     if (url.pathname === "/api/sessions") return json(sessions[url.searchParams.get("project")] || []);
     if (url.pathname.startsWith("/api/")) return json([]);
     const relative = url.pathname === "/m/" ? "mobile.html" : url.pathname.replace(/^\/m\//, "");
-    const root = path.resolve(__dirname.includes("luban") ? "/Users/me/Documents/luban" : ".", "dist/web-ui");
+    const root = path.resolve(__dirname, "../dist/web-ui");
     const file = path.resolve(root, relative);
     if (!file.startsWith(root + path.sep) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
     res.setHeader("content-type", file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html");
@@ -77,6 +77,11 @@ if (!process.versions.electron) {
       }).observe(document.body, { subtree: true, childList: true });
       return true;
     })()`);
+    await js('document.querySelector(".m-main").scrollTop = 150');
+    const geometry = () => js(`JSON.stringify({ scroll: document.querySelector('.m-main').scrollTop,
+      rows: [...document.querySelectorAll('.m-workspace')].map(e => [e.querySelector('strong').textContent, e.getBoundingClientRect().top]) })`);
+    const initialGeometry = await geometry();
+    let geometryChanges = 0;
     const samples = [];
     const start = Date.now();
     while (Date.now() - start < 12000) {
@@ -88,6 +93,7 @@ if (!process.versions.electron) {
         notes: [...document.querySelectorAll(".m-workspace .m-note")].map(e => e.textContent.slice(0, 16)).join("|"),
         collapses: [...document.querySelectorAll(".m-workspace .m-collapse")].map(e => e.textContent.replace(/\s+/g, " ").slice(0, 24) + "@" + e.getAttribute("aria-expanded")).join(" ; "),
       }))()`));
+      if (await geometry() !== initialGeometry) geometryChanges++;
       await wait(120);
     }
     const emptyCards = samples.filter(s => s.cards === 0).length;
@@ -95,7 +101,9 @@ if (!process.versions.electron) {
     const loading = samples.filter(s => s.loading).length;
     const transitions = samples.reduce((count, sample, index) => index && sample.cards !== samples[index - 1].cards ? count + 1 : count, 0);
     const mutations = await js("window.__probe");
-    console.log(JSON.stringify({ samples: samples.length, emptyCards, lostRows, loading, transitions, ...mutations }, null, 2));
+    console.log(JSON.stringify({ samples: samples.length, emptyCards, lostRows, loading, transitions, geometryChanges, relayPolls: beat, initialGeometry, ...mutations }, null, 2));
+    if (emptyCards || lostRows || loading || transitions || geometryChanges || mutations.pickRemovals || mutations.loadingMutations || beat < 2)
+      throw new Error("Polling changed expanded inventory DOM or scroll geometry");
     for (const sample of samples.filter((_, index) => index % 6 === 0).slice(0, 18)) console.log(JSON.stringify(sample));
     win.destroy(); server.closeAllConnections(); server.close(); app.quit();
   })().catch(error => { console.error(error); server.closeAllConnections(); server.close(); app.exit(1); });

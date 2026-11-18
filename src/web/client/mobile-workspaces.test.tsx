@@ -145,6 +145,10 @@ describe("workspace reload key", () => {
   it("also holds when a workspace moves to another instance of the same computer", () => {
     expect(workspaceLoadKey("n-a", 0, [route("cooler", "n-b")])).toBe(workspaceLoadKey("n-a", 0, [route("cooler", "n-a")]));
   });
+  it("keeps physical-device inventory when representative and route order change", () => {
+    expect(workspaceLoadKey("n-b", 0, [route("luban"), route("cooler", "n-b")], "machine"))
+      .toBe(workspaceLoadKey("n-a", 0, [route("cooler"), route("luban")], "machine"));
+  });
   it("still reloads for a real change: another device, a retry or a new workspace", () => {
     const base = workspaceLoadKey("n-a", 0, [route("cooler")]);
     expect(workspaceLoadKey("n-b", 0, [route("cooler")])).not.toBe(base);
@@ -155,13 +159,13 @@ describe("workspace reload key", () => {
 
 describe("workspace grouping", () => {
   const entry = (project: string, sessions: ReturnType<typeof summary>[], error?: string) => ({ project, path: `/work/${project}`, sessions, error });
-  it("keeps workspaces with sessions on top, newest first, and folds empty ones", () => {
+  it("keeps workspaces with sessions in stable project order and folds empty ones", () => {
     const older = { ...summary("a", "alpha"), updatedAt: "2026-11-14T09:00:00Z" };
     const newer = { ...summary("b", "beta"), updatedAt: "2026-11-14T12:00:00Z" };
     const { active, idle } = splitWorkspaces([
       entry("idle", []), entry("alpha", [older]), entry("beta", [newer]), entry("documents", []),
     ]);
-    expect(active.map(item => item.project)).toEqual(["beta", "alpha"]);
+    expect(active.map(item => item.project)).toEqual(["alpha", "beta"]);
     expect(idle.map(item => item.project)).toEqual(["documents", "idle"]);
   });
   it("keeps the open workspace and read failures visible", () => {

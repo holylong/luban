@@ -1103,7 +1103,7 @@ export function MobileApp(): React.ReactElement {
                   onOpen={() => openDevice(machine.id)}
                   onJobs={() => { chooseNode(machine.id); setTab("jobs"); }}
                   onRemove={() => void removeDevice(machine.members.map(member => member.device_id || member.id))}>
-                  <MobileWorkspaces nodeId={machine.id} online={machine.online} routes={routes}
+                  <MobileWorkspaces nodeId={machine.id} deviceKey={machine.machineId} online={machine.online} routes={routes}
                     selectedProject={selectedProject}
                     selectedSession={machineCurrent ? continueSession?.id : undefined}
                     onOpen={(target, session) => {

@@ -30,9 +30,9 @@ export interface WorkspaceEntry {
  * route's owning node can move between instances of the same computer. Neither
  * changes which workspaces exist, so neither may reset the open session list.
  */
-export function workspaceLoadKey(nodeId: string | undefined, retry: number, routes: MachineWorkspaceRoute[]): string {
-  const workspaces = routes.map(route => `${route.project}\0${route.path}`).join("\n");
-  return `${nodeId ?? ""}\0${retry}\0${workspaces}`;
+export function workspaceLoadKey(nodeId: string | undefined, retry: number, routes: MachineWorkspaceRoute[], deviceKey = nodeId): string {
+  const workspaces = routes.map(route => `${route.project}\0${route.path}`).sort().join("\n");
+  return `${deviceKey ?? ""}\0${retry}\0${workspaces}`;
 }
 
 /** An explicit node on every request: browsing another device must never change
@@ -73,16 +73,14 @@ export async function loadDeviceWorkspaces(node: string | undefined, signal: Abo
 /**
  * Split workspaces into "the ones this phone is using" and the rest.
  *
- * Most recently used first; a project with no session yet is still a real place
+ * Stable project order; a project with no session yet is still a real place
  * to start work, but thirty equal cards are unusable, so those wait one tap
  * away under 「其他工作区」. A workspace whose sessions cannot be read stays
  * visible: hiding an error is not tidying up.
  */
 export function splitWorkspaces(entries: WorkspaceEntry[], selectedProject?: string): { active: WorkspaceEntry[]; idle: WorkspaceEntry[] } {
-  const newest = (entry: WorkspaceEntry): string => entry.sessions[0]?.updatedAt ?? "";
-  const ordered = [...entries].sort((left, right) => newest(right).localeCompare(newest(left))
-    || Number(Boolean(right.error)) - Number(Boolean(left.error))
-    || left.project.localeCompare(right.project));
+  // Activity updates must not move workspace cards beneath the user's finger.
+  const ordered = [...entries].sort((left, right) => left.project.localeCompare(right.project));
   const current = (entry: WorkspaceEntry): boolean => entry.sessions.length > 0 || Boolean(entry.error) || entry.project === selectedProject;
   // Session-less workspaces have no recency to sort by, and re-ordering them
   // on every 8s poll would make the folded list jump: keep them by name.
@@ -90,8 +88,10 @@ export function splitWorkspaces(entries: WorkspaceEntry[], selectedProject?: str
   return { active: ordered.filter(current), idle };
 }
 
-export function MobileWorkspaces({ nodeId, online, routes, selectedProject, selectedSession, onOpen, onAdd }: {
+export function MobileWorkspaces({ nodeId, deviceKey = nodeId, online, routes, selectedProject, selectedSession, onOpen, onAdd }: {
   nodeId?: string;
+  /** Stable physical identity rather than the currently live relay instance. */
+  deviceKey?: string;
   online: boolean;
   routes?: MachineWorkspaceRoute[];
   selectedProject?: string;
@@ -126,8 +126,9 @@ export function MobileWorkspaces({ nodeId, online, routes, selectedProject, sele
       setDeleteError(cause instanceof Error ? cause.message : String(cause));
     } finally { setDeleting(undefined); }
   };
+  const inventoryKey = workspaceLoadKey(nodeId, retry, routeList, deviceKey);
   useEffect(() => {
-    const key = workspaceLoadKey(nodeId, retry, routeRef.current);
+    const key = inventoryKey;
     if (loadKey.current !== key) {
       loadKey.current = key;
       setEntries(undefined);
@@ -153,7 +154,7 @@ export function MobileWorkspaces({ nodeId, online, routes, selectedProject, sele
     };
     void poll();
     return () => { stopped = true; controller.abort(); clearTimeout(timer); };
-  }, [nodeId, online, retry, routeList]);
+  }, [nodeId, online, inventoryKey]);
 
   const { active, idle } = splitWorkspaces(entries ?? [], selectedProject);
   const card = (entry: WorkspaceEntry): React.ReactElement => <div className="m-workspace" key={entry.project}>
