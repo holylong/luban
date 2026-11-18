@@ -10,9 +10,12 @@ import { loadConfig, savePreferredModel } from "../core/config.js";
 import { App } from "./app.js";
 
 const originalHome = process.env.LUBAN_HOME;
+const originalCodexHome = process.env.CODEX_HOME;
 afterEach(() => {
   if (originalHome === undefined) delete process.env.LUBAN_HOME;
   else process.env.LUBAN_HOME = originalHome;
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
 });
 
 it("opens reasoning effort after choosing a Codex model and saves it", async () => {
@@ -20,6 +23,8 @@ it("opens reasoning effort after choosing a Codex model and saves it", async () 
   const workspace = join(home, "workspace");
   await mkdir(workspace);
   process.env.LUBAN_HOME = home;
+  // An empty Codex cache keeps the row order deterministic on every machine.
+  process.env.CODEX_HOME = await mkdtemp(join(tmpdir(), "luban-codex-ui-cache-"));
   await savePreferredModel(home, "codex/default");
   const config = loadConfig({ workspace });
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });

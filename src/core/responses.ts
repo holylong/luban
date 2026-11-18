@@ -58,10 +58,37 @@ export async function responsesInput(messages: ChatMessage[], workspace = ""): P
   return { instructions, input };
 }
 
+/**
+ * Keywords the ChatGPT backend refuses to compile inside a tool schema. MCP
+ * servers publish whatever their own schema builder emits — zod refinements
+ * turn into `if`/`then`/`else`, and `not`, `propertyNames`, `patternProperties`,
+ * `uniqueItems` and the `dependent*`/`unevaluated*` family are just as
+ * unsupported — and a single one of them rejects the whole request with
+ * `Invalid schema for 'tools[n].parameters'`. The runtime validation that the
+ * dropped keyword expressed still happens in the tool itself, so sending the
+ * remaining shape is safe.
+ */
+const UNCOMPILABLE_SCHEMA_KEYS = new Set([
+  "if", "then", "else", "not", "propertyNames", "patternProperties", "uniqueItems",
+  "dependentSchemas", "dependentRequired", "unevaluatedProperties", "unevaluatedItems",
+]);
+
+function compilableSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(compilableSchema);
+  if (!value || typeof value !== "object") return value;
+  const kept: JsonObject = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (UNCOMPILABLE_SCHEMA_KEYS.has(key)) continue;
+    kept[key] = compilableSchema(child);
+  }
+  return kept;
+}
+
 export function responsesTools(tools: Array<Record<string, unknown>>): JsonObject[] {
   return tools.map((entry) => {
     const fn = entry.function as JsonObject;
-    return { type: "function", name: fn.name, description: fn.description, parameters: fn.parameters ?? { type: "object" } };
+    return { type: "function", name: fn.name, description: fn.description,
+      parameters: compilableSchema(fn.parameters ?? { type: "object" }) };
   });
 }
 

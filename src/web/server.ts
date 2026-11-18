@@ -9,7 +9,7 @@ import { hasConversation, SessionStore } from "../core/session-store.js";
 import { liveSessions } from "../core/live-session.js";
 import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
-import { savePreferredModel, saveProject, saveTheme } from "../core/config.js";
+import { refreshCodexModels, savePreferredModel, saveProject, saveTheme } from "../core/config.js";
 import { isTransientWorkspace, visibleProjects } from "../core/project-registry.js";
 import { THEMES, findTheme, resolveTheme } from "../ui/theme.js";
 import { consumeCodexReset, formatCodexResetOutcome, readCodexRateLimits } from "../core/codex-account.js";
@@ -356,6 +356,14 @@ export class LubanWebServer {
     if (url.pathname === "/healthz") return json(res, { ok: true, serving: this.mesh.isServing() });
     if (url.pathname === "/favicon.ico") return send(res, 204, "image/x-icon", "");
     if (url.pathname === "/api/node") {
+      // The Codex CLI can refresh its model cache while this server runs; pick
+      // the new models up here instead of requiring a restart. The selected
+      // model keeps its identity, only its label may change.
+      const models = refreshCodexModels(this.config);
+      if (models !== this.config.models) {
+        this.config.models = models;
+        this.config.model = models.find(model => model.id === this.config.model.id) ?? this.config.model;
+      }
       return json(res, {
         name: this.config.mesh.nodeName,
         workspace: this.config.workspace,

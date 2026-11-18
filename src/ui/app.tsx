@@ -16,7 +16,7 @@ import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
 import { isFreeTierError, isModelTimeoutError, isUpstreamUnavailableError } from "../core/model-errors.js";
 import { isZenFreeModel } from "../core/opencode-zen.js";
 import { estimateMessagesTokens } from "../core/context.js";
-import { loadConfig, savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
+import { loadConfig, refreshCodexModels, savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
 import { ProviderAuthDialog } from "./provider-auth-dialog.js";
 import { RelayLoginDialog } from "./relay-login-dialog.js";
 import { consumeCodexReset, formatCodexResetOutcome, formatCodexRateLimits, formatCodexUsage, readCodexRateLimits, readCodexUsage } from "../core/codex-account.js";
@@ -905,6 +905,12 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       detail: `${count} 个模型 › · ${provider === "codex" ? "ChatGPT 登录" : config.models.some(model => model.provider === provider && model.apiKey) ? "已有凭据" : "未配置 / 本地免密"}` }));
   }, [config.models]);
   const openModels = () => {
+    // The Codex CLI refreshes its model cache while luban runs; re-read it here
+    // so a newly released model shows up without restarting the process.
+    const models = refreshCodexModels(config);
+    if (models !== config.models) {
+      setConfig({ ...config, models, model: models.find(model => model.id === config.model.id) ?? config.model });
+    }
     setDialogQuery("");
     setDialog({ type: "model-providers", index: Math.max(0, modelProviders.findIndex(item => item.key === config.model.provider)) });
   };

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, savePermissionMode, savePreferredModel, saveProject, saveTheme, stripJsonComments } from "./config.js";
+import { loadConfig, refreshCodexModels, savePermissionMode, savePreferredModel, saveProject, saveTheme, stripJsonComments } from "./config.js";
 
 const originalHome = process.env.LUBAN_HOME;
 const originalUserHome = process.env.HOME;
@@ -102,6 +102,41 @@ describe("config", () => {
     expect(cached.models.find((model) => model.id === "codex/gpt-7-visible")?.capabilities.vision).toBe(true);
     expect(cached.models.find((model) => model.id === "codex/gpt-7-text")?.capabilities.vision).toBe(false);
     expect(cached.models.some((model) => model.id === "codex/gpt-7-hidden")).toBe(false);
+  });
+
+  /**
+   * The CLI refreshes its cache on its own schedule, so a luban process that
+   * stays open (TUI or web server) used to keep showing the catalog it read at
+   * startup: a newly released model only appeared after a restart.
+   */
+  it("refreshes a running config from a cache the CLI rewrote after startup", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-codex-refresh-"));
+    process.env.LUBAN_HOME = home;
+    await savePreferredModel(home, "codex/gpt-6-sol", "high");
+    const started = loadConfig({ workspace: home, model: "codex/gpt-6-sol" });
+    expect(started.models.some((model) => model.model === "gpt-8-sol")).toBe(false);
+    // An unchanged catalog keeps the same array so callers can skip a re-render.
+    expect(refreshCodexModels(started)).toBe(started.models);
+
+    await writeFile(join(process.env.CODEX_HOME!, "models_cache.json"), JSON.stringify({
+      models: [
+        { slug: "gpt-8-sol", display_name: "GPT-8-Sol", visibility: "list", supported_in_api: true, priority: 1 },
+        { slug: "gpt-7-astra", display_name: "GPT-7-Astra", visibility: "list", supported_in_api: true, priority: 2 },
+      ],
+    }));
+    const models = refreshCodexModels(started);
+    expect(models).not.toBe(started.models);
+    const codex = models.filter((model) => model.provider === "codex");
+    // Newest first, straight from the CLI's own ranking.
+    expect(codex.slice(0, 3).map((model) => model.model)).toEqual(["default", "gpt-8-sol", "gpt-7-astra"]);
+    expect(codex.find((model) => model.model === "gpt-8-sol")).toMatchObject({
+      id: "codex/gpt-8-sol", name: "GPT-8-Sol", provider: "codex", api: "codex", model: "gpt-8-sol",
+    });
+    // Models that were already listed keep their saved effort and credentials,
+    // and the static fallbacks survive a cache that does not mention them.
+    expect(codex.find((model) => model.model === "gpt-6-sol")?.reasoningEffort).toBe("high");
+    expect(codex.some((model) => model.model === "gpt-5.6-luna")).toBe(true);
+    expect(refreshCodexModels({ ...started, models })).toBe(models);
   });
 
   it("keeps Codex reasoning effort per model and permits the CLI default", async () => {

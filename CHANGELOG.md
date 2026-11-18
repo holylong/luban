@@ -1,3 +1,14 @@
+## 2.6.14 — 2026-11-18
+
+- 修复 Codex（ChatGPT 后端）在带 MCP 工具时整轮请求 400 `invalid_json_schema`：工具 schema 在发送前会去掉后端编译器不支持的 JSON Schema 关键字（`if`/`then`/`else`、`not`、`propertyNames`、`patternProperties`、`uniqueItems`、`dependent*`/`unevaluated*`），只保留调用所需的结构、类型、枚举与说明。此前只要有一个 MCP 服务器（例如 rea 的 `inspect_python_pyc`、`inspect_managed_members`）发布这类 schema，整轮对话都会失败。
+- 补回归测试覆盖嵌套位置（属性、`items`、`anyOf` 内）的关键字剔除，以及合法 schema 原样保留；真实请求已从 400 变为正常返回。
+
+## 2.6.13 — 2026-11-18
+
+- Codex 模型列表改为紧跟本机 Codex CLI 的 `models_cache.json`：按 CLI 的 `priority` 新到旧排列（新模型在最上面），使用 `display_name` 作为显示名，隐藏和非 API 模型仍然不出现；缓存文件变更后按 mtime/size 重新解析。
+- 常驻进程不再需要重启：TUI 的 `/models`（或 `Ctrl+P`）以及 Web/手机读取的 `/api/node` 都会在打开模型列表前重读缓存，Codex 更新后新发布的模型立刻可选，已选模型的凭据与 reasoning effort 保持不变。
+- 补充回归测试：运行中写入缓存后 TUI 模型列表、`/api/node` 与 `refreshCodexModels` 都能看到新模型；TUI effort 测试改用临时 `CODEX_HOME`，不再依赖开发者本机的 Codex 缓存。
+
 ## 2.6.12 — 2026-11-17
 
 - 修复手机设备/工作区列表轮询时上下跳动：设备与实例不再按心跳重排，工作区不再按会话更新时间重排；加载键使用稳定物理设备身份，普通轮询不再重启读取或清空展开列表。

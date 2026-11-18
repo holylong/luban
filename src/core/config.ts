@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -366,27 +366,100 @@ const OPEN_DESIGN_MODELS: Record<string, { name: string; vision: boolean; api?: 
   "minimax-m3.1-flash": { name: "MiniMax M3.1 Flash", vision: true },
 };
 
-function codexModelCatalog(): Record<string, JsonObject> {
-  const catalog: Record<string, JsonObject> = {
-    default: { name: "Codex (CLI default)", capabilities: { vision: true, thinking: true, tools: true } },
-  };
-  const add = (id: string, vision: boolean): void => {
-    if (catalog[id]) return;
-    catalog[id] = { name: id, capabilities: { vision, thinking: true, tools: true } };
-  };
-  for (const id of CODEX_FALLBACK_MODELS) add(id, true);
+interface CodexCatalogEntry {
+  id: string;
+  name: string;
+  vision: boolean;
+}
+
+/** Parsed cache keyed by file identity, so polling the catalog stays cheap. */
+let codexCacheKey = "";
+let codexCacheEntries: CodexCatalogEntry[] | undefined;
+
+/**
+ * The catalog the installed Codex CLI knows about, newest first: the CLI writes
+ * `models_cache.json`; its `priority` ranks the models it wants shown on top.
+ * A static fallback covers a fresh machine before the CLI has fetched anything.
+ */
+function codexCatalogEntries(): CodexCatalogEntry[] {
   const codexHome = text(process.env.CODEX_HOME, join(homedir(), ".codex"));
-  const cached = readJson(join(codexHome, "models_cache.json"));
+  const file = join(codexHome, "models_cache.json");
+  const info = statSync(file, { throwIfNoEntry: false });
+  const key = info ? `${file}\0${info.mtimeMs}\0${info.size}` : file;
+  if (codexCacheEntries && codexCacheKey === key) return codexCacheEntries;
+  const cached = readJson(file);
   const discovered = (Array.isArray(cached.models) ? cached.models : []).flatMap((value) => {
     const item = record(value);
     const id = text(item.slug);
     if (!id || item.visibility === "hide" || item.supported_in_api === false) return [];
     const modalities = stringList(item.input_modalities);
-    return [{ id, priority: integer(item.priority, Number.MAX_SAFE_INTEGER),
+    return [{ id, name: text(item.display_name, id), priority: integer(item.priority, Number.MAX_SAFE_INTEGER),
       vision: !modalities.length || modalities.includes("image") }];
   }).sort((left, right) => left.priority - right.priority);
-  for (const model of discovered) add(model.id, model.vision);
-  return catalog;
+  const entries: CodexCatalogEntry[] = [{ id: "default", name: "Codex (CLI default)", vision: true }];
+  const seen = new Set(["default"]);
+  for (const model of discovered) {
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    entries.push({ id: model.id, name: model.name, vision: model.vision });
+  }
+  for (const id of CODEX_FALLBACK_MODELS) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    entries.push({ id, name: id, vision: true });
+  }
+  codexCacheKey = key;
+  codexCacheEntries = entries;
+  return entries;
+}
+
+function codexModelCatalog(): Record<string, JsonObject> {
+  return Object.fromEntries(codexCatalogEntries().map(entry => [entry.id, {
+    name: entry.name,
+    capabilities: { vision: entry.vision, thinking: true, tools: true },
+  }]));
+}
+
+/**
+ * Merge the current Codex cache into an already-loaded config. The catalog is
+ * read once at startup, so a luban process that stays open while the CLI
+ * refreshes `models_cache.json` would otherwise never show a newly released
+ * model. Existing entries keep their credentials and reasoning effort, and the
+ * Codex block stays where the loaded config had it so other providers never
+ * shift under the user's cursor.
+ */
+export function refreshCodexModels(config: LubanConfig): ModelRef[] {
+  const codex = config.models.filter(model => model.provider === "codex");
+  const template = codex.find(model => model.model === "default") ?? codex[0];
+  if (!template) return config.models;
+  const known = new Map(codex.map(model => [model.model, model]));
+  const entries = codexCatalogEntries();
+  const listed = new Set(entries.map(entry => entry.id));
+  const refreshed: ModelRef[] = [
+    ...entries.map(entry => {
+      const existing = known.get(entry.id);
+      // Keep the credential, effort and headers of a model we already listed and
+      // only follow the CLI's label and modality, so a renamed model keeps its
+      // saved reasoning effort.
+      return existing
+        ? { ...existing, name: entry.name, capabilities: { ...existing.capabilities, vision: entry.vision } }
+        : { ...template, id: `codex/${entry.id}`.toLowerCase(), model: entry.id, name: entry.name,
+          capabilities: { ...template.capabilities, vision: entry.vision } };
+    }),
+    // Models the user configured by hand stay listed even when the CLI does not
+    // publish them.
+    ...codex.filter(model => !listed.has(model.model)),
+  ];
+  const models = config.models.filter(model => model.provider !== "codex");
+  models.splice(config.models.findIndex(model => model.provider === "codex"), 0, ...refreshed);
+  // Callers compare identity to decide whether to re-render, so an unchanged
+  // catalog must not allocate a new list.
+  const unchanged = models.length === config.models.length && models.every((model, index) => {
+    const before = config.models[index]!;
+    return before.id === model.id && before.name === model.name
+      && before.capabilities.vision === model.capabilities.vision;
+  });
+  return unchanged ? config.models : models;
 }
 
 /**

@@ -31,6 +31,65 @@ describe("responses API", () => {
     expect(tools[0]).toMatchObject({ type: "function", name: "bash" });
   });
 
+  /**
+   * The ChatGPT backend compiles every tool schema and rejects the whole
+   * request when it meets a key it does not implement, e.g. an MCP tool whose
+   * schema came out of a conditional refinement:
+   * `Invalid schema for 'tools[157].parameters': Unimplemented keys:
+   * ["else","if","then"]`. Only the offending keyword is dropped; the rest of
+   * the advertised shape must survive verbatim.
+   */
+  it("drops schema keywords the backend cannot compile, at any depth", () => {
+    const parameters = {
+      type: "object",
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      minProperties: 1,
+      additionalProperties: false,
+      required: ["path"],
+      properties: {
+        path: { type: "string", description: "file to read" },
+        detail: { const: "summary" },
+        names: { type: "object", propertyNames: { type: "string" }, additionalProperties: { type: "string" } },
+        tags: { anyOf: [{ type: "array", items: { type: "string", if: { const: "x" }, then: { minItems: 1 } }, uniqueItems: true }, { type: "null" }] },
+        view: { type: "object", properties: { kind: { type: "string", enum: ["a", "b"] }, guarded: { not: { type: "string" } } } },
+      },
+      if: { properties: { detail: { const: "summary" } }, required: ["detail"] },
+      then: { required: ["detail"] },
+      else: { properties: { view: { not: {} } } },
+      dependentRequired: { detail: ["path"] },
+      unevaluatedProperties: false,
+    };
+    const [tool] = responsesTools([{ type: "function", function: { name: "mcp_rea_inspect_python_pyc", description: "pyc", parameters } }]);
+    const shape = tool!.parameters as Record<string, unknown>;
+    const text = JSON.stringify(shape);
+    for (const keyword of ["\"if\"", "\"then\"", "\"else\"", "\"not\"", "\"propertyNames\"",
+      "\"uniqueItems\"", "\"dependentRequired\"", "\"unevaluatedProperties\""]) {
+      expect(text).not.toContain(keyword);
+    }
+    // Everything the model needs to call the tool is still advertised.
+    expect(shape).toMatchObject({
+      type: "object", minProperties: 1, additionalProperties: false, required: ["path"],
+      properties: {
+        path: { type: "string", description: "file to read" },
+        detail: { const: "summary" },
+        names: { type: "object", additionalProperties: { type: "string" } },
+        tags: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
+        view: { type: "object", properties: { kind: { type: "string", enum: ["a", "b"] }, guarded: {} } },
+      },
+    });
+  });
+
+  it("leaves a schema without uncompilable keywords untouched", () => {
+    const parameters = {
+      type: "object", additionalProperties: false, required: ["files"],
+      properties: { files: { type: "array", minItems: 1, maxItems: 8,
+        items: { type: "object", additionalProperties: false, required: ["path"],
+          properties: { path: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 4000 } } } } },
+    };
+    const [tool] = responsesTools([{ type: "function", function: { name: "read_files", description: "read", parameters } }]);
+    expect(tool!.parameters).toEqual(parameters);
+  });
+
   it("parses a non-stream JSON response", async () => {
     const client = new ResponsesClient(config());
     const original = globalThis.fetch;
