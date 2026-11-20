@@ -1,3 +1,8 @@
+## 2.8.2 — 2026-11-20
+
+- `src/core/update.test.ts` 里两例安装用例要用系统 `zip` 命令造归档，缺这个命令的环境（精简容器、Windows 开发机）会以未捕获的 `spawn zip ENOENT` 挂住 40s 再报超时。改成用 `spawnSync("zip", ["-v"])` 探测，缺失时 `it.skipIf` 跳过；GitHub runner 与装了 zip 的机器行为不变。
+- 验证：与 GitHub Actions `verify` 同构的环境（Linux、node 22.20.0、装了 zip、非 `/tmp` 检出）跑整套 `vitest run --retry=2`：226 个文件通过 / 2 个跳过、1631 passed / 14 skipped、0 failed（此前在 node 22.12 + 无 zip + `/tmp` 检出下 6 文件 16 例失败，逐个溯源都是环境差异：`node:sqlite` 需 ≥22.13、缺 `zip`、`/tmp` 检出被判为临时目录）。本机 `npx vitest run src/core/update.test.ts` 24/24。
+
 ## 2.8.1 — 2026-11-20
 
 - 修掉 GitHub Actions `verify` 长期红剩下的几个测试，全部是字节/时序假设过窄，不是产品逻辑改动：

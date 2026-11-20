@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +11,10 @@ import {
 } from "./update.js";
 
 const digest = (body: Uint8Array | string) => createHash("sha256").update(body).digest("hex");
+
+// Two install cases build a real archive with the `zip` CLI. Minimal containers and
+// Windows developer machines do not ship it; skip rather than fail on a missing tool.
+const hasZip = spawnSync("zip", ["-v"], { stdio: "ignore" }).status === 0;
 
 function artifactFrom(body: string, overrides: Partial<UpdateArtifact> = {}): UpdateArtifact {
   return {
@@ -290,7 +294,7 @@ describe("cli install", () => {
     expect(cliInstallRoot(join(root, "app", "package.json"))).toBe(realpathSync(root));
   });
 
-  it("swaps the folder in once the old process is gone", async () => {
+  it.skipIf(!hasZip)("swaps the folder in once the old process is gone", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-install-"));
     const home = join(workspace, "home");
     const root = join(workspace, "luban-cli-2.7.11-mac-x64");
@@ -335,7 +339,7 @@ describe("cli install", () => {
     await expect(installUpdate(artifactFrom("x"), archive, { kind: "cli", root: undefined })).rejects.toThrow(/源码目录/u);
   });
 
-  it("refuses an archive without a launcher", async () => {
+  it.skipIf(!hasZip)("refuses an archive without a launcher", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-install-"));
     const root = join(workspace, "root");
     mkdirSync(join(root, "app"), { recursive: true });
