@@ -19,6 +19,8 @@ describe("desktop packaging names", () => {
     expect(existsSync(join(root, "assets", "luban-app-1024.png"))).toBe(true);
     expect(existsSync(join(root, "assets", "luban-512.png"))).toBe(true);
     // The macOS iconset must come from the rounded asset, or Finder shows a square.
-    expect(read("scripts/package-macos.mjs")).toContain('"luban-app-1024.png"');
+    // The name lives in the bundle spec; makeIcon() adds the extension.
+    expect(read("scripts/package-macos.mjs")).toContain('icon: "luban-app-1024"');
+    expect(read("scripts/package-macos.mjs")).toContain("`${name}.png`");
   });
 });

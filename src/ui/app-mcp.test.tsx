@@ -1,6 +1,5 @@
 import React from "react";
 import { PassThrough } from "node:stream";
-import { stripVTControlCharacters } from "node:util";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +9,7 @@ import { expect, it } from "vitest";
 import { loadConfig } from "../core/config.js";
 import { SessionStore } from "../core/session-store.js";
 import { App } from "./app.js";
+import { readFrame } from "./test-frames.js";
 
 /** A minimal stdio MCP server: initialize + tools/list, nothing else. */
 const DEMO_SERVER = `let buffer = "";
@@ -53,10 +53,7 @@ async function harness(options: { servers?: Record<string, unknown> } = {}) {
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
   const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 30, isTTY: true });
   let frame = "";
-  stdout.on("data", (data) => {
-    const text = stripVTControlCharacters(String(data));
-    if (text.includes("workspace · v")) frame = text;
-  });
+  stdout.on("data", (data) => { frame = readFrame(stdout, data); });
   const app = render(<App config={config} resume={session.id} />, {
     stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
     debug: false, patchConsole: false, exitOnCtrlC: false, incrementalRendering: false,

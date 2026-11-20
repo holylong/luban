@@ -13,6 +13,7 @@ import { SessionStore } from "../core/session-store.js";
 import { liveSessions } from "../core/live-session.js";
 import { osc52CopySequence } from "./clipboard.js";
 import { App } from "./app.js";
+import { readFrame } from "./test-frames.js";
 
 it("follows the selected remote session without replay duplicates or local submission", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-remote-ui-"));
@@ -284,16 +285,16 @@ it("accepts a clicked model question option without inserting mouse bytes", asyn
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
   const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 30, isTTY: true });
   let frame = "";
-  stdout.on("data", data => {
-    const text = stripVTControlCharacters(String(data));
-    if (text.includes("Auto")) frame = text;
-  });
+  // readFrame rebuilds the newest repaint from the raw tail: on a loaded runner
+  // the first frame can arrive split, and keying on the header text ("Auto")
+  // then finds nothing to record and the whole test times out.
+  stdout.on("data", (data) => { frame = readFrame(stdout, data); });
   const app = render(<App config={config} />, {
     stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
     debug: false, patchConsole: false, exitOnCtrlC: false,
   });
   try {
-    await expect.poll(() => frame, { timeout: 5000 }).toContain("Message luban");
+    await expect.poll(() => frame, { timeout: 10_000 }).toContain("Message luban");
     stdin.write("choose");
     await expect.poll(() => frame).toContain("choose");
     stdin.write("\r");
@@ -388,16 +389,16 @@ it("shows a saved, actionable conclusion when a model run still times out", asyn
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
   const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 30, isTTY: true });
   let frame = "";
-  stdout.on("data", data => {
-    const text = stripVTControlCharacters(String(data));
-    if (text.includes("Auto")) frame = text;
-  });
+  // readFrame rebuilds the newest repaint from the raw tail: on a loaded runner
+  // the first frame can arrive split, and keying on the header text ("Auto")
+  // then finds nothing to record and the whole test times out.
+  stdout.on("data", (data) => { frame = readFrame(stdout, data); });
   const app = render(<App config={config} />, {
     stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
     debug: false, patchConsole: false, exitOnCtrlC: false,
   });
   try {
-    await expect.poll(() => frame, { timeout: 5000 }).toContain("Message luban");
+    await expect.poll(() => frame, { timeout: 10_000 }).toContain("Message luban");
     stdin.write("do work");
     await expect.poll(() => frame).toContain("do work");
     stdin.write("\r");

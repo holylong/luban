@@ -1,6 +1,5 @@
 import React from "react";
 import { PassThrough } from "node:stream";
-import { stripVTControlCharacters } from "node:util";
 import { mkdtemp, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +9,7 @@ import { AgentRunner } from "../core/agent.js";
 import { loadConfig } from "../core/config.js";
 import { SessionStore } from "../core/session-store.js";
 import { App } from "./app.js";
+import { readFrame } from "./test-frames.js";
 
 /** Shared harness: a rendered TUI whose composer can be read back per frame. */
 async function harness(options: { pendingInputs?: Array<{ id: string; content: string; delivery: "queue" | "steer" }> } = {}) {
@@ -30,13 +30,9 @@ async function harness(options: { pendingInputs?: Array<{ id: string; content: s
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
   const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 30, isTTY: true });
   let frame = "";
-  stdout.on("data", (data) => {
-    const text = stripVTControlCharacters(String(data));
-    // Keep the newest full frame: the header mode label switches from Auto to
-    // Agent once a run starts, so keying on "Auto" would freeze this on the
-    // frame rendered before the task began.
-    if (text.includes("workspace · v")) frame = text;
-  });
+  // readFrame keeps the newest repaint whatever the chunk boundaries were: the
+  // header changes (mode label, computer pill) and never appears alone.
+  stdout.on("data", (data) => { frame = readFrame(stdout, data); });
   const app = render(<App config={config} resume={session.id} />, {
     stdin: stdin as unknown as NodeJS.ReadStream, stdout: stdout as unknown as NodeJS.WriteStream,
     debug: false, patchConsole: false, exitOnCtrlC: false,

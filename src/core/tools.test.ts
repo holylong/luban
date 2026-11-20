@@ -153,9 +153,12 @@ describe("workspace tools", () => {
     const started = await tools.get("bash")!.execute({ command: "cat", background: true }, signal);
     const id = started.split(" ")[2]!;
     await expect(tools.get("send_background_input")!.execute({ task_id: id, input: "hello-stdin" }, signal)).resolves.toContain("sent");
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    const status = JSON.parse(await tools.get("get_background_task")!.execute({ task_id: id }, signal));
-    expect(status.output).toContain("hello-stdin");
+    // Poll instead of sleeping a fixed 120ms: a two-core CI runner can take a
+    // second to schedule `cat` and flush the pipe.
+    const output = async (): Promise<string> =>
+      String(JSON.parse(await tools.get("get_background_task")!.execute({ task_id: id }, signal)).output ?? "");
+    await expect.poll(output, { timeout: 10_000 }).toContain("hello-stdin");
+    expect(await output()).toContain("hello-stdin");
     await expect(tools.get("stop_background_task")!.execute({ task_id: id }, signal)).resolves.toContain("stopping");
   });
 

@@ -1,3 +1,13 @@
+## 2.8.1 — 2026-11-20
+
+- 修掉 GitHub Actions `verify` 长期红剩下的几个测试，全部是字节/时序假设过窄，不是产品逻辑改动：
+  - `src/ui/app-draft-undo.test.tsx`、`src/ui/app-mcp.test.tsx` 的 harness 用「最新的一个 stdout chunk」当一帧，还按标题文本 `workspace · v` 过滤。Ink 的一次重绘可能被拆成多个 chunk，chunk 里也可能只有标题行；标题在真实环境里还会多出 `⌁ 电脑操控`，过滤条件直接失配 → 断言拿到半帧或欢迎页，7 例与 3 例齐红。新增 `src/ui/test-frames.ts` 的 `readFrame()`：缓存原始输出尾部、在最后一个擦除标记处切开，按 chunk 边界无关的方式还原「当前屏幕上那一帧」。
+  - `src/ui/app.test.tsx` 里两例同样按 `Auto` 过滤且只等 5s（含「模型超时后给出可继续的结论」），改成同一套帧还原并把首次等待放宽到 10s。
+  - `src/ui/app-computer.test.tsx`、`src/web/computer-endpoint.test.ts` 在 Linux runner 上必然失败（`/computer on` 在非 darwin 就该拒绝），改成 `skipIf(!computerSupported())`；非 macOS 的拒绝行为仍由 `src/core/computer.test.ts` 覆盖。
+  - `src/core/tools.test.ts` 的 stdin 用例固定 `setTimeout(120ms)` 后读回显，两核 runner 上 `cat` 还没被调度，改成 `expect.poll` 最多等 10s。
+  - `src/desktop/packaging-names.test.ts` 断言脚本里出现 `"luban-app-1024.png"`，实际自 2.4.14 起图标名在 `APP_SPECS` 里（`icon: "luban-app-1024"`），扩展名由 `makeIcon()` 拼接，改为断言这两段。
+- 验证：在 Linux（2 核 VPS，与 runner 同为 node 22）上 `vitest run` 这 6 个文件 = 4 passed / 2 skipped、25 passed / 3 skipped；本机 `npx vitest run src/ui` 里 app-draft-undo 7/7、app-mcp 3/3、app.test.tsx 13/13，剩余 4 例失败只在高并发跑整套 UI 时出现，单跑即绿（既有现象）。
+
 ## 2.7.20 — 2026-11-20
 
 - 升级不再依赖发布服务器在线：`checkForUpdate` 在发布服务器不可达（隧道域名轮换、被网络拦截、502/超时）时，回退到 GitHub Releases（`GET /repos/holylong/luban/releases/latest`），按 `平台-架构-产品` 选资产、用 GitHub 给该资产公布的 `digest` 当 sha256，`update --json` 多一个 `source: "github"`。发布服务器正常回答时不发这次请求，`no-build` / `skipped` 一类的结论也不会被镜像覆盖。`LUBAN_GITHUB_REPO` 可以换成 fork。

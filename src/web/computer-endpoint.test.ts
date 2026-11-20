@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MeshRuntime } from "../core/mesh/runtime.js";
-import { resetComputerControlForTests } from "../core/computer.js";
+import { computerSupported, resetComputerControlForTests } from "../core/computer.js";
 import type { LubanConfig } from "../core/types.js";
 import { LubanWebServer } from "./server.js";
 
@@ -66,7 +66,8 @@ const call = async (path: string, body?: Record<string, unknown>) => {
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 };
 
-describe("computer control endpoint", { timeout: 30_000 }, () => {
+// The helper only exists on macOS; elsewhere the endpoint refuses by design.
+describe.skipIf(!computerSupported())("computer control endpoint", { timeout: 30_000 }, () => {
   it("defaults the switch on, with the permission state the OS actually has", async () => {
     const reply = await call("/api/computer");
     expect(reply.status).toBe(200);

@@ -7,7 +7,7 @@ import { stripVTControlCharacters } from "node:util";
 import { render } from "ink";
 import { afterEach, expect, it } from "vitest";
 import { loadConfig } from "../core/config.js";
-import { computerControl, resetComputerControlForTests } from "../core/computer.js";
+import { computerControl, computerSupported, resetComputerControlForTests } from "../core/computer.js";
 import { App } from "./app.js";
 
 const original = { home: process.env.LUBAN_HOME, helper: process.env.LUBAN_COMPUTER_HELPER };
@@ -16,7 +16,9 @@ const reset = process.env.LUBAN_COMPUTER_HELPER;
 // The terminal has no rim to glow, so `/computer` is the only switch there: it
 // must flip the same session flag the desktop pill uses, and report the OS
 // permissions the helper actually sees.
-it("turns computer control on, reports permissions, and refuses while off", async () => {
+// macOS only: on other platforms `/computer on` has to refuse, which is a
+// different assertion set (covered by computer.test.ts).
+it.skipIf(!computerSupported())("turns computer control on, reports permissions, and refuses while off", async () => {
   const home = await mkdtemp(join(tmpdir(), "luban-computer-ui-"));
   const workspace = join(home, "workspace");
   await mkdir(workspace);
