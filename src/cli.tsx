@@ -24,6 +24,7 @@ import { runHistory } from "./core/history-command.js";
 import { runMemory } from "./core/memory-command.js";
 import { runProjects } from "./core/projects-command.js";
 import { runStats } from "./core/stats-command.js";
+import { runUpdate } from "./core/update-command.js";
 import { runDaemonCommand } from "./core/daemon-command.js";
 import { clearDaemonStateIfOwner, ensureDaemon, writeDaemonState } from "./web/daemon.js";
 import { runMcp } from "./core/mcp-command.js";
@@ -791,7 +792,7 @@ async function main(): Promise<number> {
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
     .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
     .option("-p, --prompt <text>", "run once without the TUI")
-    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban daemon        one always-on backend per machine (status/start/stop/logs)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban login relay   sign in to a relay account and enroll this computer\n  luban login codex   sign in to Codex through the official CLI\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban memory        show or clear what a project remembers between runs\n  luban projects      list registered workspaces; --prune forgets scratch/missing ones\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
+    .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban daemon        one always-on backend per machine (status/start/stop/logs)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban login relay   sign in to a relay account and enroll this computer\n  luban login codex   sign in to Codex through the official CLI\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban memory        show or clear what a project remembers between runs\n  luban projects      list registered workspaces; --prune forgets scratch/missing ones\n  luban update        check for a newer luban, install it, or switch the startup check\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
   program.parse();
   const workspace = (program.args[0] ?? process.cwd()) as string;
@@ -1114,6 +1115,8 @@ const entry = command === "login" && process.argv[3] === "codex"
             ? runProjects(process.argv.slice(3))
           : command === "stats"
             ? runStats(process.argv.slice(3))
+          : command === "update"
+            ? runUpdate(process.argv.slice(3))
           : command === "relay"
             ? runRelay(process.argv.slice(3))
             : command === "mcp"

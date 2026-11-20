@@ -16,3 +16,10 @@ export const DEFAULT_RELAY_URL = "https://thickness-oxygen-life-resistant.tryclo
 
 /** 443 belongs to the relay's own TLS listener, so stats keeps its separate port. */
 export const DEFAULT_USAGE_STATS_URL = "https://submitting-reseller-trustee-fairy.trycloudflare.com/api/report";
+
+/**
+ * `luban update` asks the same host that already holds the usage numbers: one
+ * server, two endpoints (`/api/report`, `/api/update`). Deriving it from the
+ * stats address keeps a tunnel rotation to a single edit.
+ */
+export const DEFAULT_UPDATE_URL = DEFAULT_USAGE_STATS_URL.replace(/\/api\/report$/u, "");

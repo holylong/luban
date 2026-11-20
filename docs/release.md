@@ -53,3 +53,31 @@ Linux 输出 CLI/Desktop `.deb`；macOS 输出 CLI `.zip`、Desktop `.dmg`、造
 脚本不会提交、打标签或上传。GitHub 标签发布工作流在目标系统打包，Windows 上传两个 ZIP。
 
 验证命令：`npm run test:release`。打包完成不代表已人工验证 GUI 和安装器。
+
+## 发布到升级服务器（`luban update`）
+
+打包和发布是两步：`npm run release` 只在本地产出文件，`npm run publish:release` 才把它们交给所有客户端。
+
+升级服务就是统计服务（`/Users/lulu/Documents/luban-server`），同一台机器两个接口：
+
+| 接口 | 作用 |
+| --- | --- |
+| `GET /api/update?platform=darwin&arch=x64&kind=cli` | 客户端唯一的问题：我这个平台有没有更新的？返回 `latest`（服务器已知最新版）与 `artifact`（本平台安装包，没有则 `null`）。 |
+| `GET /downloads/<file>` | 安装包本体，公开可下，带 `content-length` 与长缓存头。 |
+| `PUT /api/admin/artifact?file=<name>` | 上传一个文件，`x-luban-sha256` 必须与收到的字节一致。 |
+| `POST /api/admin/release` | 发布清单；只接受已经被 `/downloads/` 校验过的文件。 |
+
+发布步骤：
+
+1. `npm run release -- --kind cli`（要发桌面版再加 `--kind desktop`，造物主加 `--kind creator`）。
+2. 首次发布前准备令牌：在服务器 `/etc/luban-server.env` 里设置 `LUBAN_STATS_UPDATE_TOKEN=<随机串>`，升级服务器时用 `LUBAN_STATS_UPDATE_TOKEN=… sudo bash deploy/install.sh …` 传入；本机把它写进 `~/.luban/releases-token`（`chmod 600`），或用环境变量 `LUBAN_RELEASES_TOKEN`。
+3. `npm run publish:release -- --version 2.7.12 --notes "这一版改了什么"`。
+   `--dry-run` 只列出会上传的文件；`--kind cli` 只发 CLI；`LUBAN_RELEASES_URL` 可临时指向别的服务器。
+4. 自检：`LUBAN_UPDATES_URL=<服务器> node dist/cli.js update --json`，再用 `luban update install` 走一次真实下载与替换。
+
+客户端侧：
+
+- `luban update` / `install` / `on` / `off` / `status`；TUI 启动时检查一次（`updates.check` 为真才发请求），有新版才提示，选「稍后」本次不动、「不再提醒」写 `updates.skipped_version`。
+- 桌面版：视图 → 检查更新（主进程下载、替换 `.app` 并自动重启），底栏「更新」按钮会自己打开面板并提供升级 / 稍后 / 不再提醒与「启动时检查更新」开关。
+- 关掉检测：`luban update off`、桌面面板里的勾选框，或整机 `LUBAN_NO_UPDATE_CHECK=1`。
+- 自建服务器：`updates.url` 或 `LUBAN_UPDATES_URL` 指向任意实现了上表接口的地址。

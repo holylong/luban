@@ -705,3 +705,124 @@ button { cursor: pointer; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
 .md a { color: var(--accent-ink); text-decoration: none; }
 .md a:hover { text-decoration: underline; }
+
+/* 任务详情 — 一条任务说过的话，和它接下来要做的事 --------------------- */
+.taskview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.taskview-head {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 20px 10px; border-bottom: 1px solid var(--line-soft);
+}
+.taskview-head .back {
+  flex: none; margin-top: 1px; border: 1px solid var(--line); background: var(--card-fill);
+  border-radius: 9px; padding: 4px 10px; font-size: 11.5px; color: var(--muted);
+  box-shadow: var(--bevel), var(--lift-1);
+}
+.taskview-head .back:hover { color: var(--ink); border-color: #e0e0e6; }
+.taskview-title { min-width: 0; flex: 1; }
+.taskview-title h1 {
+  margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -.01em; color: var(--fg);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.taskview-title p {
+  margin: 5px 0 0; display: flex; align-items: center; gap: 7px;
+  font-size: 11px; color: var(--faint);
+}
+.taskview-title p span + span::before { content: "·"; margin-right: 7px; color: #dcdce2; }
+.taskview-title .pill {
+  font-size: 10.5px; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--muted);
+}
+.taskview-title .pill.running { background: var(--accent-soft); color: var(--accent-ink); }
+.taskview-title .pill.completed { background: #e9f6f0; color: #1f7a68; }
+.taskview-title .pill.failed { background: rgba(224, 86, 109, .1); color: #b4405a; }
+.taskview-title .pill.queued { background: #fdf3e0; color: #8a6114; }
+.taskview-title .pill::before { content: none; }
+
+.taskview-body {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px;
+  padding: 12px 20px 14px; overflow: hidden;
+}
+.edit-card {
+  flex: none; border: 1px solid var(--line); border-radius: 14px; padding: 11px 12px 10px;
+  background: var(--card-fill); box-shadow: var(--bevel), var(--lift-1);
+}
+.edit-label { display: block; font-size: 11px; color: var(--faint); margin-bottom: 5px; }
+.edit-card textarea {
+  width: 100%; resize: none; border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 10px; font-size: 12.5px; line-height: 1.6; background: #fff; outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.edit-card textarea:focus { border-color: #dcdce2; box-shadow: 0 0 0 3px rgba(52, 189, 147, .1); }
+.edit-card textarea::placeholder { color: var(--faint); }
+.edit-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+.edit-row label { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.edit-row select, .edit-row input[type="time"] {
+  border: 1px solid var(--line); border-radius: 8px; padding: 3px 7px; font-size: 11.5px;
+  background: var(--chip); color: var(--ink); outline: none;
+}
+.edit-row select:focus, .edit-row input[type="time"]:focus { border-color: #dcdce2; }
+.edit-preview { font-size: 11px; color: var(--faint); margin-left: auto; }
+.edit-actions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.edit-actions .spacer { flex: 1; }
+.edit-actions button {
+  border: 1px solid var(--line); background: var(--card-fill); color: var(--ink);
+  border-radius: 9px; padding: 4px 10px; font-size: 11.5px;
+  box-shadow: var(--bevel), var(--lift-1);
+}
+.edit-actions button:hover:not(:disabled) { border-color: #e0e0e6; }
+.edit-actions button:disabled { color: var(--faint); box-shadow: none; cursor: default; }
+.edit-actions button.primary {
+  border-color: transparent; color: #fff;
+  background: linear-gradient(180deg, #3cc79c 0%, #2fae87 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 2px 6px -2px rgba(47, 174, 135, .6);
+}
+.edit-actions button.primary:disabled {
+  background: #f0f1f3; color: #b9bec6; box-shadow: none; cursor: default;
+}
+.edit-actions .ghost-danger { color: var(--red); }
+.edit-actions .edit-workspace {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 190px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted);
+}
+.edit-hint { margin: 8px 0 0; font-size: 11px; color: var(--faint); }
+.edit-card .notice { margin: 8px 0 0; }
+
+.chat {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  background: #fff; box-shadow: var(--bevel), var(--lift-1);
+}
+.chat-head {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line-soft); background: var(--rail-fill);
+  font-size: 11.5px; color: var(--muted);
+}
+.chat-head .chat-note { font-size: 11px; color: var(--faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-head .spacer { flex: 1; }
+.chat-head .stop {
+  border: 0; background: rgba(224, 86, 109, .1); color: var(--red);
+  border-radius: 8px; padding: 2px 9px; font-size: 11px;
+}
+.chat-log { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 6px; }
+.chat-log > * + * { margin-top: 10px; }
+.chat-log .hint { margin: 0; font-size: 11.5px; color: var(--faint); line-height: 1.7; }
+.chat-composer { flex: none; border-top: 1px solid var(--line-soft); padding: 8px 12px 10px; background: #fff; }
+.chat-composer textarea {
+  width: 100%; resize: none; border: 1px solid var(--line); border-radius: 11px;
+  padding: 8px 10px; font-size: 12.5px; line-height: 1.6; outline: none; background: #fff;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.chat-composer textarea:focus { border-color: #dcdce2; box-shadow: 0 0 0 3px rgba(52, 189, 147, .1); }
+.chat-composer textarea::placeholder { color: var(--faint); }
+.chat-row { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
+.chat-row .spacer { flex: 1; }
+.ghost-chip.mute { color: var(--faint); }
+.ghost-chip.mute:hover { color: var(--faint); }
+
+/* 最近任务 and the queue rows now open the task, so both need a visible mode. */
+.side-task.on { background: #eef7f3; box-shadow: inset 0 0 0 1px rgba(52, 189, 147, .22); }
+.task .open {
+  opacity: 0; border: 0; background: transparent; color: var(--faint); font-size: 11px; padding: 0 2px;
+  transition: opacity .12s ease;
+}
+.task:hover .open, .task:focus-within .open { opacity: 1; }
+.task .open:hover { color: var(--accent-ink); }

@@ -26,6 +26,9 @@ import { loadConfig } from "./config.js";
 import type { AgentEvent, ChatMessage, LubanConfig } from "./types.js";
 import type { DriveComputerState, DriveEvent, DriveUsage } from "./drive-events.js";
 import { injectMemory, memoryPrompt, noteRun, readProjectMemory, runSummary, stripMemory } from "./memory.js";
+import { repairToolHistory } from "./history.js";
+import { SessionStore } from "./session-store.js";
+import type { SessionRecord } from "./types.js";
 import { describeMoment } from "./remind.js";
 import { creatorIdentityPrompt, creatorSelfDescription, readCreatorIdentity } from "./creator-identity.js";
 
@@ -66,6 +69,12 @@ export interface DriveOptions {
    * (`approvalOnceOnly`) never qualify: those are per command by design.
    */
   isPreapproved?: (tool: string) => boolean;
+  /**
+   * A transcript to continue instead of starting from nothing. This is how
+   * "open that task and keep talking" carries the earlier run's context: the
+   * messages come from the saved session, not from a summary the window made up.
+   */
+  resume?: string;
 }
 
 /** Actions that only read the screen; they never need a second pair of eyes. */
@@ -159,6 +168,9 @@ export class DriveSession {
   private controller?: AbortController;
   private turns = 0;
   private closing = false;
+  /** The transcript this conversation belongs to, once it exists on disk. */
+  private store?: SessionStore;
+  private record?: SessionRecord;
   private computer: DriveComputerState = { supported: computerSupported(), enabled: false };
   /** Tools whose standing approval has already been announced in this session. */
   private readonly announced = new Set<string>();
@@ -181,10 +193,29 @@ export class DriveSession {
     const config = loadConfig({ workspace: this.options.workspace, model: this.options.model, mesh: false, seedDefaults: true });
     this.config = config;
     config.creatorIdentity = true;
-    this.messages = initialMessages(config.workspace, config.model.name, config.planning, "model", false, creatorIdentityPrompt(readCreatorIdentity(this.options.home)));
-    this.messages.push({ role: "system", content: DRIVE_PROTOCOL });
+    const basis = initialMessages(config.workspace, config.model.name, config.planning, "model", false, creatorIdentityPrompt(readCreatorIdentity(this.options.home)));
+    basis.push({ role: "system", content: DRIVE_PROTOCOL });
+    this.messages = basis;
+    this.store = new SessionStore(this.options.home);
+    if (this.options.resume) {
+      const record = await this.store.load(this.options.resume, config.project, config.workspace).catch(() => undefined)
+        ?? await this.store.load(this.options.resume).catch(() => undefined);
+      if (record) {
+        // Prior turns come back verbatim — tool calls included — because that
+        // history is what lets the next sentence say "再改一次" and mean it.
+        const conversation = structuredClone(record.messages.filter(message => message.role !== "system"));
+        repairToolHistory(conversation);
+        this.messages = [...basis, ...conversation];
+        this.record = record;
+        this.emit({ type: "session", id: record.id, resumed: true });
+      } else {
+        // A missing transcript is not a reason to refuse the conversation: the
+        // task's own result is still in the queue, and the person is waiting.
+        this.emit({ type: "status", text: "没找到这次任务的会话记录，这一轮重新开始，但工作区和任务内容还在" });
+      }
+    }
     this.computer = await this.openComputer(config);
-    this.emit({ type: "ready", workspace: config.workspace, model: config.model.id, computer: this.computer });
+    this.emit({ type: "ready", workspace: config.workspace, model: config.model.id, computer: this.computer, ...(this.record ? { session: this.record.id } : {}) });
   }
 
   private async openComputer(config: LubanConfig): Promise<DriveComputerState> {
@@ -266,6 +297,7 @@ export class DriveSession {
         event => this.onAgentEvent(event),
         (tool, args) => this.confirm(tool, args));
       this.messages = stripMemory(result.messages);
+      await this.persist();
       this.flushThinking();
       this.emit({
         type: "turn-end", id, ok: result.ok, text: result.text, steps: result.steps,
@@ -281,6 +313,30 @@ export class DriveSession {
     } finally {
       this.controller = undefined;
       this.settleAll("turn finished");
+    }
+  }
+
+  /**
+   * Write the conversation back to its transcript.
+   *
+   * Without this, "继续对话" would be a lie the moment the window closes: the
+   * child is killed with the window, and an in-memory history disappears with it.
+   * A conflict with another terminal is reported, never thrown — the turn itself
+   * already happened.
+   */
+  private async persist(): Promise<void> {
+    const store = this.store;
+    const config = this.config;
+    if (!store || !config) return;
+    try {
+      if (!this.record) {
+        this.record = store.create(config.project, config.workspace, "agent", config.model.id, this.messages);
+        this.emit({ type: "session", id: this.record.id });
+      }
+      this.record.messages = this.messages;
+      await store.save(this.record);
+    } catch (error) {
+      this.emit({ type: "status", text: `这次的对话没能存进会话记录：${error instanceof Error ? error.message : String(error)}` });
     }
   }
 

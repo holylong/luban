@@ -16,7 +16,9 @@ import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
 import { isFreeTierError, isModelTimeoutError, isUpstreamUnavailableError } from "../core/model-errors.js";
 import { isZenFreeModel } from "../core/opencode-zen.js";
 import { estimateMessagesTokens } from "../core/context.js";
-import { loadConfig, refreshCodexModels, savePermissionMode, savePreferredModel, saveTheme } from "../core/config.js";
+import { loadConfig, refreshCodexModels, savePermissionMode, savePreferredModel, saveTheme, saveUpdateSettings } from "../core/config.js";
+import { checkForUpdate, currentKind, downloadUpdate, installUpdate, startupCheckAllowed } from "../core/update.js";
+import { shortNotes } from "../core/update-command.js";
 import { ProviderAuthDialog } from "./provider-auth-dialog.js";
 import { RelayLoginDialog } from "./relay-login-dialog.js";
 import { consumeCodexReset, formatCodexResetOutcome, formatCodexRateLimits, formatCodexUsage, readCodexRateLimits, readCodexUsage } from "../core/codex-account.js";
@@ -774,6 +776,10 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     };
   }, [subscribeRelayLog]);
   const [config, setConfig] = useState(initialConfig);
+  // The startup check and the desktop menu need the current settings without
+  // re-running their effects whenever a preference changes.
+  const configRef = useRef(config);
+  configRef.current = config;
   const [mode, setMode] = useState<AgentMode>("auto");
   const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages(initialConfig.workspace, initialConfig.model.name, initialConfig.planning, initialConfig.kev?.mode, initialConfig.sandbox?.allowOutsideWorkspace === true));
   const [input, setInput] = useState("");
@@ -1650,6 +1656,78 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     signal.addEventListener("abort", abort, { once: true });
     setQuestionRequest({ question, resolve: finish, reject });
   });
+
+  /**
+   * Startup version check.
+   *
+   * One request off the critical path, then a question panel the user can
+   * answer with 1/2/3. A failed check, a skipped version and the switch being
+   * off all look the same from here: nothing happens. "升级" downloads into
+   * `<home>/updates` and hands the swap to a detached script, so the running
+   * terminal is never replaced underneath a live conversation.
+   */
+  useEffect(() => {
+    const settings = configRef.current.updates;
+    if (!settings.check || !startupCheckAllowed()) return;
+    let cancelled = false;
+    const offer = async () => {
+      const check = await checkForUpdate({
+        currentVersion: VERSION,
+        kind: currentKind(),
+        url: settings.url,
+        skippedVersion: settings.skippedVersion,
+      });
+      const artifact = check.artifact;
+      if (cancelled || check.status !== "available" || !artifact) return;
+      const version = artifact.version;
+      const answer = await new Promise<string>((resolveChoice) => {
+        setQuestionDraft("");
+        setQuestionRequest({
+          question: {
+            question: `luban ${version} 可以升级（当前 ${VERSION}）：${shortNotes(artifact.notes) || artifact.file}`,
+            options: [
+              { label: "升级", description: "下载并安装，重启 luban 生效" },
+              { label: "稍后", description: "这次先不升级" },
+              { label: "不再提醒", description: `以后不再提 ${version}` },
+            ],
+          },
+          resolve: (value) => { setQuestionRequest(null); resolveChoice(value); },
+          reject: () => { setQuestionRequest(null); resolveChoice(""); },
+        });
+      });
+      if (cancelled || !answer) return;
+      if (answer === "不再提醒") {
+        await saveUpdateSettings(configRef.current.home, { skippedVersion: version });
+        setNotice(`不再提醒 ${version}；luban update install 仍可手动升级`);
+        return;
+      }
+      if (answer !== "升级") return;
+      try {
+        let shown = -1;
+        setNotice(`正在下载 luban ${version}…`);
+        const archive = await downloadUpdate(artifact, {
+          baseUrl: configRef.current.updates.url,
+          home: configRef.current.home,
+          onProgress: (received, total) => {
+            const percent = Math.floor((received / total) * 100);
+            if (percent === shown || percent % 5 !== 0) return;
+            shown = percent;
+            setNotice(`正在下载 luban ${version}… ${percent}%`);
+          },
+        });
+        const installed = await installUpdate(artifact, archive, { kind: currentKind(), home: configRef.current.home });
+        setNotice(installed.restart === "relaunch"
+          ? `已安装 luban ${version}，应用会自动重启`
+          : `已安装 luban ${version}，退出后重新打开 luban 生效`);
+      } catch (error) {
+        setNotice(`升级失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    void offer();
+    return () => { cancelled = true; };
+    // Deliberately once per process: a settings change applies to the next start.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const runPrompt = async (text: string, images: Array<{ path: string; mime: string }> = [], restore = text) => {
     setShowMesh(false);

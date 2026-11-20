@@ -82,3 +82,46 @@ it("escapes launchd arguments and keeps credentials out of service definitions",
   expect(plist).toContain("<string>bot</string><string>run</string>");
   expect(plist).not.toContain("API_KEY");
 });
+
+/* 改任务内容而不是再排一个：历史要留在同一条任务上。 */
+it("edits a task in place, keeps its history and re-queues it", async () => {
+  const q = await queue();
+  const task = await q.add({ ...input(), every: 60_000 });
+  await q.tick(async () => ({ ok: true, text: "第一晚的结论" }), new AbortController().signal);
+  const at = Date.now() + 120_000;
+  const edited = await q.edit(task.id, { prompt: "只看今天新增的 bug", at, every: null });
+  expect(edited.id).toBe(task.id);
+  expect(edited.prompt).toBe("只看今天新增的 bug");
+  expect(edited.every).toBeUndefined();
+  const [row] = await q.list();
+  // Editing rewrites the booking, not the record: last night's run stays readable.
+  expect(row!.state).toMatchObject({ status: "queued", nextAt: at });
+  expect(await q.history(task.id)).toMatchObject([{ result: "第一晚的结论" }]);
+});
+
+it("refuses to edit a running task and rejects an empty prompt", async () => {
+  const q = await queue();
+  const task = await q.add(input());
+  await q.save(task.id, { status: "running", nextAt: Date.now(), startedAt: Date.now() });
+  await expect(q.edit(task.id, { prompt: "改个说法" })).rejects.toThrow(/running/i);
+  await q.save(task.id, { status: "completed", nextAt: 0, finishedAt: Date.now() });
+  await expect(q.edit(task.id, { prompt: "   " })).rejects.toThrow(/empty/i);
+  await expect(q.edit(task.id, { every: 1_000 })).rejects.toThrow(/Invalid schedule/i);
+});
+
+it("brings a cancelled task back when it is edited", async () => {
+  const q = await queue();
+  const task = await q.add(input());
+  await q.cancel(task.id);
+  expect((await q.list())[0]!.state.status).toBe("cancelled");
+  await q.edit(task.id, { at: Date.now() + 1000 });
+  expect((await q.list())[0]!.state.status).toBe("queued");
+});
+
+it("remembers which transcript each run wrote", async () => {
+  const q = await queue();
+  const task = await q.add(input());
+  await q.tick(async () => ({ ok: true, text: "做完", session: "20261120-120000-abcdef" }), new AbortController().signal);
+  expect((await q.list())[0]!.state.session).toBe("20261120-120000-abcdef");
+  expect((await q.history(task.id))[0]!.session).toBe("20261120-120000-abcdef");
+});

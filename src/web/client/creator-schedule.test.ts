@@ -4,7 +4,7 @@
  * helpers are what the window shows for the row that lands. A wrong label here
  * means the user trusts a task that will never fire. */
 import { describe, expect, it } from "vitest";
-import { dayClock, nextRunLabel, scheduleLabel } from "./creator-schedule";
+import { dayClock, draftPatch, nextClock, nextRunLabel, REPEAT_OPTIONS, scheduleLabel, taskDraft } from "./creator-schedule";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -57,5 +57,43 @@ describe("dayClock", () => {
   it("uses 今天 only for today", () => {
     expect(dayClock(at(23), NOW)).toBe("今天 23:00");
     expect(dayClock(at(6, 0, 1), NOW)).toBe("11/13 06:00");
+  });
+});
+
+/* 改任务内容：表单读回任务自己的排期，写回时必须还是它说的那件事。 */
+describe("edit form", () => {
+  it("starts from the task's own clock and repeat, not a default", () => {
+    expect(taskDraft({ prompt: "扫 bug", at: at(23), every: DAY })).toEqual({ prompt: "扫 bug", repeat: DAY, time: "23:00" });
+    expect(taskDraft({ prompt: "提醒我下班", at: at(18, 30) })).toMatchObject({ repeat: 0, time: "18:30" });
+  });
+
+  it("reads a clock time back as today, or tomorrow once it has passed", () => {
+    expect(nextClock("23:00", NOW)).toBe(at(23));
+    expect(nextClock("06:00", NOW)).toBe(at(6, 0, 1));
+    // A malformed time is "now", never an invalid timestamp the CLI would reject.
+    expect(nextClock("", NOW)).toBe(NOW);
+  });
+
+  it("turns the form into a patch the queue can apply", () => {
+    expect(draftPatch({ prompt: "  只看新增的 bug  ", repeat: DAY, time: "23:00" }, NOW))
+      .toEqual({ prompt: "只看新增的 bug", every: DAY, at: at(23) });
+    // One-off clears the repeat instead of sending 0, which the queue rejects.
+    expect(draftPatch({ prompt: "提醒我下班", repeat: 0, time: "06:00" }, NOW))
+      .toEqual({ prompt: "提醒我下班", every: null, at: at(6, 0, 1) });
+    // Sub-daily repeats start now: re-dating "每 6 小时" to 06:00 would fire late.
+    expect(draftPatch({ prompt: "扫一遍", repeat: 6 * HOUR, time: "23:00" }, NOW))
+      .toEqual({ prompt: "扫一遍", every: 6 * HOUR, at: NOW });
+  });
+
+  it("refuses an empty prompt rather than booking a silent job", () => {
+    expect(() => draftPatch({ prompt: "   ", repeat: 0, time: "09:00" }, NOW)).toThrow(/不能为空/);
+  });
+
+  it("offers the repeats the label function can name", () => {
+    for (const option of REPEAT_OPTIONS) {
+      if (option.value === 0) continue;
+      const label = scheduleLabel({ at: at(23), every: option.value, status: "queued" });
+      expect(label === option.label || label.startsWith(option.label)).toBe(true);
+    }
   });
 });

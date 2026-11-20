@@ -84,12 +84,27 @@ writeFileSync(join(home, "creator.json"), JSON.stringify({ computer: true, allow
 
 // Run history for the finished job: the 交互记录 drawer reads these rows, so seeding
 // them is what proves the drawer lists executions instead of only the last one.
+// The transcript that finished job left behind, written by the real SessionStore:
+// 任务详情 re-opens it for 继续对话, so a hand-written fixture would prove only that
+// this script and the window agree with each other.
+const { SessionStore } = await import(pathToFileURL(join(repo, "dist", "core", "session-store.js")).href);
+const store = new SessionStore(home);
+const transcript = store.create("", workspace, "agent", "test/model", [
+  { role: "system", content: "base" },
+  { role: "user", content: "扫描 GitLab 上 luban 仓库的新提交，有变更就打 tag 并写 release notes" },
+  { role: "assistant", content: "扫到 4 个新提交，已打 tag v2.4.3 并写了说明。" },
+  { role: "user", content: "第 3 个提交的说明写清楚点" },
+  { role: "assistant", content: "改好了：v2.4.3 的说明里补上了登录超时修复的来龙去脉。" },
+]);
+await store.save(transcript);
+
 const runs = [
   { from: now - 3 * 3600_000, to: now - 3 * 3600_000 + 240_000, status: "completed", nextAt: now - 2 * 3600_000,
     usage: { input: 41_000, output: 3_200, calls: 7 },
     result: "## 结论\n\n扫到 4 个新提交，其中一个修复了登录超时。已打 tag `v2.4.3`。" },
   { from: now - 2 * 3600_000 - 60_000, to: now - 2 * 3600_000 + 180_000, status: "failed", nextAt: now - 3600_000,
     usage: { input: 12_000, output: 400, calls: 2 },
+    session: transcript.id,
     result: "推送失败：远端返回 403，需要检查 token 权限。" },
 ];
 writeFileSync(join(tasks, "22222222-2222-4222-8222-222222222222", "runs.jsonl"),
@@ -97,7 +112,10 @@ writeFileSync(join(tasks, "22222222-2222-4222-8222-222222222222", "runs.jsonl"),
 
 const electron = join(repo, "node_modules", "electron", "cli.js");
 const child = spawn(process.execPath, [electron, join(repo, "apps", "creator"), "--smoke", shot], {
-  env: { ...process.env, LUBAN_HOME: home, CREATOR_SMOKE_PLANS: "1", CREATOR_SMOKE_APPROVALS: "1", CREATOR_SMOKE_FORGET: "1", CREATOR_SMOKE_MEMORY: "1" },
+  env: {
+    ...process.env, LUBAN_HOME: home, CREATOR_SMOKE_PLANS: "1", CREATOR_SMOKE_APPROVALS: "1", CREATOR_SMOKE_FORGET: "1",
+    CREATOR_SMOKE_MEMORY: "1", CREATOR_SMOKE_TASK: "扫描 GitLab 上 luban 仓库的新提交",
+  },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
@@ -231,5 +249,56 @@ if (!plans.drawer || plans.drawer.w < 320) {
 console.log(`plan drawer ok: ${plansShot} (${plans.plans.length} plans, ${plans.runs.length} runs, w=${plans.drawer.w})`);
 console.log(`  metas: ${plans.metas.slice(0, 3).join(" ‖ ")}`);
 console.log(`  runs:  ${plans.runs.slice(0, 2).join(" ‖ ")}`);
+
+// 任务详情: opening a finished row has to land on the conversation it left behind
+// and on a form that can reword it. A pane that renders but resumes nothing is
+// exactly the dead end this replaced.
+const taskJson = shot.replace(/\.png$/u, "-task.json");
+if (!existsSync(taskJson)) {
+  console.error("任务详情 没有渲染出截图");
+  process.exit(1);
+}
+const task = JSON.parse(readFileSync(taskJson, "utf8"));
+const wanted = "扫描 GitLab 上 luban 仓库的新提交";
+if (task.opened?.error) {
+  console.error(`打不开任务详情：${task.opened.error}`);
+  process.exit(1);
+}
+if (!task.detail.title.includes(wanted) || !task.detail.prompt.includes(wanted)) {
+  console.error(`任务详情没有载入任务内容：${JSON.stringify(task.detail)}`);
+  process.exit(1);
+}
+// The whole point: the child was told to resume the run's own transcript, and
+// the pane drew what that transcript already said.
+if (task.resumed !== transcript.id) {
+  console.error(`继续对话没有接上上次的会话：resume=${JSON.stringify(task.resumed)} 期望 ${transcript.id}`);
+  process.exit(1);
+}
+const said = task.detail.rows.join(" ");
+for (const needle of ["扫到 4 个新提交", "登录超时修复的来龙去脉"]) {
+  if (!said.includes(needle)) {
+    console.error(`任务详情没有画出历史对话「${needle}」：${said.slice(0, 300)}`);
+    process.exit(1);
+  }
+}
+if (!task.detail.note.includes("接上") && !task.detail.note.includes("接着上次")) {
+  console.error(`任务详情没有说明这是接着哪段对话：${JSON.stringify(task.detail.note)}`);
+  process.exit(1);
+}
+// 改任务内容 goes through the CLI that owns the format, and the row underneath
+// changes without a relaunch.
+if (task.edited?.error || !task.stored.includes("只列能复现的")) {
+  console.error(`保存修改没有落到队列：${JSON.stringify({ edited: task.edited, stored: task.stored })}`);
+  process.exit(1);
+}
+if (!task.detail.edit || task.detail.edit.h < 120 || !task.detail.chat || task.detail.chat.h < 160) {
+  console.error(`任务详情两栏没有铺开：${JSON.stringify({ edit: task.detail.edit, chat: task.detail.chat })}`);
+  process.exit(1);
+}
+if (task.detail.sendDisabled !== true) {
+  console.error("空输入框的发送键是可点的：这会让「继续对话」发出一句空话");
+  process.exit(1);
+}
+console.log(`task detail ok: title/内容载入, resume=${task.resumed}, 历史 ${task.detail.rows.length} 条, 保存后「${task.stored}」`);
 console.log(`creator window ok: ${shot} (${png.length} bytes, ${expected.length} rows verified)`);
 console.log(`  window text: ${text.split("\n").filter(Boolean).join(" | ").slice(0, 220)}`);

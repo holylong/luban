@@ -160,6 +160,24 @@ export interface LubanConfig {
   history: HistorySettings;
   /** Anonymous install/token statistics; see `core/usage-stats.ts`. */
   usageStats: UsageStatsSettings;
+  /** Startup version check and the manual `luban update`; see `core/update.ts`. */
+  updates: UpdateSettings;
+}
+
+/**
+ * `updates` block of config.json.
+ *
+ * Checking is on by default because a client that never learns about releases
+ * is stuck with the bugs it already has; it is a single switch (plus a
+ * per-version "don't remind me again") to stop it.
+ */
+export interface UpdateSettings {
+  /** Ask the release server at startup. */
+  check: boolean;
+  /** Release server base URL; empty falls back to the built-in default. */
+  url: string;
+  /** A version the user asked not to be reminded about again. */
+  skippedVersion: string;
 }
 
 /**

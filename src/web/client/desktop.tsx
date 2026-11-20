@@ -13,6 +13,7 @@ import { conversationEntries, historyBeforeRun } from "./desktop-conversation";
 import { DesktopChanges, currentDesktopEdit } from "./desktop-changes";
 
 import { DesktopThemePicker } from "./desktop-theme-picker";
+import { DesktopUpdate } from "./desktop-update";
 import { clampAgent, clampConsole, clampExplorer, fitLayout, loadLayout, saveLayout, type DesktopLayout } from "./desktop-layout";
 import { PaneSplitter } from "./desktop-panes";
 import { reloadPaths, sameTree } from "./desktop-tree";
@@ -453,6 +454,27 @@ export function PetToggle(): React.ReactElement | null {
   >{visible ? "◍ Creator · 显示中" : "◌ Creator · 已隐藏"}</button>;
 }
 
+/**
+ * Bottom strip: the connection light, the update dock, the project and the open
+ * file.
+ *
+ * The dock lives here rather than in the explorer because the status bar spans
+ * all three columns: a release waiting to be installed has to be visible from
+ * the terminal and the conversation too, not only from the file tree.
+ */
+export function DesktopStatusBar({ store }: { store: WorkbenchStore }): React.ReactElement {
+  return (
+    <footer className="desktop-status">
+      <span className={`dot ${store.connected ? "online" : "offline"}`} />
+      {store.connected ? "本地 Agent 已连接" : "正在连接本地 Agent"}
+      <PetToggle />
+      <DesktopUpdate />
+      <span>{store.project || store.node?.workspace || ""}</span>
+      <span>{store.file ? `${store.file.lines ?? 0} 行 · ${store.file.language}` : ""}</span>
+    </footer>
+  );
+}
+
 export function DesktopApp(): React.ReactElement {
   const store = useWorkbench();
   const [layout, setLayout] = useState<DesktopLayout>(() => loadLayout(viewportWidth()));
@@ -492,7 +514,7 @@ export function DesktopApp(): React.ReactElement {
     <aside className="desktop-agent">
       <AgentPanel store={store} timeline={timeline} />
     </aside>
-    <footer className="desktop-status"><span className={`dot ${store.connected ? "online" : "offline"}`} />{store.connected ? "本地 Agent 已连接" : "正在连接本地 Agent"}<PetToggle /><span>{store.project || store.node?.workspace || ""}</span><span>{store.file ? `${store.file.lines ?? 0} 行 · ${store.file.language}` : ""}</span></footer>
+    <DesktopStatusBar store={store} />
     <Toasts store={store} />
   </div>;
 }

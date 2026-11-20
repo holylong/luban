@@ -52,6 +52,49 @@ export function scheduleLabel(task: ScheduleTask): string {
   return `一次 · ${dayClock(task.at)}`;
 }
 
+/** Repeat options a person can pick when editing a task, in the order they read. */
+export const REPEAT_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 0, label: "只跑一次" },
+  { value: DAY, label: "每天" },
+  { value: 7 * DAY, label: "每周" },
+  { value: 6 * HOUR, label: "每 6 小时" },
+  { value: 30 * MINUTE, label: "每 30 分钟" },
+];
+
+/** What the edit form starts from: the task's own repeat and clock, never a default. */
+export interface TaskDraft { prompt: string; repeat: number; time: string }
+
+export function taskDraft(task: { prompt: string; at: number; every?: number }): TaskDraft {
+  return { prompt: task.prompt, repeat: task.every ?? 0, time: clock(task.at) };
+}
+
+/** Today at `HH:MM`, or tomorrow when that moment has already passed. */
+export function nextClock(time: string, now: number): number {
+  const match = /^(\d{1,2}):(\d{2})$/u.exec(time.trim());
+  const date = new Date(now);
+  if (!match) return now;
+  const hours = Math.min(23, Math.max(0, Number(match[1])));
+  const minutes = Math.min(59, Math.max(0, Number(match[2])));
+  date.setHours(hours, minutes, 0, 0);
+  if (date.getTime() <= now) date.setDate(date.getDate() + 1);
+  return date.getTime();
+}
+
+/**
+ * The patch the edit form submits.
+ *
+ * Sub-daily repeats start now rather than at the painted clock time: "每 6 小时"
+ * means "from here on", and re-dating it to 06:00 would either run late or fire
+ * twice. Daily and weekly keep the clock the person chose.
+ */
+export function draftPatch(draft: TaskDraft, now: number): { prompt: string; every: number | null; at: number } {
+  const prompt = draft.prompt.trim();
+  if (!prompt) throw new Error("任务内容不能为空");
+  const repeat = Number(draft.repeat) || 0;
+  const at = repeat === 0 || repeat >= DAY ? nextClock(draft.time, now) : now;
+  return { prompt, every: repeat === 0 ? null : repeat, at };
+}
+
 /** The next moment this task will actually run, in words the user can check. */
 export function nextRunLabel(task: ScheduleTask, now: number): string {
   if (task.status === "running") return `正在执行（${clock(task.startedAt)} 开始）`;

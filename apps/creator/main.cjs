@@ -226,11 +226,15 @@ ipcMain.handle("creator:drive", () => {
 ipcMain.handle("creator:drive-start", (_event, input) => {
   const bridge = ensureDrive();
   const workspace = String(input?.workspace || "").trim() || home;
+  const resume = typeof input?.resume === "string" && input.resume ? input.resume : undefined;
+  // A different transcript is a different child: reusing the running one would
+  // answer the new sentence with the other conversation's context.
+  if (bridge.running && (bridge.resume || undefined) !== resume) bridge.stop();
   if (input?.computer === true && settings.computer !== true) {
     settings = { ...settings, computer: true };
     saveSettings();
   }
-  bridge.start(workspace, { computer: settings.computer === true, allow: settings.allowed, model: input?.model, home });
+  bridge.start(workspace, { computer: settings.computer === true, allow: settings.allowed, model: input?.model, home, resume });
   return bridge.snapshot();
 });
 
@@ -269,7 +273,9 @@ ipcMain.handle("creator:snapshot", () => snapshot());
 ipcMain.handle("creator:add", (_event, input) => {
   const result = bot.addTask(home, input || {});
   // Submitting from the window is a clear signal that work should start now.
-  bot.ensureWorker(home);
+  // A screenshot run is the exception: it must never start a worker that spends
+  // tokens on the seeded queue it is photographing.
+  if (!smokePath) bot.ensureWorker(home);
   refreshTray();
   return { ...result, snapshot: snapshot() };
 });
@@ -279,6 +285,26 @@ ipcMain.handle("creator:cancel", (_event, id) => {
   return snapshot();
 });
 ipcMain.handle("creator:runs", (_event, id, limit) => bot.taskRuns(home, id, Number(limit) > 0 ? Number(limit) : 30));
+
+/** 改任务内容：走 CLI，界面只收集字段，格式仍只有一个写者。 */
+ipcMain.handle("creator:edit", (_event, id, patch) => {
+  const result = bot.editTask(home, id, patch || {});
+  // Same rule as adding: the CLI is the writer, the worker only starts in a live
+  // app, never during a screenshot run.
+  if (!smokePath) bot.ensureWorker(home);
+  refreshTray();
+  return { ...result, snapshot: snapshot() };
+});
+
+/**
+ * 打开任务时要知道它上一次跑在哪个会话里，以及那段对话说过什么。
+ * 没有 transcript 也照样返回：界面会退化成「从任务原文接着聊」。
+ */
+ipcMain.handle("creator:session", (_event, id) => {
+  const session = bot.taskSession(home, id);
+  const transcript = session ? bot.sessionTranscript(home, session) : { id: "", messages: [] };
+  return { session: session || "", transcript };
+});
 ipcMain.handle("creator:startWorker", () => {
   const result = bot.ensureWorker(home);
   refreshTray();
@@ -440,6 +466,72 @@ else {
             require("node:fs").writeFileSync(queuePath, (await window.webContents.capturePage()).toPNG());
             require("node:fs").writeFileSync(queuePath.replace(/\.png$/u, ".json"), JSON.stringify(composer, null, 2));
             process.stdout.write(`queue composer ${JSON.stringify(composer)}\n`);
+          }
+          // 任务详情 is where "继续对话" used to be a dead end: open a finished task
+          // for real, read back what the pane drew, which transcript the child was
+          // told to resume, and then save a reworded task through the same form a
+          // person would use. `CREATOR_SMOKE_TASK` is the prompt to open by.
+          if (process.env.CREATOR_SMOKE_TASK) {
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            const wanted = String(process.env.CREATOR_SMOKE_TASK);
+            const detailPath = smokePath.replace(/\.png$/u, "-task.png");
+            await window.webContents.executeJavaScript(`(() => {
+              document.querySelector('[data-view="queue"]')?.click();
+            })()`);
+            await sleep(400);
+            const opened = await window.webContents.executeJavaScript(`(() => {
+              const row = [...document.querySelectorAll(".task")].find(el => el.innerText.includes(${JSON.stringify(wanted)}));
+              const button = row ? row.querySelector("button.open") : null;
+              if (button) { button.click(); return { via: "row" }; }
+              // A finished task lives under the 已完成 tab, but the rail lists every
+              // row: the rail is the fallback that always has it.
+              const side = [...document.querySelectorAll(".side-task")].find(el => el.innerText.includes(${JSON.stringify(wanted)}));
+              if (side) { side.click(); return { via: "rail" }; }
+              return { error: "找不到这条任务" };
+            })()`);
+            // The pane loads the saved transcript over IPC before it can draw it.
+            let detail = { title: "", prompt: "", note: "", rows: [], ready: "" };
+            for (let i = 0; i < 40; i++) {
+              await sleep(200);
+              detail = await window.webContents.executeJavaScript(`(() => {
+                const box = (selector) => { const el = document.querySelector(selector); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+                return {
+                  title: document.querySelector(".taskview-title h1")?.textContent ?? "",
+                  prompt: document.querySelector("#task-prompt")?.value ?? "",
+                  note: document.querySelector(".chat-note")?.textContent ?? "",
+                  rows: [...document.querySelectorAll(".chat-log .you, .chat-log .reply")].map(el => el.innerText.slice(0, 90)),
+                  hint: document.querySelector(".chat-log .hint")?.textContent ?? "",
+                  ready: document.querySelector(".drive-log") ? "waiting" : "ready",
+                  edit: box(".edit-card"), chat: box(".chat"),
+                  save: document.querySelector(".edit-actions .primary")?.textContent ?? "",
+                  saveDisabled: document.querySelector(".edit-actions .primary")?.disabled === true,
+                  sendDisabled: document.querySelector(".chat-composer .send")?.disabled === true,
+                  saveButton: document.querySelector(".edit-actions .primary")?.disabled === true ? "disabled" : "enabled",
+                };
+              })()`);
+              if (detail.title) break;
+            }
+            const resumed = ensureDrive().snapshot().resume || "";
+            // Reword the task through the form: the button has to reach the CLI,
+            // and the row underneath has to change without a relaunch.
+            const edited = await window.webContents.executeJavaScript(`(async () => {
+              const area = document.querySelector("#task-prompt");
+              if (!area) return { error: "没有任务内容输入框" };
+              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+              setter.call(area, ${JSON.stringify(wanted)} + "，只列能复现的");
+              area.dispatchEvent(new Event("input", { bubbles: true }));
+              await new Promise(resolve => setTimeout(resolve, 200));
+              const button = document.querySelector(".edit-actions .primary");
+              if (!button || button.disabled) return { error: "保存按钮不可用", disabled: button ? button.disabled : null };
+              button.click();
+              await new Promise(resolve => setTimeout(resolve, 2500));
+              return { clicked: true, title: document.querySelector(".taskview-title h1")?.textContent ?? "" };
+            })()`);
+            const after = snapshot().tasks.find(row => row.prompt.includes("只列能复现的"));
+            require("node:fs").writeFileSync(detailPath, (await window.webContents.capturePage()).toPNG());
+            const report = { opened, detail, resumed, edited, stored: after ? after.prompt : "" };
+            require("node:fs").writeFileSync(detailPath.replace(/\.png$/u, ".json"), JSON.stringify(report, null, 2));
+            process.stdout.write(`task ${JSON.stringify(report)}\n`);
           }
           // The control panel is the point of this window, and a panel that only
           // renders is not the same as one that drives the machine: run a real

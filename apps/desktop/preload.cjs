@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld("lubanDesktop", Object.freeze({
     ipcRenderer.on("luban:petVisibility", handler);
     return () => ipcRenderer.removeListener("luban:petVisibility", handler);
   },
+  // The workbench banner checks and installs here: only the main process can
+  // swap the .app bundle and reopen it after the window exits.
+  checkUpdate: () => ipcRenderer.invoke("luban:updateCheck"),
+  installUpdate: () => ipcRenderer.invoke("luban:updateInstall"),
   runCommand: command => ipcRenderer.invoke("luban:runCommand", command),
   stopCommand: id => ipcRenderer.invoke("luban:stopCommand", id),
   startTerminal: input => ipcRenderer.invoke("luban:startTerminal", input),

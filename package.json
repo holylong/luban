@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.7.10",
+  "version": "2.7.13",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
@@ -36,7 +36,9 @@
     "smoke:creator:blank": "node scripts/smoke-creator-blank.mjs",
     "smoke:creator:drive": "node scripts/smoke-creator-drive.mjs",
     "release": "node scripts/release.mjs",
+    "publish:release": "node scripts/publish-release.mjs",
     "test:release": "node --test scripts/release.test.mjs",
+    "test:publish": "node --test scripts/publish-release.test.mjs",
     "eval": "tsx src/evals/run.ts",
     "package:vscode": "node scripts/package-vscode.mjs",
     "package:linux": "node scripts/package-linux.mjs",
@@ -53,7 +55,8 @@
     "build:web": "tsc -p tsconfig.client.json && vite build",
     "dev:web": "vite",
     "build:server": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json",
+    "probe:desktop:update": "node scripts/probe-desktop-update.cjs"
   },
   "dependencies": {
     "ajv": "8.17.1",

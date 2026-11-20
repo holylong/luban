@@ -175,10 +175,84 @@ function addTask(home, input) {
   return { id, workspace, at: input.at ? new Date(input.at).getTime() : Date.now() };
 }
 
+/**
+ * Change what a task asks for, through the CLI that owns the format.
+ *
+ * `patch.at` is the only field a caller must compute: everything else is copied
+ * from what the person typed. The CLI re-queues the task, so a nightly job whose
+ * wording drifted keeps its history instead of growing a second row beside it.
+ */
+function editTask(home, id, patch) {
+  if (!TASK_ID.test(String(id || ""))) throw new Error("无效的任务 id");
+  const input = patch || {};
+  const args = ["bot", "edit", id];
+  // An emptied box is a mistake, not a request to blank the task: say so here, in
+  // the window's language, instead of surfacing the CLI's own wording.
+  if (typeof input.prompt === "string") {
+    if (!input.prompt.trim()) throw new Error("任务内容不能为空");
+    args.push("--prompt", input.prompt.trim());
+  }
+  if (typeof input.workspace === "string" && input.workspace.trim()) args.push("--workspace", input.workspace.trim());
+  if (input.at) args.push("--at", new Date(input.at).toISOString());
+  if (input.every === null) args.push("--once");
+  else if (input.every) args.push("--every", String(Math.max(60, Math.round(Number(input.every)))));
+  if (input.runNow) args.push("--run-now");
+  const output = runCli(args, home);
+  return { id, output: String(output || "").trim() };
+}
+
 function cancelTask(home, id) {
   if (!TASK_ID.test(String(id || ""))) throw new Error("无效的任务 id");
   runCli(["bot", "cancel", id], home);
   return { id };
+}
+
+/**
+ * The transcript the newest run of a task wrote, which is what "接着聊" resumes.
+ *
+ * New runs record it in runs.jsonl. Old ones only have the `Session: <id>` line
+ * the worker appends to its answer, so that line is the fallback rather than a
+ * reason to tell the person their task cannot be continued.
+ */
+function taskSession(home, id) {
+  if (!TASK_ID.test(String(id || ""))) throw new Error("无效的任务 id");
+  const runs = taskRuns(home, id, 50);
+  for (const run of [...runs].reverse()) {
+    if (typeof run.session === "string" && run.session) return run.session;
+    const match = /Session: ([0-9a-zA-Z-]+)/u.exec(String(run.result || ""));
+    if (match) return match[1];
+  }
+  const state = readJson(join(queueDirectory(home), id, "state.json"));
+  const match = /Session: ([0-9a-zA-Z-]+)/u.exec(String(state?.result || ""));
+  return match ? match[1] : undefined;
+}
+
+/**
+ * What a saved conversation said, in the shape the window draws (you / reply).
+ *
+ * Tool rows are dropped on purpose: this pane is for a person reading the thread
+ * back, and a wall of raw tool JSON would bury the two sentences they came for.
+ */
+function sessionTranscript(home, sessionId) {
+  const wanted = String(sessionId || "");
+  if (!/^[0-9a-zA-Z-]{6,64}$/u.test(wanted)) throw new Error("无效的会话 id");
+  const root = join(home, "sessions-node");
+  if (!existsSync(root)) return { id: wanted, messages: [] };
+  for (const project of readdirSync(root)) {
+    const file = join(root, project, `${wanted}.json`);
+    if (!existsSync(file)) continue;
+    const record = readJson(file);
+    if (!record || !Array.isArray(record.messages)) return { id: wanted, messages: [] };
+    const messages = [];
+    for (const message of record.messages) {
+      if (message.role !== "user" && message.role !== "assistant") continue;
+      const text = typeof message.content === "string" ? message.content.trim() : "";
+      if (!text) continue;
+      messages.push({ role: message.role, text, at: Date.parse(message.at || record.updatedAt) || undefined });
+    }
+    return { id: wanted, title: record.title, messages: messages.slice(-60), updatedAt: record.updatedAt };
+  }
+  return { id: wanted, messages: [] };
 }
 
 /** Permission the worker asked for but nobody granted; grants stay manual by design. */
@@ -252,6 +326,6 @@ function ensureWorker(home) {
 }
 
 module.exports = {
-  addTask, cancelTask, clearMemory, cliPath, ensurePolicy, ensureWorker, homeDir, listTasks, memoryList, nodeBinary,
-  nodeEnv, permissionRequests, policyPath, taskRuns, workerStatus,
+  addTask, cancelTask, clearMemory, cliPath, editTask, ensurePolicy, ensureWorker, homeDir, listTasks, memoryList,
+  nodeBinary, nodeEnv, permissionRequests, policyPath, sessionTranscript, taskRuns, taskSession, workerStatus,
 };

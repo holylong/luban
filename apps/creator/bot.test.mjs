@@ -142,3 +142,56 @@ test("runs the CLI under Node, never under Electron", () => {
     else process.env.LUBAN_NODE_BIN = before;
   }
 });
+
+test("edits a task through the CLI and keeps its runs", { skip: built ? false : "run npm run build first" }, () => {
+  const root = home();
+  try {
+    const id = bot.addTask(root, { prompt: "每晚汇总改动", workspace: root, every: 3600 }).id;
+    const tasks = join(root, "bot", "tasks", id);
+    writeFileSync(join(tasks, "runs.jsonl"), `${JSON.stringify({ from: 1, to: 2, status: "completed", nextAt: 3, result: "第一版日报" })}\n`);
+
+    const at = Date.now() + 600_000;
+    bot.editTask(root, id, { prompt: "每晚汇总改动，只看新增", every: null, at });
+    const [row] = bot.listTasks(root);
+    assert.equal(row.prompt, "每晚汇总改动，只看新增");
+    assert.equal(row.every, undefined, "--once clears the repeat");
+    assert.equal(row.status, "queued", "an edited task goes back in the queue");
+    assert.ok(Math.abs(row.at - at) < 1500, `expected ~${at}, got ${row.at}`);
+    // The record is the reason to edit instead of re-adding: it survives.
+    assert.equal(bot.taskRuns(root, id).length, 1);
+    assert.throws(() => bot.editTask(root, "../escape", { prompt: "x" }), /无效的任务 id/u);
+    assert.throws(() => bot.editTask(root, id, { prompt: "   " }), /不能为空/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("finds the conversation a task last ran in", () => {
+  const root = home();
+  try {
+    const id = "44444444-4444-4444-8444-444444444444";
+    const tasks = join(root, "bot", "tasks");
+    seed(tasks, id, { id, prompt: "扫 bug", workspace: root, at: 1, timeout: 1000 }, { status: "completed", nextAt: 1, result: "done\nSession: 20261112-080000-abcdef" });
+    // Old runs only carry the session in their answer; new ones record it.
+    assert.equal(bot.taskSession(root, id), "20261112-080000-abcdef");
+    writeFileSync(join(tasks, id, "runs.jsonl"),
+      `${JSON.stringify({ from: 1, to: 2, status: "completed", nextAt: 3, session: "20261113-090000-fedcba" })}\n`);
+    assert.equal(bot.taskSession(root, id), "20261113-090000-fedcba", "newest run wins");
+
+    const sessions = join(root, "sessions-node", "proj");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, "20261113-090000-fedcba.json"), JSON.stringify({
+      id: "20261113-090000-fedcba", title: "扫 bug", updatedAt: "2026-11-13T09:10:00.000Z",
+      messages: [
+        { role: "system", content: "base" },
+        { role: "user", content: "扫一下本周的 bug" },
+        { role: "assistant", content: "" , tool_calls: [{ id: "c1", type: "function", function: { name: "bash", arguments: "{}" } }] },
+        { role: "tool", name: "bash", tool_call_id: "c1", content: "{...}" },
+        { role: "assistant", content: "发现 3 个，已写进日报" },
+      ],
+    }));
+    const transcript = bot.sessionTranscript(root, "20261113-090000-fedcba");
+    assert.deepEqual(transcript.messages.map(message => message.text), ["扫一下本周的 bug", "发现 3 个，已写进日报"]);
+    // A tool row is not a thing to read; the person came for the two sentences.
+    assert.deepEqual(bot.sessionTranscript(root, "0".repeat(8) + "-missing").messages, []);
+    assert.throws(() => bot.sessionTranscript(root, "../../etc/passwd"), /无效的会话 id/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

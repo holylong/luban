@@ -6,6 +6,7 @@
  * cannot carry Chinese, quotes and newlines without a quoting bug.
  *
  *   → {"type":"say","text":"打开计算器并截图"}
+ *   ↑ start with `--resume <id>` to continue an earlier transcript
  *   ← {"type":"tool","id":"…","label":"点击 720,430"}
  *   → {"type":"approve","id":"…","allow":true}
  *   ← {"type":"turn-end","id":"turn-1",…}
@@ -63,10 +64,11 @@ export async function runDrive(argv: string[]): Promise<number> {
     .argument("[path]", "workspace directory", process.cwd())
     .option("-m, --model <provider/model>", "override the active model")
     .option("--no-computer", "never touch the desktop, even if LUBAN_COMPUTER=1")
+    .option("-r, --resume <session>", "continue an existing transcript instead of starting empty")
     .showHelpAfterError();
   program.parse(argv, { from: "user" });
   const workspace = resolve((program.args[0] ?? process.cwd()) as string);
-  const options = program.opts<{ model?: string; computer: boolean }>();
+  const options = program.opts<{ model?: string; computer: boolean; resume?: string }>();
   if (!existsSync(workspace)) {
     process.stderr.write(`workspace does not exist: ${workspace}\n`);
     return 2;
@@ -81,6 +83,7 @@ export async function runDrive(argv: string[]): Promise<number> {
   const session = new DriveSession({
     home: config.home, workspace, model: options.model, emit: write,
     isPreapproved: tool => allowed.has(tool),
+    resume: options.resume,
   });
   await session.open();
   write({ type: "status", text: "会话已就绪：说一句话就行——整理文档、设个闹钟，或者让我去操作屏幕" });

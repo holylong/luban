@@ -1,6 +1,7 @@
 import React from "react";
 import type { WorkbenchStore } from "./store";
 import { relativeTime, STATUS_LABELS } from "./timeline";
+import { DesktopUpdate } from "./desktop-update";
 
 export function Sidebar({ store }: { store: WorkbenchStore }): React.ReactElement {
   const { node, connected, jobs, sessions, selectedId, sideTab } = store;
@@ -62,7 +63,9 @@ export function Sidebar({ store }: { store: WorkbenchStore }): React.ReactElemen
       <div className="foot">
         <span className={`dot ${connected ? "online" : "offline"}`} />
         <span>{node ? node.name : "连接中"}</span>
-        <a className="spacer" href="/docs/">文档</a>
+        <DesktopUpdate />
+        <span className="spacer" />
+        <a href="/docs/">文档</a>
         <a href="/diff">变更</a>
       </div>
     </aside>

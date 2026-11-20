@@ -87,6 +87,43 @@ a { color: var(--blue); }
 .muted { color: var(--dim); }
 .empty-list { padding: 8px 14px; font-size: 12px; }
 
+/* Update dock ----------------------------------------------------------
+   Lives in the sidebar footer so it is reachable from every view, and floats
+   its panel upward: the sidebar is short and the footer is its last row. */
+.update-dock { position: relative; display: inline-flex; align-items: center; }
+.update-button {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+  border: 1px solid var(--line); border-radius: 99px; background: transparent;
+  color: var(--muted); font-size: 11px; line-height: 1.5; cursor: pointer;
+}
+.update-button:hover { color: var(--fg); border-color: #2f3b4d; }
+.update-button.available { color: #cfe2ff; border-color: #3f6bb5; background: #16233a; }
+.update-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 6px var(--blue); }
+.update-panel {
+  position: absolute; right: 0; bottom: calc(100% + 10px); width: 320px; z-index: 60;
+  display: grid; gap: 8px; padding: 12px; border-radius: var(--radius);
+  background: var(--panel-2); border: 1px solid var(--line);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .55); color: var(--fg); font-size: 12px; text-align: left;
+}
+.update-head { display: flex; align-items: center; justify-content: space-between; }
+.update-close { border: 0; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 2px; }
+.update-close:hover { color: var(--fg); }
+.update-state { color: var(--fg); }
+.update-state.available { color: var(--blue); }
+.update-state.disabled, .update-hint { color: var(--muted); font-size: 11px; }
+.update-state.unreachable, .update-error { color: var(--red); }
+.update-error, .update-notice { font-size: 11px; }
+.update-notice { color: var(--green); }
+.update-notes { color: var(--muted); font-size: 11px; white-space: pre-wrap; max-height: 96px; overflow: auto; }
+.update-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.update-actions button {
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel-3); color: var(--fg); font-size: 12px; cursor: pointer;
+}
+.update-actions button.primary { background: #24457a; border-color: #3f6bb5; color: #eaf1ff; }
+.update-actions button:disabled { opacity: .6; cursor: default; }
+.update-check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+
 /* Top bar -------------------------------------------------------------- */
 .top { display: flex; align-items: center; gap: 8px; padding: 0 18px; border-bottom: 1px solid var(--line); min-width: 0; }
 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }

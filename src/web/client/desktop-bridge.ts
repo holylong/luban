@@ -35,6 +35,10 @@ export interface DesktopBridge {
   /** Show or hide the floating Creator window; resolves with the new state. */
   togglePet?(): Promise<boolean>;
   onPetVisibility?(listener: (visible: boolean) => void): () => void;
+  /** Ask the main process whether a newer build exists (same as 视图 → 检查更新). */
+  checkUpdate?(): Promise<{ ok: boolean; status: string; version?: string | null }>;
+  /** Download, swap and relaunch; the window closes when the swap succeeds. */
+  installUpdate?(): Promise<{ ok: boolean; status: string }>;
   runCommand(command: string): Promise<{ id: string }>;
   stopCommand(id: string): Promise<void>;
   startTerminal(input: { cols: number; rows: number }): Promise<TerminalStart>;

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { AgentRunner, initialMessages } from "./agent.js";
-import { BotQueue, type BotExecute } from "./bot.js";
+import { BotQueue, type BotExecute, type BotTaskPatch } from "./bot.js";
 import { loadConfig } from "./config.js";
 import { injectMemory, memoryPrompt, noteRun, readProjectMemory, runSummary, stripMemory, type ProjectMemoryRecord } from "./memory.js";
 import type { ChatMessage, LubanConfig } from "./types.js";
@@ -115,7 +115,7 @@ const execute: BotExecute = async (task, signal) => {
       output: requests.reduce((sum, request) => sum + (request.usage?.output ?? 0), 0),
       calls: requests.length,
     };
-    return { ok: result.ok && !denied, text: `${result.text}${denied ? "\nOperation requires interactive approval; run this task in luban." : ""}\nSession: ${session.id}`, usage };
+    return { ok: result.ok && !denied, text: `${result.text}${denied ? "\nOperation requires interactive approval; run this task in luban." : ""}\nSession: ${session.id}`, usage, session: session.id };
   } finally { currentTask = undefined; runner.close(); }
 };
 
@@ -153,6 +153,47 @@ export async function runBot(argv: string[]): Promise<number> {
         kind: options.remind ? "notify" : "agent",
         timeout: Number(options.timeout) * 1000 });
       process.stdout.write(`Queued ${task.id} at ${new Date(at).toISOString()}${task.kind === "notify" ? " (notify only)" : ""}\n`);
+    });
+  /**
+   * Rewrite a task instead of queueing a second one beside it.
+   *
+   * `--run-now` is the "I just fixed the wording, try again" case: it re-dates
+   * the task to now and lets the worker pick it up on its next tick, which is the
+   * only way a person can retry a failed job without waiting for its slot.
+   */
+  program.command("edit <id>").description("Change a task's prompt, workspace or schedule; re-queues it")
+    .option("-p, --prompt <text>", "new prompt")
+    .option("-w, --workspace <path>", "new workspace")
+    .option("-m, --model <id>", "new model override")
+    .option("--at <ISO-date>", "next execution time (include timezone)")
+    .option("--in <duration>", "run after a delay from now, e.g. 5m")
+    .option("--every <seconds>", "repeat after successful completion; 0 clears the repeat")
+    .option("--once", "stop repeating; keep the prompt")
+    .option("--timeout <seconds>", "execution deadline")
+    .option("--run-now", "queue it to execute on the worker's next tick")
+    .action(async (id, options) => {
+      if (options.at && options.in) throw new Error("choose either --at or --in");
+      if (options.every !== undefined && options.once) throw new Error("choose either --every or --once");
+      const patch: BotTaskPatch = {};
+      if (options.prompt !== undefined) patch.prompt = String(options.prompt);
+      if (options.workspace !== undefined) patch.workspace = String(options.workspace);
+      if (options.model !== undefined) patch.model = String(options.model);
+      if (options.timeout !== undefined) patch.timeout = Number(options.timeout) * 1000;
+      if (options.every !== undefined) {
+        const every = Number(options.every) * 1000;
+        patch.every = every > 0 ? every : null;
+      }
+      if (options.once) patch.every = null;
+      if (options.runNow) patch.at = Date.now();
+      else if (options.in) patch.at = Date.now() + parseDelay(String(options.in));
+      else if (options.at) {
+        const at = Date.parse(String(options.at));
+        if (!Number.isFinite(at)) throw new Error("--at must be an ISO timestamp with a timezone");
+        patch.at = at;
+      }
+      const task = await queue.edit(id, patch);
+      const state = (await queue.list()).find(row => row.task.id === task.id)?.state;
+      process.stdout.write(`Edited ${task.id} at ${new Date(state?.nextAt ?? task.at).toISOString()}${task.kind === "notify" ? " (notify only)" : ""}\n`);
     });
   program.command("list").description("Task states and most recent results (JSON)").action(async () => {
     process.stdout.write(`${JSON.stringify(await queue.list(), null, 2)}\n`);

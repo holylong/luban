@@ -32,6 +32,17 @@ let port = 0;
 const fail = message => { console.error("PROBE FAIL:", message); process.exitCode = 1; throw new Error(message); };
 // Electron shuts its workers down on SIGTERM, so a killed probe must not leave a
 // window (and its port) behind for the next one.
+// LUBAN_PROBE_APP points at a packaged build (…/luban.app/Contents/MacOS/luban)
+// so the shipped artifact can be checked with the same crash.
+const spawnTarget = (folder, profile) => {
+  const packaged = process.env.LUBAN_PROBE_APP;
+  const args = packaged
+    ? [folder, `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`]
+    : ["apps/desktop", folder, `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`];
+  return spawn(packaged || electronPath, args, {
+    cwd: repo, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ELECTRON_ENABLE_LOGGING: "" },
+  });
+};
 const stopChild = async child => {
   if (!child || child.killed) return;
   child.kill("SIGTERM");
@@ -97,9 +108,7 @@ async function findPage(timeoutMs) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "luban-recover-"));
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "luban-recover-profile-"));
   fs.writeFileSync(path.join(folder, "notes.txt"), "hello\n");
-  const child = spawn(electronPath, ["apps/desktop", folder, `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`], {
-    cwd: repo, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ELECTRON_ENABLE_LOGGING: "" },
-  });
+  const child = spawnTarget(folder, profile);
   let logs = "";
   child.stdout.on("data", chunk => { logs += chunk; });
   child.stderr.on("data", chunk => { logs += chunk; });
@@ -181,9 +190,7 @@ async function findPage(timeoutMs) {
     // the machine keeps producing black boards and nobody can tell why.
     await stopChild(child);
     fs.writeFileSync(path.join(profile, "no-gpu"), new Date().toISOString());
-    const fallback = spawn(electronPath, ["apps/desktop", folder, `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`], {
-      cwd: repo, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ELECTRON_ENABLE_LOGGING: "" },
-    });
+    const fallback = spawnTarget(folder, profile);
     fallback.stdout.on("data", chunk => { logs += chunk; });
     fallback.stderr.on("data", chunk => { logs += chunk; });
     const restarted = await findPage(30000);

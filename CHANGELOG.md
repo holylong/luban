@@ -1,3 +1,24 @@
+## 2.7.13 — 2026-11-20
+
+- 新增自动升级：`src/core/update.ts` 是唯一一份检查/下载/替换实现，终端、网页工作台、桌面应用、造物主共用。启动时检测一次（`updates.check`，默认开），有新版才提示，选「稍后」本次不动、选「不再提醒」把版本号写进 `updates.skipped_version`，手动检查仍然会显示它。
+- `luban update` 是新命令：`check`（默认）、`install`、`on` / `off`、`status`，`--json` 给脚本用。安装分两步：先下到 `~/.luban/updates` 并核对大小与 sha256，再由一个脱离的脚本等当前进程退出后替换目录，避免边跑边覆盖自己。
+- 桌面应用：菜单「视图 → 检查更新」（主进程下载、替换 `.app` 并自动重启），底栏新增「更新」按钮——有新版时带蓝点并自动展开面板，含升级 / 稍后 / 不再提醒、「启动时检查更新」勾选框与「立即检查」；页面通过 IPC（`checkUpdate` / `installUpdate`）交给主进程，因为只有它能替换自己正在运行的包。
+- 网页工作台（`luban web`）：同一面板走 `/api/update`、`/api/update/settings`、`/api/update/install`；检查结果缓存 10 分钟，`?refresh=1` 是「立即检查」。`/api/update` 即使开关关掉也返回设置本身，界面不会把「关了」显示成「连不上」。
+- 新增升级服务器（`luban-server` 1.1.0，与统计口同一个进程）：`GET /api/update`、`GET /downloads/<file>`、`PUT /api/admin/artifact`、`POST /api/admin/release`；发布由 `npm run publish:release -- --version … --notes …` 完成（`scripts/publish-release.mjs`，本机算 sha256，服务器边收边校验，清单只会指向已校验的文件）。
+- 桌面窗口原来只在网页工作台的左栏有更新入口，而 Electron 跑的是另一套三栏布局，所以装好的桌面版只有菜单能查更新。现在更新坞挂在底栏（「更新」按钮 + 有新版本时的蓝点 + 自动展开的面板），三栏任何一个视角都看得见；主进程启动时不再另弹一次原生对话框，启动检测由面板完成，菜单「视图 → 检查更新…」保留给手动检查。
+- 升级服务器同一版本按 kind 合并安装包：先发 CLI 包、再单独发桌面 dmg 时，那次发布不会把已经发布的 CLI 那一行从清单里删掉（`luban-server` 1.1.0）。
+- 一处不改三处不生效：`updates.check`、`updates.url`、`updates.skipped_version` 写在 `~/.luban/config.json`，`luban update on|off`、TUI 的选择、网页勾选框、桌面菜单写的是同一份配置；整机关闭用 `LUBAN_NO_UPDATE_CHECK=1`，换服务器用 `LUBAN_UPDATES_URL`。
+- 文档：`docs/reference.md` 新增「升级与自动检测」，`docs/release.md` 新增「发布到升级服务器」；`luban-server` README/CHANGELOG 补齐接口、env 与发布流程。
+- 验证：`npx vitest run src/core/update.test.ts src/web/update-endpoint.test.ts src/ui/app-update.test.tsx src/web/client/desktop-update.test.tsx` 全过（含「用户选稍后就不动」「不再提醒后手动仍可见」「桌面才提示会自动重启」「busy 时按钮全禁用」）；`node --test scripts/publish-release.test.mjs` 8 例（上传字节与清单 sha256 一致、令牌缺失不发请求、上传被拒不发清单）；`luban-server` 73 例（含「先发 cli 再发 desktop，同版本两个包都在」）。`npm run probe:desktop:update` 用真 Electron 窗口 + 假发行服务器走完整条路（开关关掉时面板说「已关闭」→ 勾上开关后报「新版本 2.9.9 可用」→ 不再提醒写进 `config.json` 的 `skipped_version` → 收起面板时蓝点在、不再提醒后蓝点消失 → 立即检查仍会问服务器 → 取消勾选写回 `check:false`）。真机：服务器升到 luban-server 1.1.0 后先发 cli、再单独发桌面 dmg（`--kind desktop` 没有把同版本的 cli 顶掉）；2.7.13 的 cli / desktop / creator 三个包已发布到线上（`/api/update` 三种 kind 都命中 2.7.13，清单 sha256 与本地一致，`/downloads/…` 200）。把线上 2.7.13 的 CLI 包解出来把版本改回 2.7.10，`luban update status` 显示「自动检测：开 + 服务器地址」，`luban update install` 从线上拉了 50.2 MB、校验 sha256 后换成新目录，再查是 current，`luban update off` 后状态变成关；`LUBAN_PROBE_APP` 指向 dmg 里打包好的 2.7.13 应用，同一套探针全绿（面板认出的当前版本是 2.7.13）。
+
+## 2.7.11 — 2026-11-20
+
+- Creator「最近任务」点开不再是一张只读的结果页：任务详情上半部是内容表单（任务内容、重复、时间、工作区、立即按新内容跑、取消），下半部是这段任务的对话，可以直接接着说。以前只能删掉重建，历史执行记录跟着一起丢。
+- `luban bot edit <id>` 是新命令：改内容/工作区/排期并把任务按新内容重新排队，`runs.jsonl` 与 session 保留；`--once` 去掉循环，`--run-now` 排到队首。写入口仍是 CLI，Creator 只收集字段。
+- 每次执行把会话 id 记进 `runs.jsonl`（`session` 字段），打开任务时据此 `drive --resume`：载入原来的 transcript、把新回合写回同一份记录，而不是另起一段。旧记录只有回答末尾的 `Session: <id>` 行，同样认。
+- 没有 transcript 的任务照常可从任务原文开始；切换任务或关闭会话时主进程按 resume id 判断是否复用子进程，避免用 A 的上下文回答 B。
+- 验证：`npm run smoke:creator` 在真 Electron 里点开已完成任务，断言任务内容载入、`resume` 等于它上次的 session、历史四条对话画出、保存后队列里的文案变成新内容；`apps/creator/bot.test.mjs` 9 例（编辑、会话查找、transcript 解析）；`npx vitest run src/web/client src/core/bot.test.ts src/core/drive.test.ts` 377 例；真 CLI 端到端：本地 OpenAI 兼容服务记录 `drive --resume` 发出的请求体里带着原会话的两轮对话和新问题，`turn-end` 成功、session 文件 id 不变并多出新回合，普通 `drive` 仍另起新会话。
+
 ## 2.7.10 — 2026-11-20
 
 - 修桌面端「干着干着活变成黑板、只能关了重开」：`render-process-gone` 过去只停掉工作区服务，窗口留在自己的 `#050607` 背景色上再也不重绘。现在主进程用同一个后端、工作区服务与令牌重建窗口（`apps/desktop/main.cjs`），重建时跳过 `closed` 里的后端拆除，并先 `protocol.unhandle('luban-media')`——同一分区重复注册会抛错，正是第一次重建失败的原因。

@@ -161,7 +161,13 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-question-dialog .action { white-space: normal; overflow-wrap: anywhere; text-align: left; min-height: 44px; }
 .desktop-approvals { max-height: 40%; overflow: auto; border-bottom: 1px solid var(--line); }
 .desktop-status { grid-column: 1 / -1; background: var(--panel-2); display: flex; align-items: center; gap: 8px; padding: 0 10px; font-size: 11px; }
-.desktop-status span:not(.dot) { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Direct children only: the update dock inside the status bar has its own
+   spans, and inheriting the auto margin would shove them out of the button. */
+.desktop-status > span:not(.dot) { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The dock sits next to the connection light so an available build is visible
+   from any pane; its panel opens upward out of the status bar. */
+.desktop-status .update-dock { margin-left: 8px; flex: none; }
+.desktop-status .update-button { padding: 1px 7px; }
 .desktop-status span:last-child { margin-left: 12px; }
 .desktop-editor button, .desktop-console button { background: transparent; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); padding: 4px 8px; cursor: pointer; }
 .desktop-editor button:hover { color: var(--fg); background: var(--panel-2); }

@@ -644,6 +644,40 @@ luban 内置 `opencode-zen`：设置 `OPENCODE_ZEN_API_KEY`，或在 OpenCode �
 和模型条目优先，其余内置模型继续出现；若只想保留自己的清单，把 `models` 写成数组
 （如 `["deepseek-v4-flash"]`）即可完全覆盖。
 
+## 升级与自动检测
+
+luban 有三类前端（终端、浏览器工作台、桌面应用）和三个产品包（`cli` / `desktop` / `creator`），
+它们共用同一份检查逻辑（`src/core/update.ts`）和同一个发布接口，所以「关掉检测」「不再提醒某个版本」
+在哪一层做都一致。
+
+```bash
+luban update            # 检查；有新版就打印版本、包名、大小与说明
+luban update install    # 下载、校验 sha256、等当前进程退出后替换，再提示重启
+luban update on|off     # 启动时是否自动检查
+luban update status     # 当前开关与被忽略的版本
+luban update --json     # available / current / no-build / skipped / disabled / unreachable
+```
+
+配置块（`~/.luban/config.json`）：
+
+```jsonc
+{
+  "updates": {
+    "check": true,            // 启动时检测；false 则只响应手动检查
+    "url": "",                // 自建升级服务器；留空用内置地址
+    "skipped_version": ""     // 「不再提醒」写在这里，手动检查仍会显示
+  }
+}
+```
+
+- TUI 启动时在后台检查一次，有新版就在界面内提示 升级 / 稍后 / 不再提醒，不打断输入。
+- 工作台（浏览器左栏 / 桌面底栏）的「更新」按钮：有新版自动展开面板，含升级 / 稍后 / 不再提醒、「启动时检查更新」
+  勾选框（写回 `updates.check`）与「立即检查」；`luban web` 下点升级会下载并在下次启动生效。
+- 桌面应用：同一面板 + 菜单「视图 → 检查更新」；桌面版由主进程替换 `.app` 并自动重启，页面不能
+  自己替换正在运行的包，所以这一项走 IPC。
+- 整机关闭：`LUBAN_NO_UPDATE_CHECK=1`；换服务器：`LUBAN_UPDATES_URL=https://…`。
+- 服务端与发布流程见 [release.md](release.md#发布到升级服务器luban-update)。
+
 ## 日常交互
 
 | 操作 | 作用 |

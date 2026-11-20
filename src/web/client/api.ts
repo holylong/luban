@@ -104,4 +104,12 @@ export const api = {
   ping: (peer: string) => post<{ ok: boolean; output: string }>("/api/ping", { peer }),
   handoff: (input: { peer: string; instruction: string; project_id: string }) =>
     post<{ ok: boolean; output: string }>("/api/handoff", input),
+  // Release checks: `refresh` is the explicit "check now" button, the plain
+  // call is the ten-minute cached answer the sidebar asks for on every mount.
+  update: (refresh = false) =>
+    request<import("./desktop-update").UpdatePayload>(`/api/update${refresh ? "?refresh=1" : ""}`),
+  saveUpdateSettings: (input: { check?: boolean; skippedVersion?: string }) =>
+    post<{ ok: boolean; settings: import("./desktop-update").UpdateSettings }>("/api/update/settings", input),
+  installUpdate: () =>
+    post<{ ok: boolean; version: string; target?: string; restart?: string }>("/api/update/install", {}),
 };

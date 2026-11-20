@@ -52,13 +52,19 @@ class DriveBridge {
       computer: this.computer,
       events: this.events.slice(-MAX_EVENTS),
       error: this.lastError,
+      /** The transcript this child continues, so the window knows what it reopened. */
+      resume: this.resume,
     };
   }
 
-  /** Start the child. `computer` is the window's switch: it becomes LUBAN_COMPUTER. */
+  /**
+   * Start the child. `computer` is the window's switch: it becomes LUBAN_COMPUTER.
+   * `resume` continues an existing transcript instead of opening an empty one.
+   */
   start(workspace, options = {}) {
     if (this.child) return this.snapshot();
     this.workspace = workspace;
+    this.resume = typeof options.resume === "string" && options.resume ? options.resume : undefined;
     // The drive child schedules reminders into the same queue this window lists,
     // so it must be given the same home the app resolved.
     const allow = Array.isArray(options.allow) ? options.allow.filter(name => typeof name === "string" && name) : [];
@@ -74,6 +80,7 @@ class DriveBridge {
     this.computer = { ...this.computer, supported: process.platform === "darwin", enabled: options.computer === true };
     const args = [bot.cliPath(), "drive", workspace];
     if (options.model) args.push("--model", options.model);
+    if (this.resume) args.push("--resume", this.resume);
     if (!options.computer) args.push("--no-computer");
     const child = spawn(bot.nodeBinary(), args, { env, stdio: ["pipe", "pipe", "pipe"] });
     this.child = child;
@@ -90,6 +97,7 @@ class DriveBridge {
     child.on("exit", (code, signal) => {
       this.child = undefined;
       this.ready = false;
+      this.resume = undefined;
       this.push({ type: "exit", code, signal: signal ?? undefined });
     });
     return this.snapshot();

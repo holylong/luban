@@ -382,6 +382,7 @@ const { randomBytes } = require("node:crypto");
 const { appendFileSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } = require("node:fs");
 const { homedir } = require("node:os");
 const { basename, dirname, join, resolve } = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { createRecoveryPolicy } = require("./window-recovery.cjs");
 
 // A dead renderer leaves the window painting nothing but its own background, so
@@ -414,6 +415,111 @@ if (noGpuFlag && existsSync(noGpuFlag)) {
 
 const cli = process.env.LUBAN_CLI || resolve(__dirname, "../../dist/cli.js");
 const node = process.env.LUBAN_NODE_BIN || "node";
+
+/* ---- updates: the menu item, the startup check, and the relaunch ----
+ * The renderer draws its own banner through `/api/update`, but replacing the
+ * .app bundle and reopening it needs a process that outlives the window, so the
+ * install runs here. The CLI's `core/update.js` is the only implementation of
+ * the check/download/swap dance: the terminal, the browser and this menu must
+ * agree on what "skipped" and "installed" mean.
+ */
+async function updateModules() {
+  const base = pathToFileURL(join(resolve(__dirname, "../../dist/core"))).href;
+  return {
+    update: await import(`${base}/update.js`),
+    config: await import(`${base}/config.js`),
+  };
+}
+
+/** The same `updates` block `luban update on|off` writes. */
+function updateSettings() {
+  try {
+    const raw = JSON.parse(readFileSync(join(botHome(), "config.json"), "utf8"));
+    const block = raw && typeof raw.updates === "object" && raw.updates ? raw.updates : {};
+    return {
+      check: block.check !== false && String(process.env.LUBAN_UPDATES ?? "").toLowerCase() !== "off",
+      url: typeof block.url === "string" ? block.url : "",
+      skippedVersion: typeof block.skipped_version === "string" ? block.skipped_version : "",
+    };
+  } catch {
+    return { check: true, url: "", skippedVersion: "" };
+  }
+}
+
+/**
+ * Offer a newer build, and install it if the user says so.
+ *
+ * `interactive` is the menu item: it always answers ("已是最新版本" included).
+ * The startup call stays silent unless there is something to install, so a
+ * client that is up to date never sees a dialog it did not ask for.
+ */
+async function offerUpdate({ interactive }) {
+  if (process.env.LUBAN_NO_UPDATE_CHECK === "1") return { status: "disabled" };
+  const settings = updateSettings();
+  if (!interactive && !settings.check) return { status: "disabled" };
+  let check;
+  try {
+    const { update } = await updateModules();
+    check = await update.checkForUpdate({
+      currentVersion: app.getVersion(),
+      kind: "desktop",
+      url: settings.url,
+      skippedVersion: settings.skippedVersion,
+    });
+  } catch (error) {
+    if (interactive) dialog.showErrorBox("检查更新失败", String(error && error.message ? error.message : error));
+    return { status: "error" };
+  }
+  const win = focusedSession()?.window;
+  if (check.status !== "available" && !interactive) return check;
+  if (check.status === "disabled") return check;
+  const detail = check.status === "available"
+    ? `${check.artifact.notes ? `${check.artifact.notes}\n\n` : ""}下载 ${check.artifact.file}（${Math.round(check.artifact.size / 1024 / 1024)} MB）后会自动重启。`
+    : check.status === "current" ? "当前已是最新版本。" : (check.reason || "发行服务器上还没有适合这台电脑的安装包。");
+  const options = {
+    type: "info",
+    title: "luban",
+    message: check.status === "available" ? `luban ${check.latest} 可以升级（当前 ${check.current}）` : `luban ${check.current}`,
+    detail,
+    buttons: check.status === "available" ? ["升级", "稍后", "不再提醒"] : ["好"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  };
+  const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  if (check.status !== "available") return check;
+  if (response === 2) {
+    const { config } = await updateModules();
+    await config.saveUpdateSettings(botHome(), { skippedVersion: check.artifact.version });
+    return { ...check, status: "skipped" };
+  }
+  if (response !== 0) return { ...check, status: "postponed" };
+  try {
+    const { update } = await updateModules();
+    const archive = await update.downloadUpdate(check.artifact, { baseUrl: settings.url, home: botHome() });
+    await update.installUpdate(check.artifact, archive, { kind: "desktop", home: botHome() });
+  } catch (error) {
+    dialog.showErrorBox("升级失败", String(error && error.message ? error.message : error));
+    return { ...check, status: "error" };
+  }
+  // The swap script waits for this pid, then reopens the new bundle.
+  logDesktop(`installed luban ${check.artifact.version}; relaunching`);
+  quitting = true;
+  setTimeout(() => { try { app.exit(0); } catch { app.quit(); } }, 1500).unref?.();
+  app.quit();
+  return { ...check, status: "installed" };
+}
+
+ipcMain.handle("luban:updateCheck", async () => {
+  const check = await offerUpdate({ interactive: true });
+  return { ok: true, status: check?.status ?? "unknown", version: check?.latest ?? null };
+});
+// The renderer banner installs through here so a click ends in a relaunch
+// instead of a page that silently keeps running the old bundle.
+ipcMain.handle("luban:updateInstall", async () => {
+  const check = await offerUpdate({ interactive: true });
+  return { ok: check?.status === "installed" || check?.status === "postponed", status: check?.status ?? "unknown" };
+});
 
 for (const method of ["readFile", "saveFile", "listFiles", "readPreview", "createEntry", "renameEntry", "runCommand", "stopCommand", "startTerminal", "writeTerminal", "resizeTerminal", "stopTerminal"]) {
   ipcMain.handle(`luban:${method}`, (event, input) => {
@@ -982,10 +1088,14 @@ app.whenReady().then(async () => {
       { type: "separator" }, { role: "quit", label: "退出" },
     ] },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
-    { label: "视图", submenu: [{ label: '显示桌宠', click: createPet }, { label: "停止电脑操控", click: () => { void stopComputerControl(); } }, { label: '打开主界面', click: showMain }, { role: "reload", label: "重新加载" }, { role: "togglefullscreen", label: "全屏" }] },
+    { label: "视图", submenu: [{ label: "检查更新…", click: () => { void offerUpdate({ interactive: true }); } }, { type: "separator" }, { label: '显示桌宠', click: createPet }, { label: "停止电脑操控", click: () => { void stopComputerControl(); } }, { label: '打开主界面', click: showMain }, { role: "reload", label: "重新加载" }, { role: "togglefullscreen", label: "全屏" }] },
   ]));
   startGlowServer();
   await openWorkspaceWindow(folderFromArgs(process.argv) || savedWorkspace() || homedir());
+  // Startup detection belongs to the window: the status-bar update dock asks
+  // `/api/update` as soon as it mounts and opens itself once per version, so a
+  // native dialog here would be the second prompt for the same release. The
+  // menu item keeps the interactive path (`offerUpdate({ interactive: true })`).
   if (liveSessions().some(session => session.backendAccess)) { startBot(); if (petPreference()) createPet(); }
 }).catch(error => { dialog.showErrorBox("luban", String(error)); app.quit(); });
 // before-quit may be canceled by a dirty window; keep its backend alive.

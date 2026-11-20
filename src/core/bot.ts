@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 export interface BotTask {
@@ -25,8 +25,14 @@ export interface BotState {
   result?: string;
   /** Tokens this execution spent, summed over every model round-trip. */
   usage?: { input: number; output: number; calls: number };
+  /**
+   * The transcript this execution wrote (a SessionStore id). Without it the only
+   * way back into a finished run's context is the `Session: <id>` line buried in
+   * `result`, which a human reads as prose and a reworded answer would erase.
+   */
+  session?: string;
 }
-export type BotExecute = (task: BotTask, signal: AbortSignal) => Promise<{ ok: boolean; text: string; usage?: BotState["usage"] }>;
+export type BotExecute = (task: BotTask, signal: AbortSignal) => Promise<{ ok: boolean; text: string; usage?: BotState["usage"]; session?: string }>;
 
 /**
  * One execution, kept after the task moves on.
@@ -45,12 +51,29 @@ export interface BotRun {
   nextAt: number;
   usage?: BotState["usage"];
   result?: string;
+  /** Transcript written by this run; the way back into its context. */
+  session?: string;
 }
 
 async function atomicJson(path: string, value: unknown) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(value, null, 2), { mode: 0o600 });
   await rename(temporary, path);
+}
+
+/** The mutable half of a task: everything but its id and creation stamp. */
+export type BotTaskPatch = Partial<Pick<BotTask, "prompt" | "workspace" | "model" | "at" | "timeout" | "kind">> & {
+  /** `null` turns a repeating task back into a one-off; `undefined` leaves it. */
+  every?: number | null;
+};
+
+function validateTask(task: Pick<BotTask, "prompt" | "at" | "timeout" | "every" | "kind">): void {
+  if (!task.prompt.trim()) throw new Error("Task prompt cannot be empty");
+  if (task.kind !== undefined && task.kind !== "agent" && task.kind !== "notify") throw new Error("Invalid task kind");
+  if (!Number.isFinite(task.at) || !Number.isFinite(task.timeout) || task.timeout < 1000
+    || (task.every !== undefined && (!Number.isFinite(task.every) || task.every < 60_000))) {
+    throw new Error("Invalid schedule: timeout >= 1s, repeat interval >= 60s required");
+  }
 }
 
 /** Immutable requests and separate state avoid lost updates between submitters and worker. */
@@ -62,16 +85,47 @@ export class BotQueue {
     return join(this.directory, id, file);
   }
   async add(input: Omit<BotTask, "id">): Promise<BotTask> {
-    if (!input.prompt.trim()) throw new Error("Task prompt cannot be empty");
-    if (input.kind !== undefined && input.kind !== "agent" && input.kind !== "notify") throw new Error("Invalid task kind");
-    if (!Number.isFinite(input.at) || !Number.isFinite(input.timeout) || input.timeout < 1000
-      || (input.every !== undefined && (!Number.isFinite(input.every) || input.every < 60_000))) {
-      throw new Error("Invalid schedule: timeout >= 1s, repeat interval >= 60s required");
-    }
+    validateTask(input);
     const task = { ...input, workspace: resolve(input.workspace), id: randomUUID() };
     await mkdir(join(this.directory, task.id), { recursive: true, mode: 0o700 });
     await atomicJson(this.path(task.id, "request.json"), task);
     return task;
+  }
+
+  /**
+   * Rewrite what a task asks for, and put it back in the queue.
+   *
+   * Editing is the difference between "this job is wrong" and "book another job
+   * beside it": a nightly scan whose wording drifted should keep its history, so
+   * `request.json` is replaced in place and only the pending state is reset. A
+   * running execution is refused rather than raced — its work is already under
+   * way, and the worker captured the old prompt when it started.
+   */
+  async edit(id: string, patch: BotTaskPatch): Promise<BotTask> {
+    const requestPath = this.path(id, "request.json");
+    const current = JSON.parse(await readFile(requestPath, "utf8")) as BotTask;
+    let state: BotState = { status: "queued", nextAt: current.at };
+    try { state = JSON.parse(await readFile(this.path(id, "state.json"), "utf8")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (state.status === "running") throw new Error("Task is running; cancel it or wait for this execution to finish before editing");
+    const next: BotTask = { ...current };
+    if (patch.prompt !== undefined) next.prompt = patch.prompt;
+    if (patch.workspace !== undefined) next.workspace = resolve(patch.workspace);
+    if (patch.model !== undefined) next.model = patch.model ?? undefined;
+    if (patch.at !== undefined) next.at = patch.at;
+    if (patch.timeout !== undefined) next.timeout = patch.timeout;
+    if (patch.kind !== undefined) next.kind = patch.kind;
+    if (patch.every !== undefined) {
+      if (patch.every === null) delete next.every;
+      else next.every = patch.every;
+    }
+    validateTask(next);
+    await atomicJson(requestPath, next);
+    // A cancelled task that is edited is being brought back, so the marker goes.
+    await rm(this.path(id, "cancel"), { force: true });
+    const nextAt = patch.at ?? (state.status === "completed" || state.status === "failed" ? next.at : state.nextAt);
+    await this.save(id, { status: "queued", nextAt });
+    return next;
   }
   async list(): Promise<Array<{ task: BotTask; state: BotState }>> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -111,6 +165,7 @@ export class BotQueue {
       nextAt: state.nextAt,
       ...(state.usage ? { usage: state.usage } : {}),
       ...(state.result ? { result: state.result } : {}),
+      ...(state.session ? { session: state.session } : {}),
     };
     await appendFile(path, `${JSON.stringify(run)}\n`, { mode: 0o600 });
   }
@@ -159,6 +214,7 @@ export class BotQueue {
           nextAt: Date.now() + (task.every ?? 0), startedAt: now, finishedAt: Date.now(),
           result: controller.signal.aborted ? String(controller.signal.reason) : result.text,
           ...(result.usage ? { usage: result.usage } : {}),
+          ...(result.session ? { session: result.session } : {}),
         };
       } catch (error) {
         finished = { ...state, status: await this.cancelled(task.id) ? "cancelled" : shutdown.aborted ? "interrupted" : "failed", finishedAt: Date.now(), result: String(error) };

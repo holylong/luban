@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld("creator", Object.freeze({
   add: input => ipcRenderer.invoke("creator:add", input),
   cancel: id => ipcRenderer.invoke("creator:cancel", id),
   runs: (id, limit) => ipcRenderer.invoke("creator:runs", id, limit),
+  // 改任务内容与继续对话：编辑走 CLI，会话只读它上一次写下的记录。
+  edit: (id, patch) => ipcRenderer.invoke("creator:edit", id, patch),
+  session: id => ipcRenderer.invoke("creator:session", id),
   startWorker: () => ipcRenderer.invoke("creator:startWorker"),
   pickWorkspace: () => ipcRenderer.invoke("creator:pickWorkspace"),
   openPolicy: () => ipcRenderer.invoke("creator:openPolicy"),

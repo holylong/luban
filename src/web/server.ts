@@ -9,7 +9,7 @@ import { hasConversation, SessionStore } from "../core/session-store.js";
 import { liveSessions } from "../core/live-session.js";
 import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
-import { refreshCodexModels, savePreferredModel, saveProject, saveTheme } from "../core/config.js";
+import { refreshCodexModels, savePreferredModel, saveProject, saveTheme, saveUpdateSettings } from "../core/config.js";
 import { isTransientWorkspace, visibleProjects } from "../core/project-registry.js";
 import { THEMES, findTheme, resolveTheme } from "../ui/theme.js";
 import { consumeCodexReset, formatCodexResetOutcome, readCodexRateLimits } from "../core/codex-account.js";
@@ -21,6 +21,7 @@ import { ApprovalBroker, type ApprovalDecision } from "./approval.js";
 import { QuestionBroker } from "./question.js";
 import { AuthGate, clearCookie, rejectAuth, tokenCookie } from "./auth.js";
 import { beginComputerAtStartup, checkPermissions, computerControl, computerSupported } from "../core/computer.js";
+import { checkForUpdate, currentKind, downloadUpdate, installUpdate, type UpdateCheck } from "../core/update.js";
 
 const MAX_BODY = 1024 * 1024;
 const MAX_JOBS = 100;
@@ -200,6 +201,9 @@ export class LubanWebServer {
   private readonly jobModes = new Map<string, "edits" | "agent" | "read">();
   private heartbeat?: NodeJS.Timeout;
   private detach?: () => void;
+  /** One release check per (version, kind, server) per 10 minutes, shared by every browser tab. */
+  private updateCache?: { key: string; at: number; value: UpdateCheck };
+  private updateInstalling = false;
   host: string;
   port: number;
   readonly approvals?: ApprovalBroker;
@@ -400,6 +404,37 @@ export class LubanWebServer {
     if (url.pathname === "/api/themes") {
       return json(res, { active: resolveTheme(this.config.theme || "midnight", this.config.themeColors),
         themes: THEMES.map(({ id, label, mode, description }) => ({ id, label, mode, description })) });
+    }
+    /**
+     * "Is there a newer luban?" for the browser workbench.
+     *
+     * Cached for ten minutes because the sidebar asks on every mount and a
+     * release check is not worth one request per tab. `?refresh=1` is the
+     * explicit "check now" button, and the switch is reported even when it is
+     * off so the settings UI can show its own state instead of guessing.
+     */
+    if (url.pathname === "/api/update") {
+      const settings = this.config.updates;
+      const base = {
+        settings: { check: settings.check, skippedVersion: settings.skippedVersion },
+        installing: this.updateInstalling,
+      };
+      // `LUBAN_NO_UPDATE_CHECK=1` is the machine-wide off switch (CI, air-gapped);
+      // the user's own switch is reported above so the settings row can show it.
+      if (!settings.check || process.env.LUBAN_NO_UPDATE_CHECK === "1") {
+        return json(res, { ...base, check: { status: "disabled", current: VERSION } });
+      }
+      const key = `${VERSION}|${currentKind()}|${settings.url}`;
+      const fresh = this.updateCache && this.updateCache.key === key && Date.now() - this.updateCache.at < 10 * 60_000;
+      if (fresh && url.searchParams.get("refresh") !== "1") return json(res, { ...base, check: this.updateCache!.value });
+      const check = await checkForUpdate({
+        currentVersion: VERSION,
+        kind: currentKind(),
+        url: settings.url,
+        skippedVersion: settings.skippedVersion,
+      });
+      this.updateCache = { key, at: Date.now(), value: check };
+      return json(res, { ...base, check });
     }
     if (url.pathname === "/api/peers") {
       return json(res, this.mesh.peers().map((peer) => ({
@@ -614,6 +649,37 @@ export class LubanWebServer {
       await saveTheme(this.config.home, theme.id);
       this.config.theme = theme.id;
       return json(res, { active: resolveTheme(theme.id, this.config.themeColors) });
+    }
+    if (url.pathname === "/api/update/settings") {
+      if (body.check !== undefined && typeof body.check !== "boolean") throw new HttpError(400, "check must be a boolean");
+      const skipped = body.skippedVersion;
+      if (skipped !== undefined && typeof skipped !== "string") throw new HttpError(400, "skippedVersion must be a string");
+      await saveUpdateSettings(this.config.home, {
+        ...(typeof body.check === "boolean" ? { check: body.check } : {}),
+        ...(typeof skipped === "string" ? { skippedVersion: skipped } : {}),
+      });
+      this.config.updates = { ...this.config.updates, ...(typeof body.check === "boolean" ? { check: body.check } : {}), ...(typeof skipped === "string" ? { skippedVersion: skipped } : {}) };
+      this.updateCache = undefined;
+      return json(res, { ok: true, settings: { check: this.config.updates.check, skippedVersion: this.config.updates.skippedVersion } });
+    }
+    if (url.pathname === "/api/update/install") {
+      // The desktop app replaces its own bundle and reopens; that swap belongs
+      // to the main process (menu → 检查更新), not to a page that would have to
+      // ask the user to quit afterwards.
+      const kind = currentKind();
+      if (kind !== "cli") throw new HttpError(409, "桌面应用请在菜单里选择「检查更新」");
+      if (this.updateInstalling) throw new HttpError(409, "上一个升级还在进行中");
+      const check = await checkForUpdate({ currentVersion: VERSION, kind, url: this.config.updates.url });
+      if (!check.artifact || check.status === "current") throw new HttpError(409, `没有可安装的新版本（当前 ${VERSION}）`);
+      this.updateInstalling = true;
+      try {
+        const archive = await downloadUpdate(check.artifact, { baseUrl: this.config.updates.url, home: this.config.home });
+        const installed = await installUpdate(check.artifact, archive, { kind, home: this.config.home });
+        this.updateCache = undefined;
+        return json(res, { ok: true, version: check.artifact.version, target: installed.target, restart: installed.restart });
+      } finally {
+        this.updateInstalling = false;
+      }
     }
     if (url.pathname === "/api/model") {
       const model = this.config.models.find(item => item.id === body.model);

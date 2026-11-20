@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { DriveEvent } from "../../core/drive-events";
-import { clock, dayClock, nextRunLabel, scheduleLabel } from "./creator-schedule";
+import { clock, dayClock, draftPatch, nextRunLabel, REPEAT_OPTIONS, scheduleLabel, taskDraft } from "./creator-schedule";
 import { Markdown } from "./markdown";
 import "./creator.css";
 
@@ -50,6 +50,12 @@ export interface CreatorRun {
   nextAt: number;
   usage?: { input: number; output: number; calls: number };
   result?: string;
+}
+
+/** A saved conversation, as the window replays it before continuing. */
+export interface CreatorTranscript {
+  session: string;
+  transcript: { id: string; title?: string; updatedAt?: string; messages: Array<{ role: "user" | "assistant"; text: string; at?: number }> };
 }
 
 export interface CreatorSnapshot {
@@ -120,6 +126,10 @@ interface CreatorBridge {
   add(input: { prompt: string; workspace?: string; at?: number; every?: number; remind?: boolean }): Promise<{ id?: string; snapshot: CreatorSnapshot }>;
   cancel(id: string): Promise<CreatorSnapshot>;
   runs(id: string, limit?: number): Promise<CreatorRun[]>;
+  /** 改任务内容：走 CLI 重写 request.json，并把它重新排队。 */
+  edit(id: string, patch: { prompt?: string; workspace?: string; every?: number | null; at?: number; runNow?: boolean }): Promise<{ id: string; output: string; snapshot: CreatorSnapshot }>;
+  /** 这次任务上一次跑在哪个会话里，以及那段对话说过什么。 */
+  session(id: string): Promise<CreatorTranscript>;
   startWorker(): Promise<{ started: boolean; reason: string; snapshot: CreatorSnapshot }>;
   pickWorkspace(): Promise<string | undefined>;
   openPolicy(): Promise<{ ok: boolean }>;
@@ -127,7 +137,7 @@ interface CreatorBridge {
   hide(): Promise<{ ok: boolean }>;
   settings(): Promise<CreatorSettings>;
   drive(): Promise<{ running: boolean; ready: boolean; computer: DriveComputer; events: DriveFrame[]; error: string; settings: CreatorSettings; log: string }>;
-  driveStart(input: { workspace?: string; computer?: boolean; model?: string }): Promise<{ running: boolean; ready: boolean; computer: DriveComputer; events: DriveFrame[]; error: string }>;
+  driveStart(input: { workspace?: string; computer?: boolean; model?: string; resume?: string }): Promise<{ running: boolean; ready: boolean; computer: DriveComputer; events: DriveFrame[]; error: string }>;
   driveStop(): Promise<unknown>;
   driveSay(text: string): Promise<{ sent: boolean }>;
   driveApprove(id: string, allow: boolean): Promise<boolean>;
@@ -336,6 +346,25 @@ function AskCard({ item, onAnswer }: { item: Extract<Item, { kind: "ask" }>; onA
   );
 }
 
+/** The lines of a conversation: said, answered, done, asked. Shared by 操控 and 任务详情. */
+export function Transcript({ items, onAnswer }: { items: Item[]; onAnswer: (id: string, allow: boolean) => void }): React.ReactElement {
+  return (
+    <>
+      {items.map((item, index) => {
+        if (item.kind === "you") return <div className="you" key={`you-${index}`}><span>{item.text}</span></div>;
+        if (item.kind === "reply") {
+          return item.text
+            ? <div className={`reply${item.open ? " open" : ""}`} key={`reply-${index}`}><Markdown text={item.text} /></div>
+            : null;
+        }
+        if (item.kind === "action") return <ActionRow item={item} key={`act-${item.id}-${index}`} />;
+        if (item.kind === "ask") return <AskCard item={item} key={`ask-${item.id}`} onAnswer={allow => onAnswer(item.id, allow)} />;
+        return <p className={`note ${item.tone}`} key={`note-${index}`}>{item.text}</p>;
+      })}
+    </>
+  );
+}
+
 function DrivePane({
   items, computer, running, ready, model, workspace, onSay, onStop, onToggleComputer, onPickWorkspace, onOpenPolicy, onAnswer, error,
 }: {
@@ -397,17 +426,7 @@ function DrivePane({
             </div>
           </div>
         ) : null}
-        {items.map((item, index) => {
-          if (item.kind === "you") return <div className="you" key={`you-${index}`}><span>{item.text}</span></div>;
-          if (item.kind === "reply") {
-            return item.text
-              ? <div className={`reply${item.open ? " open" : ""}`} key={`reply-${index}`}><Markdown text={item.text} /></div>
-              : null;
-          }
-          if (item.kind === "action") return <ActionRow item={item} key={`act-${item.id}-${index}`} />;
-          if (item.kind === "ask") return <AskCard item={item} key={`ask-${item.id}`} onAnswer={allow => onAnswer(item.id, allow)} />;
-          return <p className={`note ${item.tone}`} key={`note-${index}`}>{item.text}</p>;
-        })}
+        <Transcript items={items} onAnswer={onAnswer} />
       </div>
 
       <div className="drive-composer">
@@ -433,7 +452,9 @@ function DrivePane({
   );
 }
 
-export function TaskRow({ task, now, onCancel }: { task: CreatorTask; now: number; onCancel: (id: string) => void }): React.ReactElement {
+export function TaskRow({ task, now, onCancel, onOpen }: {
+  task: CreatorTask; now: number; onCancel: (id: string) => void; onOpen?: (task: CreatorTask) => void;
+}): React.ReactElement {
   const [open, setOpen] = useState(false);
   const active = task.status === "queued" || task.status === "running";
   const canOpen = Boolean(task.result);
@@ -451,6 +472,7 @@ export function TaskRow({ task, now, onCancel }: { task: CreatorTask; now: numbe
             {task.runs ? <span>{task.runs} 次执行</span> : null}
           </p>
         </div>
+        {onOpen ? <button className="open" title="打开这个任务" onClick={event => { event.stopPropagation(); onOpen(task); }}>打开</button> : null}
         {active ? <button className="ghost" onClick={event => { event.stopPropagation(); onCancel(task.id); }}>取消</button> : null}
         {canOpen ? <span className="chev">{open ? "▴" : "▾"}</span> : null}
       </header>
@@ -460,6 +482,156 @@ export function TaskRow({ task, now, onCancel }: { task: CreatorTask; now: numbe
           : <p>{STATUS_LABEL[task.status]}；没有返回结果说明，任务是否达成尚未确认。</p>}
       </div>}
     </article>
+  );
+}
+
+
+/**
+ * 任务详情：读这条任务说过的话，接着往下聊，或者改掉它的内容。
+ *
+ * Both halves belong on one page because they are the same question — "this job
+ * is not what I meant" — and the queue row could only answer the second half by
+ * asking the person to delete the task and describe it again from scratch.
+ */
+export function TaskDetail({
+  task, now, items, running, computer, workspace, sessionNote, starting, error, notice,
+  onBack, onSave, onRunNow, onCancel, onSay, onStop, onAnswer, onPickWorkspace, onOpenPolicy,
+}: {
+  task: CreatorTask; now: number; items: Item[]; running: boolean; computer: DriveComputer; workspace: string;
+  sessionNote: string; starting: boolean; error?: string; notice?: string;
+  onBack: () => void; onSave: (patch: { prompt: string; every: number | null; at: number }) => void;
+  onRunNow: () => void; onCancel: () => void; onSay: (text: string) => void; onStop: () => void;
+  onAnswer: (id: string, allow: boolean) => void; onPickWorkspace: () => void; onOpenPolicy: () => void;
+}): React.ReactElement {
+  const [draft, setDraft] = useState(() => taskDraft(task));
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const log = useRef<HTMLDivElement>(null);
+  // Reopening the same page on another task must start from that task's wording,
+  // not the previous draft; the id is the only thing that changes an identity here.
+  useEffect(() => { setDraft(taskDraft(task)); }, [task.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const element = log.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [items.length]);
+
+  const active = task.status === "queued" || task.status === "running";
+  const needsClock = draft.repeat === 0 || draft.repeat >= 86_400_000;
+  const changed = draft.prompt.trim() !== task.prompt || (task.every ?? 0) !== draft.repeat || clock(task.at) !== draft.time;
+
+  let preview = "";
+  try {
+    const patch = draftPatch(draft, now);
+    preview = `下次 ${dayClock(patch.at, now)}${patch.every ? ` · ${scheduleLabel({ at: patch.at, every: patch.every, status: "queued" })}` : " · 只跑一次"}`;
+  } catch { preview = ""; }
+
+  const submit = (): void => {
+    const value = text.trim();
+    if (!value || running || starting) return;
+    setText("");
+    onSay(value);
+  };
+
+  return (
+    <div className="taskview">
+      <header className="taskview-head">
+        <button className="back" onClick={onBack}>← 任务记录</button>
+        <div className="taskview-title">
+          <h1>{task.prompt}</h1>
+          <p>
+            <span className={`pill ${task.status}`}>{STATUS_LABEL[task.status]}</span>
+            <span>{scheduleLabel(task)}</span>
+            <span>{nextRunLabel(task, now)}</span>
+            {task.runs ? <span>{task.runs} 次执行</span> : null}
+          </p>
+        </div>
+      </header>
+
+      <div className="taskview-body">
+        <section className="edit-card" aria-label="修改任务内容">
+          <label className="edit-label" htmlFor="task-prompt">任务内容</label>
+          <textarea
+            id="task-prompt"
+            value={draft.prompt}
+            rows={3}
+            placeholder="说清楚要它做什么；保存后按新内容重新排队"
+            onChange={event => setDraft({ ...draft, prompt: event.target.value })}
+          />
+          <div className="edit-row">
+            <label>重复
+              <select value={draft.repeat} onChange={event => setDraft({ ...draft, repeat: Number(event.target.value) })}>
+                {REPEAT_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            {needsClock ? (
+              <label>时间
+                <input type="time" value={draft.time} onChange={event => setDraft({ ...draft, time: event.target.value })} />
+              </label>
+            ) : null}
+            <span className="edit-preview">{preview}</span>
+          </div>
+          <div className="edit-actions">
+            <button
+              className="primary"
+              disabled={saving || !draft.prompt.trim() || !changed}
+              onClick={() => {
+                try {
+                  const patch = draftPatch(draft, Date.now());
+                  setSaving(true);
+                  onSave(patch);
+                } catch (cause) { /* the preview already says the prompt is empty */ }
+                setSaving(false);
+              }}
+            >保存修改</button>
+            <button onClick={onRunNow}>立即按新内容跑</button>
+            {active ? <button className="ghost-danger" onClick={onCancel}>取消这个任务</button> : null}
+            <span className="spacer" />
+            <button className="edit-workspace" onClick={onPickWorkspace} title={workspace}>
+              <FolderGlyph />{workspace ? workspace.split("/").slice(-1)[0] : "选择工作空间"}
+            </button>
+          </div>
+          <p className="edit-hint">保存只改这一条任务：历史执行记录留着，原来的排期换成新的。</p>
+          {notice ? <p className="notice">{notice}</p> : null}
+        </section>
+
+        <section className="chat" aria-label="继续对话">
+          <div className="chat-head">
+            <span>继续对话</span>
+            <span className="chat-note">{sessionNote}</span>
+            <span className="spacer" />
+            {running ? <button className="stop" onClick={onStop}>停止 <em>⌘.</em></button> : null}
+          </div>
+          <div className="chat-log" ref={log}>
+            {items.length ? <Transcript items={items} onAnswer={onAnswer} /> : (
+              <p className="hint">{starting ? "正在接上这次任务的会话…" : "说一句话就能接着往下做：改哪一处、为什么没跑完、下一步做什么。"}</p>
+            )}
+          </div>
+          <div className="chat-composer">
+            {error ? <p className="error">{error}</p> : null}
+            <textarea
+              value={text}
+              rows={2}
+              placeholder={running ? "它正在操作，先停止或等这一轮结束…" : "接着说，比如「为什么没跑完？把第 2 步重做一遍」"}
+              onChange={event => setText(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); }
+                if (event.key === "." && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onStop(); }
+              }}
+            />
+            <div className="chat-row">
+              <button className="ghost-chip" onClick={onOpenPolicy}><ShieldGlyph />权限策略</button>
+              <button className="ghost-chip" onClick={onPickWorkspace}><FolderGlyph />{workspace ? workspace.split("/").slice(-1)[0] : "选择工作空间"}</button>
+              <span className="ghost-chip mute">{computer.enabled ? "可以操作屏幕" : "只能读写文件"}</span>
+              <span className="spacer" />
+              {running
+                ? <button className="send stop-round" title="停止" onClick={onStop}>■</button>
+                : <button className="send" disabled={!text.trim() || starting} onClick={submit}><ArrowGlyph /></button>}
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -502,8 +674,9 @@ function RunList({ task, bridge }: { task: CreatorTask; bridge: CreatorBridge })
  * 名字") is booked like any other instruction, so "plan" promised a form the
  * person never filled and hid the fact that this is their record of contact.
  */
-function Plans({ tasks, now, bridge, onClose, onCancel }: {
+function Plans({ tasks, now, bridge, onClose, onCancel, onOpen }: {
   tasks: CreatorTask[]; now: number; bridge: CreatorBridge; onClose: () => void; onCancel: (id: string) => void;
+  onOpen: (task: CreatorTask) => void;
 }): React.ReactElement {
   const [expanded, setExpanded] = useState<string | undefined>();
   const repeating = tasks.filter(task => task.every);
@@ -532,6 +705,7 @@ function Plans({ tasks, now, bridge, onClose, onCancel }: {
             <span>超时 {Math.round(task.timeout / MINUTE)} 分钟</span>
             {task.every ? <span>间隔 {nextRunLabel(task, now)}</span> : null}
           </p>
+          <button className="wide" onClick={() => onOpen(task)}>打开任务：继续对话或修改内容</button>
           {(task.status === "queued" || task.status === "running") ? (
             <button className="wide" onClick={() => onCancel(task.id)}>取消这个任务</button>
           ) : null}
@@ -619,7 +793,7 @@ export function Memory({ rows, onClose, onClear }: {
 function App(): React.ReactElement {
   const bridge = window.creator;
   const [snapshot, setSnapshot] = useState<CreatorSnapshot | undefined>();
-  const [view, setView] = useState<"drive" | "queue">("drive");
+  const [view, setView] = useState<"drive" | "queue" | "task">("drive");
   const [prompt, setPrompt] = useState("");
   const [workspace, setWorkspace] = useState<string>("");
   const [error, setError] = useState("");
@@ -638,6 +812,17 @@ function App(): React.ReactElement {
   const [model, setModel] = useState("");
   const [sayError, setSayError] = useState("");
   const started = useRef(false);
+
+  // 任务详情: the queue row's conversation, continued from the transcript its last
+  // run wrote. Only one child runs at a time, so opening a task takes the window's
+  // session over from 操控 rather than starting a second one behind the switch.
+  const [openTaskId, setOpenTaskId] = useState<string>();
+  const [history, setHistory] = useState<Array<{ role: "user" | "assistant"; text: string; at?: number }>>([]);
+  const [sessionId, setSessionId] = useState<string>();
+  const [sessionNote, setSessionNote] = useState("");
+  const [taskError, setTaskError] = useState("");
+  const [taskNotice, setTaskNotice] = useState("");
+  const [starting, setStarting] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!bridge) return;
@@ -669,6 +854,10 @@ function App(): React.ReactElement {
         setModel((event as { model?: string }).model ?? "");
       }
       if (event.type === "exit") setDriving(false);
+      if (event.type === "session") {
+        setSessionId(event.id);
+        setSessionNote(event.resumed ? "已接上这次任务上次的对话" : "这次对话会存进它自己的会话记录");
+      }
       setFrames(previous => [...previous, event].slice(-400));
     });
     const offLog = bridge.onDriveLog(line => { if (line.startsWith("error:")) setSayError(line.slice(6).trim()); });
@@ -692,11 +881,23 @@ function App(): React.ReactElement {
   const lastTurnEvent = [...frames].reverse().find(frame => frame.type === "turn-start" || frame.type === "turn-end" || frame.type === "exit");
   const running = driving && lastTurnEvent?.type === "turn-start";
 
+  // 任务详情 reuses one transcript renderer: what the saved session already said,
+  // then whatever this window's child has produced since.
+  const opened = openTaskId === undefined ? undefined : tasks.find(task => task.id === openTaskId);
+  const historyItems = useMemo<Item[]>(() => history.map(message => ({
+    kind: message.role === "user" ? "you" as const : "reply" as const,
+    text: message.text,
+    at: message.at ?? Date.now(),
+  })), [history]);
+  const taskItems = useMemo(() => [...historyItems, ...timeline(frames)], [historyItems, frames]);
+
   const ensureSession = async (): Promise<void> => {
     if (!bridge) return;
     if (started.current) return;
     started.current = true;
-    const state = await bridge.driveStart({ workspace: workspace || undefined, computer: computer.enabled === true });
+    // Toggling the switch inside a task conversation must keep that transcript:
+    // restarting without it silently turned "继续对话" into "从头再来".
+    const state = await bridge.driveStart({ workspace: workspace || undefined, computer: computer.enabled === true, ...(sessionId ? { resume: sessionId } : {}) });
     setDriving(state.running);
     if (state.computer) setComputer(state.computer);
     if (state.events?.length) setFrames(state.events);
@@ -754,6 +955,52 @@ function App(): React.ReactElement {
     try { setMemoryRows(await bridge.clearMemory(workspace)); setNotice("已清除这个项目的记忆"); }
     catch (cause) { setError(String((cause as Error).message || cause)); }
   };
+
+  /** Open a queue row as a conversation: load what it already said, then continue it. */
+  const openTask = useCallback(async (task: CreatorTask): Promise<void> => {
+    if (!bridge) return;
+    setView("task");
+    setOpenTaskId(task.id);
+    setTaskError("");
+    setTaskNotice("");
+    setFrames([]);
+    setHistory([]);
+    setSessionId(undefined);
+    setSessionNote("");
+    setStarting(true);
+    started.current = false;
+    try {
+      const found = await bridge.session(task.id);
+      setHistory(found.transcript?.messages ?? []);
+      setSessionId(found.session || undefined);
+      setSessionNote(found.session
+        ? `接着上次的 ${found.transcript?.messages.length ?? 0} 条对话，工作区 ${task.workspace.split("/").slice(-1)[0] || task.workspace}`
+        : "这次任务没有留下会话记录：从任务原文接着聊，工作区不变");
+      const state = await bridge.driveStart({
+        workspace: task.workspace,
+        resume: found.session || undefined,
+        computer: computer.enabled === true,
+        model: model || undefined,
+      });
+      started.current = true;
+      setDriving(state.running);
+      setFrames(state.events ?? []);
+    } catch (cause) {
+      setTaskError(String((cause as Error).message || cause));
+    } finally { setStarting(false); }
+  }, [bridge, computer.enabled, model]);
+
+  /** Leave the task conversation: the next sentence in 操控 opens a fresh one. */
+  const openControl = useCallback((): void => {
+    setView("drive");
+    setOpenTaskId(undefined);
+    setHistory([]);
+    setSessionNote("");
+    setTaskError("");
+    setTaskNotice("");
+    if (started.current) { void bridge?.driveStop(); started.current = false; setDriving(false); }
+    setFrames([]);
+  }, [bridge]);
 
   const submit = async (): Promise<void> => {
     if (!bridge || busy || !prompt.trim()) return;
@@ -818,7 +1065,7 @@ function App(): React.ReactElement {
         </button>
 
         <nav className="side-nav">
-          <button data-view="drive" className={view === "drive" ? "on" : ""} onClick={() => setView("drive")}>
+          <button data-view="drive" className={view === "drive" ? "on" : ""} onClick={openControl}>
             <CursorGlyph />操控电脑{computer.enabled ? <b className="live">●</b> : null}
           </button>
           <button data-view="queue" className={view === "queue" ? "on" : ""} onClick={() => setView("queue")}>
@@ -838,7 +1085,7 @@ function App(): React.ReactElement {
         <div className="side-label">最近任务（{tasks.length}）</div>
         <div className="side-list">
           {tasks.length ? tasks.map(task => (
-            <button key={task.id} className={`side-task ${task.status}`} onClick={() => { setView("queue"); setTab(["queued", "running", "paused"].includes(task.status) ? "active" : "done"); }}>
+            <button key={task.id} className={`side-task ${task.status}${openTaskId === task.id ? " on" : ""}`} onClick={() => { void openTask(task); }}>
               <span className={`dot ${task.status}`} />
               <span className="title">{task.prompt}</span>
               <span className="when">{task.every ? clock(task.at) : dayClock(task.at)}</span>
@@ -865,8 +1112,56 @@ function App(): React.ReactElement {
         </div>
       </aside>
 
-      <main className={`main${view === "drive" ? " locked" : ""}`}>
-        {view === "drive" ? (
+      <main className={`main${view === "drive" || view === "task" ? " locked" : ""}`}>
+        {view === "task" && opened ? (
+          <TaskDetail
+            task={opened}
+            now={now}
+            items={taskItems}
+            running={running}
+            computer={computer}
+            workspace={opened.workspace}
+            sessionNote={sessionNote}
+            starting={starting}
+            error={taskError || sayError}
+            notice={taskNotice}
+            onBack={openControl}
+            onSave={patch => {
+              if (!bridge) return;
+              setTaskNotice("");
+              void bridge.edit(opened.id, patch).then(result => {
+                setSnapshot(result.snapshot);
+                setTaskNotice("已保存，按新内容重新排队");
+              }).catch(cause => setTaskError(String((cause as Error).message || cause)));
+            }}
+            onRunNow={() => {
+              if (!bridge) return;
+              setTaskError("");
+              void bridge.edit(opened.id, { runNow: true }).then(result => {
+                setSnapshot(result.snapshot);
+                setTaskNotice("已排到队首，执行器下一次检查就会开始");
+                void startWorker();
+              }).catch(cause => setTaskError(String((cause as Error).message || cause)));
+            }}
+            onCancel={() => {
+              if (!bridge) return;
+              void bridge.cancel(opened.id).then(setSnapshot).catch(cause => setTaskError(String((cause as Error).message || cause)));
+            }}
+            onSay={text => { void say(text); }}
+            onStop={() => { void stop(); }}
+            onAnswer={(id, allow) => { void bridge?.driveApprove(id, allow); }}
+            onPickWorkspace={async () => {
+              if (!bridge) return;
+              const picked = await bridge.pickWorkspace();
+              if (picked) {
+                const result = await bridge.edit(opened.id, { workspace: picked });
+                setSnapshot(result.snapshot);
+                setTaskNotice("工作区已更换，下一轮在新目录里执行");
+              }
+            }}
+            onOpenPolicy={() => { void bridge?.openPolicy(); }}
+          />
+        ) : view === "drive" ? (
           <DrivePane
             items={items}
             computer={computer}
@@ -973,6 +1268,7 @@ function App(): React.ReactElement {
                 ) : shown.length ? (
                   shown.map(task => (
                     <TaskRow key={task.id} task={task} now={now}
+                      onOpen={open => { void openTask(open); }}
                       onCancel={id => { if (bridge) void bridge.cancel(id).then(setSnapshot); }} />
                   ))
                 ) : (
@@ -1005,6 +1301,7 @@ function App(): React.ReactElement {
           now={now}
           bridge={bridge}
           onClose={() => setPlans(false)}
+          onOpen={task => { setPlans(false); void openTask(task); }}
           onCancel={id => { if (bridge) void bridge.cancel(id).then(setSnapshot); }}
         />
       ) : null}

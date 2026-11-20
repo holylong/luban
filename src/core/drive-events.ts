@@ -14,8 +14,11 @@ export interface DriveUsage {
 }
 
 export type DriveEvent =
-  /** Sent once, before the first turn: what this session can and cannot do. */
-  | { type: "ready"; workspace: string; model: string; computer: DriveComputerState }
+  /** Sent once, before the first turn: what this session can and cannot do.
+   *  `session` is the transcript this conversation is saved under, when one exists. */
+  | { type: "ready"; workspace: string; model: string; computer: DriveComputerState; session?: string }
+  /** The transcript a turn was written to; a resumed conversation keeps its id. */
+  | { type: "session"; id: string; resumed?: boolean }
   | { type: "status"; text: string }
   | { type: "turn-start"; id: string; text: string }
   | { type: "text"; text: string }

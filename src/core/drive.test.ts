@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DRIVE_PROTOCOL, DriveSession, describeAction, screenshotPath, type DriveEvent } from "./drive";
 import { readProjectMemory, rememberFact } from "./memory";
+import { SessionStore } from "./session-store";
 import { updateCreatorIdentity } from "./creator-identity";
 import type { AgentEvent, ChatMessage } from "./types";
 
@@ -411,5 +412,77 @@ describe("cross-run memory", () => {
     await drive.open();
     await drive.say("第一句话");
     expect(seen[0]!.some(message => message.role === "system" && String(message.content).startsWith("## 项目记忆（"))).toBe(false);
+  });
+});
+
+/* 「继续对话」必须接上那次任务说过的话，否则它只是换了个地方重新开始。 */
+describe("resumed transcripts", () => {
+  it("continues the session a finished run wrote and writes the new turn back", async () => {
+    const events: DriveEvent[] = [];
+    const home = tempHome();
+    const store = new SessionStore(home);
+    const record = store.create("proj", home, "agent", "test/model", [
+      { role: "system", content: "base" },
+      { role: "user", content: "检查禅道上本周新增的 bug" },
+      { role: "assistant", content: "发现 3 个，已写进日报" },
+    ]);
+    await store.save(record);
+
+    let seen: ChatMessage[] = [];
+    const drive = new DriveSession({
+      home, workspace: home, emit: event => events.push(event), resume: record.id,
+      isComputerOn: () => false,
+      createRunner: (() => ({
+        async run(messages: ChatMessage[]) {
+          seen = messages;
+          return { ok: true, text: "第 2 个也修了", steps: 1, messages: [...messages, { role: "assistant", content: "第 2 个也修了" }] };
+        },
+        close() {},
+      })) as never,
+    });
+    await drive.open();
+    expect(events.find(event => event.type === "session")).toMatchObject({ id: record.id, resumed: true });
+    await drive.say("把第 2 个也修了");
+
+    // The earlier exchange arrives verbatim; a summary here would lose the ids the
+    // model本身 wrote into its own tool results.
+    expect(seen.map(message => message.content)).toContain("检查禅道上本周新增的 bug");
+    expect(seen.at(-1)).toMatchObject({ role: "user", content: "把第 2 个也修了" });
+    const saved = await store.load(record.id, record.project, home);
+    expect(saved!.messages.map(message => message.content)).toContain("第 2 个也修了");
+    // Same transcript, not a fork: reopening the task must show this turn too.
+    expect(saved!.id).toBe(record.id);
+  });
+
+  it("gives a new conversation its own transcript so it can be reopened", async () => {
+    const events: DriveEvent[] = [];
+    const home = tempHome();
+    const drive = new DriveSession({
+      home, workspace: home, emit: event => events.push(event), isComputerOn: () => false,
+      createRunner: (() => ({
+        async run(messages: ChatMessage[]) { return { ok: true, text: "好的", steps: 1, messages: [...messages, { role: "assistant", content: "好的" }] }; },
+        close() {},
+      })) as never,
+    });
+    await drive.open();
+    await drive.say("记一下明天交周报");
+    const announced = events.filter(event => event.type === "session");
+    expect(announced).toHaveLength(1);
+    const id = (announced[0] as { id: string }).id;
+    expect((announced[0] as { resumed?: boolean }).resumed).toBeUndefined();
+    const saved = await new SessionStore(home).load(id);
+    expect(saved?.messages.map(message => message.content)).toContain("记一下明天交周报");
+  });
+
+  it("starts fresh, with a note, when the transcript is gone", async () => {
+    const events: DriveEvent[] = [];
+    const drive = new DriveSession({
+      home: tempHome(), workspace: tempHome(), emit: event => events.push(event),
+      isComputerOn: () => false, resume: "0".repeat(14) + "-missing",
+      createRunner: (() => ({ async run() { return { ok: true, text: "好", steps: 0, messages: [] }; }, close() {} })) as never,
+    });
+    await drive.open();
+    expect(events.some(event => event.type === "status" && event.text.includes("没找到这次任务的会话记录"))).toBe(true);
+    expect(events.find(event => event.type === "ready")).toBeTruthy();
   });
 });

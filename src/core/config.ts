@@ -817,6 +817,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const kevRaw = record(raw.kev);
   const historyRaw = record(raw.history);
   const usageStatsRaw = record(raw.usage_stats ?? raw.usageStats);
+  const updatesRaw = record(raw.updates);
   const codeIntelRaw = record(raw.code_intelligence ?? raw.codeIntel);
   const remoteRaw = record(raw.remote);
   return {
@@ -909,6 +910,13 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
       // reality, and an idle install uploads nothing at all.
       intervalHours: Math.max(1 / 60, Math.min(24 * 7, flexible(usageStatsRaw.interval_hours ?? usageStatsRaw.intervalHours, 0.25))),
     },
+    updates: {
+      // Same escape hatch as usage stats: LUBAN_UPDATES=off silences every check.
+      check: !/^(0|off|false|no)$/iu.test(String(process.env.LUBAN_UPDATES ?? ""))
+        && updatesRaw.check !== false && updatesRaw.check !== "false" && updatesRaw.check !== 0,
+      url: text(updatesRaw.url, process.env.LUBAN_UPDATES_URL, ""),
+      skippedVersion: text(updatesRaw.skipped_version ?? updatesRaw.skippedVersion, ""),
+    },
     mesh: {
       enabled: options.mesh ?? true,
       nodeName: text(options.meshName, process.env.LUBAN_NAME, nodeConfig.name, hostname()),
@@ -973,6 +981,28 @@ export async function savePreferredModel(home: string, model: string, effort?: M
 /** Persists the palette chosen with `/theme`, applied on the next start. */
 export async function saveTheme(home: string, theme: string): Promise<void> {
   await savePreferences(home, { theme });
+}
+
+/**
+ * Write one `updates` setting (the terminal's `/update` toggle, the desktop
+ * menu and the phone's switch all end up here).
+ *
+ * Only the keys passed are touched: turning checking back on must not erase the
+ * version the user asked to skip.
+ */
+export async function saveUpdateSettings(home: string, patch: { check?: boolean; skippedVersion?: string; url?: string }): Promise<void> {
+  await mkdir(home, { recursive: true });
+  const path = join(home, "config.json");
+  const config = readJson(path);
+  const current = record(config.updates);
+  const next = {
+    check: patch.check ?? (current.check !== false),
+    url: patch.url ?? (typeof current.url === "string" ? current.url : ""),
+    skipped_version: patch.skippedVersion ?? (typeof current.skipped_version === "string" ? current.skipped_version : ""),
+  };
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ ...config, updates: next }, null, 2)}\n`, "utf8");
+  await rename(temporary, path);
 }
 
 export async function savePermissionMode(home: string, mode: "ask" | "edits" | "allow"): Promise<void> {
