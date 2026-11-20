@@ -1,3 +1,8 @@
+## 2.8.4 — 2026-11-20
+
+- 手机端「工作区与会话」不再列出空会话：`mobile-workspaces.tsx` 之前对 `/api/sessions` 带 `includeEmpty=1`，把每次 `luban` 启动时写下的「只有系统提示词、没有对话」的草稿记录也拉了回来，于是几乎每个工作区都挂着一串「未命名会话 · 0 条消息 · 尚未开始」，把真正要找的会话挤下去。桌面端会话列表本来就过滤这些草稿（`hasConversation`），手机端现在一致：不请求草稿，并在客户端再过滤一次 `messages === 0`（对接旧版 relay 时也一样），运行中的会话仍然保留。
+- 验证：`src/web/client/mobile-workspaces.test.tsx` 18 例（新增「丢掉没有消息的草稿且不再请求 includeEmpty」「运行中的空会话仍显示」）；真实 Chromium 探针 `node scripts/probe-mobile-workspaces.cjs` 的 fixture 里塞了一条 `messages: 0` 的草稿，页面「original」卡片显示「1 个」、全文无「未命名会话」，320/390/430 无横向溢出，其余交互（打开第二台设备的会话、新工作区、确认删除）保持绿；`npx vitest run src/web/client` 51 文件 / 352 例通过；server+client typecheck 与 build 通过。
+
 ## 2.8.3 — 2026-11-20
 
 - GitHub Actions 的 `verify` 剩下的红是环境差异不是断言差异：runner 会导出 `CI=true`，Ink 通过 `is-in-ci` 读到它后**根本不重绘主画面**（`onRender` 里直接 return，只在 unmount 时写最后一帧），所以所有基于「当前这一帧」的 TUI 断言在 CI 里拿到的是空字符串 —— `app-draft-undo.test.tsx` 7 例全红，「Matcher did not succeed in time / expected '' to contain 'previous answer'」。

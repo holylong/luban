@@ -61,8 +61,13 @@ export async function loadDeviceWorkspaces(node: string | undefined, signal: Abo
       return body as T;
     };
     try {
-      const sessions = await readOwner<SessionSummary[]>("/api/sessions", { project, limit: "200", includeEmpty: "1" });
-      return { project, path, sessions: sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
+      const sessions = await readOwner<SessionSummary[]>("/api/sessions", { project, limit: "200" });
+      // Drafts that never got a first message (the desktop app writes one on
+      // every open, so nearly every workspace collects them) are not something
+      // anyone picks from a phone: they have no content and no title. The
+      // desktop session list hides them for the same reason.
+      const started = sessions.filter(session => session.running || session.messages > 0);
+      return { project, path, sessions: started.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
     } catch (error) {
       if (signal.aborted) throw error;
       return { project, path, sessions: [], error: error instanceof Error ? error.message : String(error) };

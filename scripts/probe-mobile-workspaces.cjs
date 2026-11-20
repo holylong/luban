@@ -20,7 +20,9 @@ if (!process.versions.electron) {
   const projects = { a: { original: "/work/original" }, b: { original: "/work/b-original", newlyCreated: "/work/newly-created" } };
   const session = (id, project, title) => ({ id, project, title, workspace: "/work/" + project, model: "test", mode: "agent", messages: 2, edits: 0,
     createdAt: "2026-11-14T10:00:00Z", updatedAt: "2026-11-14T11:00:00Z" });
-  const sessions = { original: [session("old", "original", "旧会话")], newlyCreated: [session("first", "newlyCreated", "新工作区的第一个会话"), session("second", "newlyCreated", "第二个会话" + "长标题".repeat(25))] };
+  // A CLI start writes a system-prompt-only record, so every workspace on disk
+  // carries drafts like this one; the phone list must not show them.
+  const sessions = { original: [session("old", "original", "旧会话"), { ...session("draft", "original", ""), messages: 0 }], newlyCreated: [session("first", "newlyCreated", "新工作区的第一个会话"), session("second", "newlyCreated", "第二个会话" + "长标题".repeat(25))] };
   const info = node => ({ name: node === "b" ? "第二台电脑" : "第一台电脑", project: "original", workspace: projects[node].original,
     projects: projects[node], models: [], model: "test", capabilities: [], version: "test", web: {} });
   const server = http.createServer((req, res) => {
@@ -84,6 +86,10 @@ if (!process.versions.electron) {
     win.setContentSize(390, 844);
     fs.writeFileSync(path.join(home, "devices.png"), (await win.webContents.capturePage()).toPNG());
     assert(await js('document.querySelectorAll(".m-workspace .m-pick").length === 0'), "sessions must start collapsed");
+    const draftLeak = await js(`(() => { const card = [...document.querySelectorAll(".m-workspace")].find(e => e.textContent.includes("original"));
+      return { text: card.innerText, rows: card.querySelectorAll(".m-session-row").length, drafts: document.body.innerText.includes("未命名会话") }; })()`);
+    assert(!draftLeak.drafts && draftLeak.text.includes("1 个"), "a draft session leaked into the phone list: " + JSON.stringify(draftLeak));
+    console.log("draft filter", JSON.stringify(draftLeak));
     await js('[...document.querySelectorAll(".m-workspace")].find(e=>e.textContent.includes("newlyCreated")).querySelector(".m-collapse").click()');
     await until('document.querySelectorAll(".m-workspace .m-pick").length === 2');
     await js('[...document.querySelectorAll(".m-workspace .m-pick")].find(e=>e.textContent.includes("第二个会话")).click()');

@@ -35,22 +35,34 @@ describe("mobile session deletion", () => {
 });
 
 describe("device workspace inventory", () => {
-  it("reads every registered workspace, including empty sessions, not relay status", async () => {
+  it("reads every registered workspace but drops drafts that never got a message", async () => {
     const urls: URL[] = [];
     const fetcher = vi.fn(async (url: string | URL | Request) => {
       const parsed = new URL(String(url), "http://local");
       urls.push(parsed);
-      return Response.json(parsed.pathname === "/api/node"
-        ? { project: "one", workspace: "/work/one", projects: { two: "/work/two" } }
-        : [summary("same-id", parsed.searchParams.get("project")!, 0)]);
+      if (parsed.pathname === "/api/node") return Response.json({ project: "one", workspace: "/work/one", projects: { two: "/work/two" } });
+      const project = parsed.searchParams.get("project")!;
+      return Response.json([summary(`${project}-draft`, project, 0), summary(`${project}-real`, project, 3)]);
     }) as unknown as typeof fetch;
     const entries = await loadDeviceWorkspaces("node & b", new AbortController().signal, fetcher);
     expect(entries.map(entry => entry.project)).toEqual(["one", "two"]);
-    expect(entries.map(entry => entry.sessions[0]?.project)).toEqual(["one", "two"]);
-    expect(entries[1]?.sessions[0]?.messages).toBe(0);
+    expect(entries.map(entry => entry.sessions.map(session => session.id))).toEqual([["one-real"], ["two-real"]]);
     expect(urls).toHaveLength(3);
     expect(urls.every(url => url.searchParams.get("node") === "node & b")).toBe(true);
     expect(urls[1]?.searchParams.get("limit")).toBe("200");
+    // Every CLI start writes a system-prompt-only record, so asking the server
+    // for drafts buried the real conversations under untitled rows in every
+    // workspace the phone lists. The desktop session list hides them too.
+    expect(urls.some(url => url.searchParams.has("includeEmpty"))).toBe(false);
+  });
+
+  it("keeps a running session that has no messages yet", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const parsed = new URL(String(url), "http://local");
+      return Response.json(parsed.pathname === "/api/node" ? { projects: { p: "/p" } } : [{ ...summary("live", "p", 0), running: true }]);
+    }) as unknown as typeof fetch;
+    const entries = await loadDeviceWorkspaces(undefined, new AbortController().signal, fetcher);
+    expect(entries[0]?.sessions.map(session => session.id)).toEqual(["live"]);
   });
 
   it("skips probe workspaces a stale node still advertises", async () => {

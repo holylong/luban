@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.8.3",
+  "version": "2.8.4",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "license": "MIT",
   "author": "luban contributors",
