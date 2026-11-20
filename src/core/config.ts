@@ -343,11 +343,13 @@ const CODEX_FALLBACK_MODELS = [
 
 /**
  * Open Design's AMR gateway publishes every model on three protocols that share
- * `https://amr-link.open-design.ai/v1`: Chat Completions, the Responses API used
- * by Codex, and the Anthropic Messages API used by Claude Code. The catalog
- * mirrors `/v1/models` (the gateway marks `deepseek-v4.1-flash` as its default)
- * and routes Claude through Messages. No credential ships with the source: set
- * `OPEN_DESIGN_API_KEY` or write `providers.opendesign.api_key`.
+ * one `/v1` base URL: Chat Completions, the Responses API used by Codex, and the
+ * Anthropic Messages API used by Claude Code. The catalog mirrors the gateway's
+ * `/v1/models` (it marks `deepseek-v4.1-flash` as its default) and routes Claude
+ * through Messages. The endpoint belongs to whoever operates that gateway, so
+ * none ships here: `providers.opendesign.base_url` is empty and the catalog only
+ * appears once you point it somewhere. `OPEN_DESIGN_API_KEY` or
+ * `providers.opendesign.api_key` supplies the credential.
  */
 const OPEN_DESIGN_MODELS: Record<string, { name: string; vision: boolean; api?: "openai" | "anthropic"; temperature?: boolean }> = {
   "deepseek-v4.1-flash": { name: "DeepSeek V4.1 Flash", vision: true },
@@ -508,7 +510,11 @@ function builtinProviders(session = "", shared = ""): Record<string, JsonObject>
     },
     opendesign: {
       api_key_env: "OPEN_DESIGN_API_KEY",
-      base_url: "https://amr-link.open-design.ai/v1",
+      // No endpoint ships with the source: this catalog only means anything
+      // against an operator's own gateway, and a model without a base URL must
+      // never quietly fall back to api.openai.com.
+      base_url: "",
+      requires_base_url: true,
       models: Object.fromEntries(Object.entries(OPEN_DESIGN_MODELS).map(([id, model]) => [id, {
         name: model.name,
         api: model.api ?? "openai",
@@ -582,6 +588,9 @@ function collectModels(raw: JsonObject, session = "", shared = ""): ModelRef[] {
   for (const [providerName, value] of Object.entries(providers)) {
     const provider = record(value);
     const baseUrl = resolveBaseUrl(provider, modelConfig);
+    // A catalog that ships without its own endpoint belongs to somebody else's
+    // service; listing it would send the operator's key to api.openai.com.
+    if (!baseUrl && provider.requires_base_url === true) continue;
     const apiKey = resolveKey(providerName, provider, modelConfig, session,
       providerName === "opencode-go" || providerName === "opencode-zen" ? shared : "");
     const providerApi = text(provider.api, provider.type, providerName === "anthropic" ? "anthropic" : "openai").toLowerCase();

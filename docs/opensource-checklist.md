@@ -16,10 +16,20 @@ git grep -nE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b"
 git grep -nE "https?://[a-z0-9.-]+\.(com|cn|net|io|dev)"
 ```
 
-- 内置默认服务地址集中在 `src/core/service-defaults.ts`：确认是否愿意把这些地址当作
-  公开默认值；不愿意就把默认值留空，只保留配置项和文档说明。
-- 端点必须**可覆盖**：`usage_stats.url`、`remote.relay_url` 以及对应环境变量都要生效，
-  否则用户只能改代码。
+- 内置默认地址分两处查：`src/core/service-defaults.ts`（中继 / 统计等服务端点）与
+  `src/core/config.ts` 的 `builtinProviders()`（每个 provider 的 `base_url`、
+  `api_key_env` 与内置模型表）。确认是否愿意把这些地址当作公开默认值；不愿意就留空，
+  只保留配置项和文档说明。
+- 自建网关最容易漏：把公司 / 团队的网关地址连同它的模型表写进内置 provider，等于公开
+  内部服务名和可用模型清单。`providers.opendesign` 的做法可以照抄——`base_url` 留空，
+  并用 `requires_base_url` 标记「没有地址就不注册模型」，用户填了自己的网关才出现在
+  `/models`。
+- 留空后要确认**不会静默回退**到 `api.openai.com` 这类公共端点（OpenAI 兼容客户端在
+  空 base URL 下会这么做），否则用户的 key 会发到错误的地方。
+- 端点必须**可覆盖**：`usage_stats.url`、`remote.relay_url`、各 provider 的 `base_url`
+  以及对应环境变量都要生效，否则用户只能改代码。
+- 文档里贴的网关地址同样要换：`base_url` 写成 `https://gateway.example.com/v1`，
+  协议示例（`/responses`、`/messages`）用相对说法，别把内网域名留在正文与 `config.example.json`。
 - 历史提交也要查（私有仓库仍可改写历史）：
 
 ```bash

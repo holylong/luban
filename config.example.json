@@ -55,7 +55,7 @@
     "opendesign": {
       "api_key_env": "OPEN_DESIGN_API_KEY",
       "api_key": "",
-      "base_url": "https://amr-link.open-design.ai/v1",
+      "base_url": "https://gateway.example.com/v1",
       "models": [
         "deepseek-v4.1-flash",
         "deepseek-v4-flash",

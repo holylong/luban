@@ -1,3 +1,23 @@
+## 2.7.6 — 2026-11-20
+
+- 文档合并（第二批）：五篇结案的一次性排查记录（思考流闪烁、界面排版复用、堆内存耗尽、Codex 额度、运行性能，共 235 行）合成 `docs/audits.md`，按时间倒序、原小节标题降一级，开头一份索引。
+- `docs/relay-deploy.md`（224 行）与 `docs/relay-domain.md`（181 行）合成 `docs/relay.md`：§0–§10 讲部署，§11 讲域名与公网入口，删掉两篇之间的互链，`相关文件` 表移到文末。
+- 合并时清掉 `docs/relay.md` 里残留的标识：`203-0-113-7.nip.io` 换成 `203-0-113-7.nip.io`，客户端/机房所在地与云厂商改成中性说法。
+- 引用同步：`docs/reference.md`、`scripts/setup-relay-tunnel.sh`、`src/core/service-defaults.ts` 里指向旧文件的地方改成 `docs/relay.md`。
+- 只动文档：没有代码、配置或行为变化。
+
+## 2.7.5 — 2026-11-20
+
+- 合并两份修改记录：`docs/changes.md`（1.16.72–1.16.76 的 5 条）并入 `CHANGELOG.md` 末尾，标题风格统一成 `## 版本 — 日期`，并标注原文件位置后删除 `docs/changes.md`。此前 1.x 的记录停在 1.16.76、2.0.0 起才写在本文件，中间那段只能靠翻 Git 历史。
+- 只动文档：没有代码、配置或行为变化。
+
+## 2.7.4 — 2026-11-20
+
+- `opendesign` 不再内置网关地址：`src/core/config.ts` 里 `providers.opendesign.base_url` 改为空，并新增 `requires_base_url` 标记——没有 `base_url` 时这套模型表不进 `/models`，也不会让 OpenAI 兼容客户端在空地址下静默回退到 `api.openai.com`（那会把用户的 key 发到错误的地方）。填好自己的网关后模型表照旧出现，`claude-haiku-5.5` 走 Messages、`gpt-*` 可切 Responses 的行为不变。
+- 文档与示例去掉内部网关域名：`docs/reference.md` 的 Open Design 一节改为「先配 `base_url` 再选模型」，`/responses`、`/messages` 示例改用相对写法；`config.example.json` 与 `README.md` 同步；`/models` 的鉴权面板不再给 opendesign 显示公网密钥控制台入口。
+- `docs/opensource-checklist.md` 第 1 节补「自建网关」条目：内置默认地址要同时查 `service-defaults.ts` 与 `config.ts` 的 `builtinProviders()`，并说明留空后必须确认不会静默回退到公共端点。
+- 测试：`config.test.ts` 改为「未配网关时 opendesign 不入模型列表、活动模型回退到默认值」，其余 Open Design 用例改用 `https://gateway.example.test/v1`；`responses.test.ts` 的端点推导用例同步换成占位域名。
+
 ## 2.7.3 — 2026-11-20
 
 - 脱敏复扫并清理：`apps/android-native/app/build/`（100 个文件，含 `app-debug.apk`、`classes.dex`）、`.gradle/`（13 个文件）、`build/` 报告和 `local.properties`（记着构建机的 SDK 路径）移出版本库并补进 `.gitignore`——这些产物的日志里带着完整构建机家目录与旧版硬编码地址。
@@ -919,3 +939,48 @@
 - token 来自提供方返回的 usage；Bot 结果统计当前 runner 的请求，不保证包含委派子 Agent、异常退出或提供方未报告的用量，也不代表费用账单。
 - 后台操作仍遵循独立权限文件；委派任务需要相应授权。前台 TUI 与工作台身份保持原有设置。
 - 本次本地提交不等于安装包发布；平台安装包与 GitHub Release 由单独的发布流程生成。
+
+## 1.16.76 — 2026-10-09
+
+> 以下 1.16.72–1.16.76 五条原记录在 `docs/changes.md`（当时的「修改记录」），2026-11-20 并入本文件；再往前的版本请看 Git 历史。
+
+- 从 README Logo 生成独立的榫卯 L 应用图标，提供多尺寸 PNG 与 Windows ICO。
+- Linux 桌面安装包安装 16–512 像素的菜单图标；桌面窗口、Web favicon 和 PWA 使用新图标。
+- Windows 桌面打包时嵌入 EXE 图标；便携包附带 `create-shortcuts.cmd`，用于解压后创建带图标的桌面快捷方式。
+- Windows 图标资源编辑使用构建依赖 `rcedit`；版本同步更新至 1.16.76。
+
+验证：Linux 桌面包构建通过，包内 9 种菜单图标与窗口/Web 图标校验通过；Windows ICO 尺寸、脚本语法及版本一致性检查通过。Windows 打包与快捷方式运行待 Windows x64 实测。
+
+## 1.16.75 — 2026-10-09
+
+- 生成以榫卯和木工角尺为灵感的 luban Logo，保存至 `assets/luban-logo.png`。
+- README 顶部居中展示 Logo，保留简洁的用户说明。
+- 版本同步更新至 1.16.75。
+
+验证：`npm run build`、图片引用、版本一致性及 `git diff --check` 均通过。
+
+## 1.16.74 — 2026-10-09
+
+- README 增加 OpenCode Go / Zen 密钥设置、默认模型与服务地址说明。
+- 增加 OpenAI API 和兼容接口的配置示例，说明地址、模型 ID、密钥和协议选择。
+- 对照配置实现及服务官方文档核对示例；版本同步更新至 1.16.74。
+
+验证：构建、JSON 示例格式、版本一致性及 `git diff --check` 均通过。
+
+
+## 1.16.73 — 2026-10-09
+
+- README 增加简短的特色功能介绍，覆盖执行过程、局域网协作、手机远控、任务恢复、模型选择和扩展能力。
+- 版本同步更新至 1.16.73。
+
+验证：`npm run build` 和 `git diff --check` 均通过。
+
+
+## 1.16.72 — 2026-10-09
+
+- README 精简为面向用户的安装、模型配置和常用操作说明。
+- 原 README 的详细配置、实现说明、历史修复信息和开发验证移至 `reference.md`，保留查阅入口。
+- 修改记录独立保存在本文，不写入 README。
+- `package.json` 和 `package-lock.json` 版本同步更新至 1.16.72。
+
+验证：`npm run build` 通过（服务端编译、前端类型检查与 Vite 打包）；`git diff --check` 通过。

@@ -448,7 +448,7 @@ TUI 里输入 `/mcp` 打开同一份列表：`Enter` 现场试连（连不上会
 配置优先级：CLI `--model` > `LUBAN_MODEL` > Node 偏好 > `model.active`。
 `~/.luban/config.json` 可以由 Python 和 Node 两个版本直接共用。设置了 Mesh token 时，
 所有节点必须使用相同的 `LUBAN_MESH_TOKEN`。
-完整示例见 [config.example.json](config.example.json)，其中 `model.active` 已选择 Codex；
+完整示例见 [config.example.json](../config.example.json)，其中 `model.active` 已选择 Codex；
 只需 Codex 登录和模型设置时，使用 [config.codex.example.json](../config.codex.example.json)。
 
 新安装（`~/.luban/config.json` 不存在）首次启动会写入一份可移植的起始配置：端口、超时、
@@ -466,17 +466,29 @@ API Key 建议用 `/models` 里的 `Ctrl+A` 面板写入用户目录，而不是
 
 ### Open Design（opendesign）
 
-luban 内置 Open Design 的 AMR 网关 `opendesign`，默认地址为
-`https://amr-link.open-design.ai/v1`，不带任何内置凭据；设置 `OPEN_DESIGN_API_KEY`
-（或配置里的 `api_key`）后即可在 `/models` 里选择：
+luban 内置一套 `opendesign` provider 定义（模型表与协议），但**不附带任何网关地址**：
+`providers.opendesign.base_url` 默认为空，配好之前这些模型不会出现在 `/models` 里，
+也不会退回去请求 `api.openai.com`。指向你自己的 AMR 兼容网关并给出凭据后才会列出：
+
+```json
+{
+  "providers": {
+    "opendesign": {
+      "base_url": "https://gateway.example.com/v1",
+      "api_key_env": "OPEN_DESIGN_API_KEY"
+    }
+  }
+}
+```
 
 ```bash
-luban --model opendesign/deepseek-v4.1-flash
+OPEN_DESIGN_API_KEY=<key> luban --model opendesign/deepseek-v4.1-flash
 ```
 
 网关的所有模型（包括 Claude、GPT、Kimi、GLM、MiMo、MiniMax 条目）都走同一套
 OpenAI 兼容的 `chat/completions`，因此内置定义统一使用 `"api": "openai"`，推理内容
-通过 `delta.reasoning` 流式返回。内置模型表来自网关的 `/v1/models`：
+通过 `delta.reasoning` 流式返回。内置模型表按该网关的 `/v1/models` 整理（换成别的网关时，
+用 `models` 数组整体覆盖即可）：
 `deepseek-v4.1-flash`（网关默认）、`deepseek-v4-flash`、
 `deepseek-v4-flash-vision-exp`、`deepseek-v4-pro`、`claude-haiku-5.5`、
 `glm-5.3-flash`、`glm-5.3-flashx`、`gpt-6-luna`、`hy4-preview`、
@@ -484,12 +496,12 @@ OpenAI 兼容的 `chat/completions`，因此内置定义统一使用 `"api": "op
 
 要换成自己的 key，设置 `OPEN_DESIGN_API_KEY`，或在配置里写 `providers.opendesign.api_key`；
 优先级是显式 `api_key` > `api_key_env` / `OPEN_DESIGN_API_KEY`。
-写法与示例见 [config.example.json](config.example.json)；想把它设为默认模型，把
+写法与示例见 [config.example.json](../config.example.json)；想把它设为默认模型，把
 `model.active` 改成 `opendesign/deepseek-v4.1-flash` 即可。
 
 #### 走 Codex 的 Responses 接口
 
-同一网关的 `https://amr-link.open-design.ai/v1/responses` 覆盖全部 13 个模型：流式
+同一 `base_url` 下的 `/responses` 端点覆盖全部 13 个模型：流式
 SSE、function call、`reasoning.effort`（`gpt-*` 模型）和 `store: false` 均已实测通过。
 luban 内置默认用 Chat Completions，需要 Responses 时给单个模型加 `"api": "responses"`：
 
@@ -498,7 +510,7 @@ luban 内置默认用 Chat Completions，需要 Responses 时给单个模型加 
   "model": { "active": "opendesign/gpt-6-luna" },
   "providers": {
     "opendesign": {
-      "base_url": "https://amr-link.open-design.ai/v1",
+      "base_url": "https://gateway.example.com/v1",
       "api_key_env": "OPEN_DESIGN_API_KEY",
       "models": { "gpt-6-luna": { "name": "GPT-6 Luna", "api": "responses" } }
     }
@@ -514,7 +526,7 @@ Codex 后端，`LUBAN_CODEX_MODE=cli` 时改走本机 Codex CLI（`codex exec` �
 
 #### 走 Claude Code 的 Messages 接口
 
-网关同时提供 Anthropic Messages：`https://amr-link.open-design.ai/v1/messages`，`x-api-key`
+网关同时提供 Anthropic Messages：`<base_url>/messages`，`x-api-key`
 与 `Authorization: Bearer` 两种鉴权都接受，SSE 事件（`message_start` / `content_block_delta`
 / `message_stop`、`tool_use` 的 `input_json_delta`）与 Claude Code 一致。内置定义已把
 `claude-haiku-5.5` 路由到 Messages（`"api": "anthropic"`），`luban --model
@@ -533,7 +545,7 @@ opendesign/claude-haiku-5.5` 即走该协议；luban 会自动在 `base_url` 后
 }
 ```
 
-Claude Code 本身也能直接指向这个网关：`ANTHROPIC_BASE_URL=https://amr-link.open-design.ai`、
+Claude Code 本身也能直接指向同一个网关：`ANTHROPIC_BASE_URL=<base_url 去掉 /v1>`、
 `ANTHROPIC_AUTH_TOKEN=<key>`。网关未实现 `/v1/messages/count_tokens`（404），依赖 token
 统计的功能会缺数据。
 
@@ -1135,7 +1147,7 @@ WantedBy=default.target
 
 公网中继可以部署在你自己的服务器上。下面是一个不含私有信息的示例：把主机名、证书路径和令牌按你的环境替换即可。
 
-中继自身的部署（目录、systemd 单元、证书、升级回滚）见 [relay-deploy.md](relay-deploy.md)。服务器运行中继；每个电脑端 TUI 自己开启一个 loopback Web 服务并主动连接中继，退出该 TUI 时它的服务和隧道一起结束。把设置写入 `~/.luban/config.json`，凭据单独放在权限为 `600` 的 `~/.config/luban/relay.env`：
+中继自身的部署（目录、systemd 单元、证书、升级回滚）见 [relay.md](relay.md)。服务器运行中继；每个电脑端 TUI 自己开启一个 loopback Web 服务并主动连接中继，退出该 TUI 时它的服务和隧道一起结束。把设置写入 `~/.luban/config.json`，凭据单独放在权限为 `600` 的 `~/.config/luban/relay.env`：
 
 ```json
 {

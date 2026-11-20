@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 把一套已经在跑的 luban relay 挂到 Cloudflare 隧道后面：源站 IP 不出现在任何
-# DNS 记录里，也不需要域名备案。线路与取舍见 docs/relay-domain.md。
+# DNS 记录里，也不需要域名备案。线路与取舍见 docs/relay.md。
 #
 # 前置（这套脚本不代做，因为都要你的账号）：
-#   1. 有一个域名，并已托管在 Cloudflare（免费域名清单见 docs/relay-domain.md）。
+#   1. 有一个域名，并已托管在 Cloudflare（免费域名清单见 docs/relay.md）。
 #   2. Cloudflare Zero Trust → Networks → Tunnels → Create a tunnel（Cloudflared），
 #      复制它给出的 token；在 Public Hostname 里加一条：
 #        subdomain/domain = relay.example.com

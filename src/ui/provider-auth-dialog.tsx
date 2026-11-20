@@ -11,7 +11,9 @@ import { theme } from "./theme.js";
 const KEY_URLS: Record<string, string> = {
   "opencode-go": "https://opencode.ai/auth", "opencode-zen": "https://opencode.ai/auth",
   deepseek: "https://platform.deepseek.com/api_keys", dashscope: "https://bailian.console.aliyun.com/",
-  opendesign: "https://open-design.ai/", anthropic: "https://console.anthropic.com/settings/keys",
+  // opendesign is deliberately absent: its endpoint is the operator's own
+  // gateway, so there is no public key console to open.
+  anthropic: "https://console.anthropic.com/settings/keys",
   openai: "https://platform.openai.com/api-keys",
 };
 

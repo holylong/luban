@@ -699,9 +699,12 @@ describe("config", () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opencode-none-"));
     process.env.LUBAN_HOME = home;
     const config = loadConfig({ workspace: home });
-    for (const provider of ["codex", "opendesign", "opencode-go", "opencode-zen", "deepseek", "dashscope", "qwen-local", "strata-local"]) {
+    for (const provider of ["codex", "opencode-go", "opencode-zen", "deepseek", "dashscope", "qwen-local", "strata-local"]) {
       expect(config.models.some(item => item.provider === provider)).toBe(true);
     }
+    // opendesign ships a catalog but no endpoint of its own, so it stays out of
+    // the list until the operator points it at their gateway.
+    expect(config.models.some(item => item.provider === "opendesign")).toBe(false);
     expect(config.model.id).toBe("gpt-4.1-mini");
     expect(config.models.find(item => item.id === "codex/gpt-6.1-terra")?.api).toBe("codex");
     expect(loadConfig({ workspace: home, model: "opencode-go/gpt-6-luna" }).model.api).toBe("responses");
@@ -749,15 +752,23 @@ describe("config", () => {
     expect(config.models[0]?.baseUrl).toBe("https://example.test/v1");
   });
 
-  it("registers the Open Design gateway without shipping a credential", async () => {
+  it("lists the Open Design catalog only once a gateway is configured", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-opendesign-"));
     const workspace = join(home, "project");
     await mkdir(workspace);
     process.env.LUBAN_HOME = home;
+    // No endpoint ships with the source, so the catalog stays out of the list and
+    // the active model falls back instead of calling api.openai.com.
+    const bare = loadConfig({ workspace, model: "opendesign/deepseek-v4.1-flash" });
+    expect(bare.models.some(item => item.provider === "opendesign")).toBe(false);
+    expect(bare.model.id).toBe("gpt-4.1-mini");
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { opendesign: { base_url: "https://gateway.example.test/v1" } },
+    }));
     const config = loadConfig({ workspace, model: "opendesign/deepseek-v4.1-flash" });
     expect(config.model).toMatchObject({
       id: "opendesign/deepseek-v4.1-flash",
-      baseUrl: "https://amr-link.open-design.ai/v1",
+      baseUrl: "https://gateway.example.test/v1",
       api: "openai",
       apiKey: "",
     });
@@ -788,6 +799,9 @@ describe("config", () => {
     const workspace = join(home, "project");
     await mkdir(workspace);
     process.env.LUBAN_HOME = home;
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      providers: { opendesign: { base_url: "https://gateway.example.test/v1" } },
+    }));
     process.env.OPEN_DESIGN_API_KEY = "sk-env-design";
     try {
       expect(loadConfig({ workspace, model: "opendesign/deepseek-v4.1-flash" }).model.apiKey).toBe("sk-env-design");
@@ -813,14 +827,14 @@ describe("config", () => {
     process.env.LUBAN_HOME = home;
     await writeFile(join(home, "config.json"), JSON.stringify({
       providers: { opendesign: {
-        base_url: "https://amr-link.open-design.ai/v1",
+        base_url: "https://gateway.example.test/v1",
         models: { "gpt-6-luna": { name: "GPT-6 Luna", api: "responses" } },
       } },
     }));
     const config = loadConfig({ workspace, model: "opendesign/gpt-6-luna" });
     expect(config.model).toMatchObject({
       id: "opendesign/gpt-6-luna",
-      baseUrl: "https://amr-link.open-design.ai/v1",
+      baseUrl: "https://gateway.example.test/v1",
       api: "responses",
     });
     expect(config.model.capabilities.responses).toBe(true);

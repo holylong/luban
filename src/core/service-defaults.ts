@@ -9,7 +9,7 @@
  * `LUBAN_USAGE_STATS_URL`.
  *
  * Keep `scripts/setup-relay-tunnel.sh`, `docs/reference.md`,
- * `docs/relay-domain.md` and the Android `MainActivity.DEFAULT_SERVER` in sync
+ * `docs/relay.md` and the Android `MainActivity.DEFAULT_SERVER` in sync
  * when the tunnels are recreated.
  */
 export const DEFAULT_RELAY_URL = "https://thickness-oxygen-life-resistant.trycloudflare.com";
