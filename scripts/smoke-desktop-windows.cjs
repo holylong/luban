@@ -51,6 +51,9 @@ function createElectron() {
     getURL() { return this.url; }
     setWindowOpenHandler() {}
     send(channel, payload) { this.sent.push({ channel, payload }); }
+    // The liveness ping asks the renderer for a "1" every 10s. The stub has no
+    // renderer to hang, so it answers immediately.
+    executeJavaScript() { return Promise.resolve(1); }
   }
 
   class BrowserWindow extends EventEmitter {

@@ -35,6 +35,9 @@ function createSession() {
     dirty: false,
     approvedUnload: false,
     opening: false,
+    recovering: false,
+    rebuilding: false,
+    livenessTimer: undefined,
   };
 }
 
@@ -285,6 +288,18 @@ function createPet() {
   pet.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   pet.webContents.on('will-navigate', event => event.preventDefault());
   pet.webContents.on('will-redirect', event => event.preventDefault());
+  // The pet is a window like any other: a dead renderer would leave a black
+  // 330×480 rectangle floating above every other app.
+  pet.webContents.on('render-process-gone', () => {
+    if (quitting) return;
+    const action = recovery.rendererGone("pet");
+    logDesktop(`pet renderer gone → ${action}`);
+    try { pet?.destroy(); } catch { /* already gone */ }
+    // A pet that dies three times in a row is not worth another black box
+    // floating over the screen; leave it closed and keep the workbench alive.
+    if (action === "relaunch-app") return;
+    setTimeout(() => { if (!quitting && petPreference()) createPet(); }, 500);
+  });
   pet.on('closed', () => { pet = undefined; announcePet(); });
   pet.on('show', () => announcePet());
   pet.on('hide', () => announcePet());
@@ -364,9 +379,38 @@ const { MEDIA_SCHEME, mediaResponse } = require("./media.cjs");
 protocol.registerSchemesAsPrivileged([{ scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
-const { existsSync, readFileSync, statSync, writeFileSync } = require("node:fs");
+const { appendFileSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } = require("node:fs");
 const { homedir } = require("node:os");
 const { basename, dirname, join, resolve } = require("node:path");
+const { createRecoveryPolicy } = require("./window-recovery.cjs");
+
+// A dead renderer leaves the window painting nothing but its own background, so
+// recovery has to rebuild the BrowserWindow; the policy decides when rebuilding
+// is pointless and the app (or hardware acceleration) has to go instead.
+const recovery = createRecoveryPolicy();
+
+// Everything the app remembers lives under userData; the crash log sits next to
+// it so a black board can be explained afterwards instead of guessed at.
+const stateDir = (() => { try { return app.getPath("userData"); } catch { return undefined; } })();
+const noGpuFlag = stateDir ? join(stateDir, "no-gpu") : undefined;
+function logDesktop(message) {
+  if (!stateDir) return;
+  try {
+    const file = join(stateDir, "desktop.log");
+    try { if (statSync(file).size > 512 * 1024) renameSync(file, `${file}.1`); } catch { /* first write, or a log we may not touch */ }
+    appendFileSync(file, `${new Date().toISOString()} ${message}\n`);
+  } catch { /* logging must never break the window it describes */ }
+}
+// A wedged Metal context on macOS keeps every new window black, and reloading
+// never repairs it: the second GPU crash restarts with the software compositor.
+// `luban --luban-gpu` clears the flag once the driver is fixed.
+if (noGpuFlag && existsSync(noGpuFlag)) {
+  if (process.argv.includes("--luban-gpu")) { try { rmSync(noGpuFlag, { force: true }); } catch { /* keep going accelerated */ } }
+  else {
+    app.disableHardwareAcceleration();
+    logDesktop("hardware acceleration disabled after repeated GPU crashes (run with --luban-gpu to retry)");
+  }
+}
 
 const cli = process.env.LUBAN_CLI || resolve(__dirname, "../../dist/cli.js");
 const node = process.env.LUBAN_NODE_BIN || "node";
@@ -646,7 +690,12 @@ function installWindowGuards(session) {
     if (session.webContentsId) sessions.delete(session.webContentsId);
     session.webContentsId = undefined;
     session.window = undefined;
+    if (session.livenessTimer) { clearInterval(session.livenessTimer); session.livenessTimer = undefined; }
     session.dirty = false;
+    // A crash rebuild destroys the window on purpose: the backend and the
+    // workspace service have to survive it, or the new window opens empty and
+    // the running conversation is gone.
+    if (session.recovering) { updateTray(); return; }
     stopWorkspace(session);
     stopBackend(session);
     if (lastSession === session) lastSession = undefined;
@@ -676,7 +725,98 @@ function installWindowGuards(session) {
       session.workspaceService = createWorkspace(session.workspace, event => emitCommand(session, event));
     }
   });
-  win.webContents.on("render-process-gone", () => { session.dirty = false; stopWorkspace(session); });
+  win.webContents.on("render-process-gone", (_event, details) => {
+    session.dirty = false;
+    reportCrash(session, "renderer", `${details?.reason ?? "gone"} (exit ${details?.exitCode ?? "?"})`);
+  });
+  startLivenessWatch(session);
+}
+/**
+ * A renderer that stops answering looks the same as a dead one from the
+ * outside: frozen window, no repaint. Chromium's own `unresponsive` event only
+ * fires for a window it considers interactive, so the main process pings its own
+ * renderer instead — a `1` every 10s, and a rebuild when one ping goes unanswered
+ * for 15s. The backend holds the conversation, so a rebuild loses nothing.
+ */
+function startLivenessWatch(session) {
+  if (session.livenessTimer) clearInterval(session.livenessTimer);
+  let pendingSince = 0;
+  const timer = setInterval(() => {
+    const win = session.window;
+    if (quitting || session.rebuilding || !win || win.isDestroyed()) return;
+    if (pendingSince) {
+      if (Date.now() - pendingSince < 15000) return;
+      pendingSince = 0;
+      reportCrash(session, "unresponsive", "a ping went unanswered for 15s");
+      return;
+    }
+    pendingSince = Date.now();
+    // Settling either way means the renderer is alive enough to answer; only
+    // silence counts as a wedge, so a rejected call must not look like one.
+    win.webContents.executeJavaScript("1", true)
+      .then(() => { pendingSince = 0; }, () => { pendingSince = 0; });
+  }, 10000);
+  timer.unref?.();
+  session.livenessTimer = timer;
+}
+/** One crash, routed through the policy that decides between rebuild and restart. */
+function reportCrash(session, kind, detail) {
+  if (quitting) return;
+  const action = kind === "unresponsive" ? recovery.unresponsive(session.key) : recovery.rendererGone(session.key);
+  logDesktop(`window ${session.key}: ${kind} gone — ${detail} (${recovery.count(session.key, kind)} in 5 min) → ${action}`);
+  if (action === "relaunch-app") { relaunchApp(); return; }
+  // Destroying the window from inside its own crash handler is not safe, so the
+  // rebuild runs on the next turn of the loop.
+  setTimeout(() => { void rebuildWindow(session, `${kind} gone`); }, 0);
+}
+/**
+ * The "close it and open it again" the user had to do by hand: build a new
+ * BrowserWindow around the same backend, workspace service and token.
+ */
+async function rebuildWindow(session, reason) {
+  if (quitting || session.rebuilding || session.opening) return;
+  session.rebuilding = true;
+  session.recovering = true;
+  try {
+    const access = session.backendAccess;
+    const old = session.window;
+    if (old && !old.isDestroyed()) old.destroy();
+    session.window = undefined;
+    if (!access || !session.workspaceService) {
+      // Nothing worth restoring in place (the window died before its project
+      // loaded): reopen the last project the ordinary way.
+      session.recovering = false;
+      if (lastSession === session) lastSession = undefined;
+      logDesktop(`window ${session.key}: no live backend, reopening the last project after ${reason}`);
+      session.rebuilding = false;
+      await openWorkspaceWindow(savedWorkspace() || homedir());
+      return;
+    }
+    const win = ensureWindow(session);
+    setWorkspaceWindowTitle(session);
+    updateTray();
+    session.approvedUnload = true;
+    await win.loadURL(`${access.url}?desktop=1&token=${encodeURIComponent(access.token)}`);
+    win.show();
+    logDesktop(`window ${session.key}: rebuilt after ${reason}`);
+  } catch (error) {
+    logDesktop(`window ${session.key}: rebuild failed — ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    session.approvedUnload = false;
+    session.recovering = false;
+    session.rebuilding = false;
+  }
+}
+/** Restart the whole app, optionally with hardware acceleration turned off. */
+function relaunchApp({ withoutGpu = false } = {}) {
+  if (quitting) return;
+  quitting = true;
+  try {
+    if (withoutGpu && noGpuFlag) writeFileSync(noGpuFlag, new Date().toISOString());
+    logDesktop(withoutGpu ? "restart without hardware acceleration" : "restart after repeated renderer crashes");
+  } catch { /* the restart matters more than the note about it */ }
+  app.relaunch();
+  app.exit(0);
 }
 function setWorkspaceWindowTitle(session) {
   const win = session.window;
@@ -702,6 +842,10 @@ function ensureWindow(session) {
   // Protocol handlers are session-scoped. These windows deliberately use private
   // partitions, so registering on Electron's default protocol does not reach
   // PDF embeds (or any other workspace media) in this window.
+  // A rebuilt window reuses this window's partition, which already carries the
+  // handler from the window that crashed: registering twice throws and would
+  // abort the rebuild, leaving the black board in place.
+  try { win.webContents.session.protocol.unhandle(MEDIA_SCHEME); } catch { /* first window for this partition */ }
   win.webContents.session.protocol.handle(MEDIA_SCHEME, request => {
     if (!session.workspaceService) return new Response("工作区尚未就绪", { status: 503 });
     try { return mediaResponse(session.workspaceService, request); }
@@ -859,6 +1003,19 @@ app.on('before-quit', event => {
   child.kill('SIGTERM');
 });
 app.on("activate", showMain);
+// A GPU process that dies takes the compositor with it: every window keeps
+// painting its background colour and reloads do not repair the surface. Rebuild
+// the windows once; the second GPU crash restarts the app without acceleration.
+app.on("child-process-gone", (_event, details) => {
+  if (quitting || details?.type !== "GPU") return;
+  const action = recovery.gpuGone();
+  logDesktop(`gpu process gone — ${details.reason ?? "unknown"} (exit ${details.exitCode ?? "?"}) → ${action}`);
+  if (action === "relaunch-without-gpu") { relaunchApp({ withoutGpu: true }); return; }
+  for (const session of sessions.values()) {
+    if (!session.window || session.window.isDestroyed()) continue;
+    setTimeout(() => { void rebuildWindow(session, "gpu process gone"); }, 200);
+  }
+});
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   if (glowServer) { glowServer.close(); glowServer = undefined; }

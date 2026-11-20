@@ -1,3 +1,18 @@
+## 2.7.10 — 2026-11-20
+
+- 修桌面端「干着干着活变成黑板、只能关了重开」：`render-process-gone` 过去只停掉工作区服务，窗口留在自己的 `#050607` 背景色上再也不重绘。现在主进程用同一个后端、工作区服务与令牌重建窗口（`apps/desktop/main.cjs`），重建时跳过 `closed` 里的后端拆除，并先 `protocol.unhandle('luban-media')`——同一分区重复注册会抛错，正是第一次重建失败的原因。
+- 新增渲染进程卡死检测：主进程每 10 秒 ping 一个 `1`，15 秒无回应按同一路径重建；Chromium 的 `unresponsive` 事件在真机上不保证触发，所以自己数。
+- 升级路径：同一窗口 5 分钟内崩 3 次（或卡死 3 次）重启应用；GPU 进程崩两次则重启时 `disableHardwareAcceleration()` 并写 `<userData>/no-gpu`，`--luban-gpu` 清除。判定与原因写入 `<userData>/desktop.log`（512 KB 轮转）。策略抽到 `apps/desktop/window-recovery.cjs` 并配 7 例单测。
+- 桌宠窗口同样重建，连续崩三次则不再重建（否则屏幕上多一个黑框）。
+- 验证：`npm run probe:desktop:recovery` 在真 Electron 里用 CDP `Page.crash` 与死循环复现，修复前 46 s 仍是黑板，修复后崩溃 0.2 s 内重建、卡死 ~15 s 内重建，且 `no-gpu` 标记被采纳；`npm run smoke:desktop` 回归通过。
+
+## 2.7.9 — 2026-11-20
+
+- 删除仓库里两张终端截图 `docs/luban.jpg`（README 主图）与 `docs/luban.png`（未被引用）：截图会随界面改版过期，也带着当时的个人路径与配色。
+- README 重排：居中 logo + 一句话定位 + 锚点导航行；亮点、桌面工作台改成两列表格；`bot run` / `bot add`、发布命令单独成代码块；交互日志配置给出 JSON 片段。
+- 去掉过期的「**v2.0.0** 汇集…」宣传段，版本变化统一指向 `CHANGELOG.md`。
+- 只动文档与仓库里的图片：没有代码或行为变化。
+
 ## 2.7.8 — 2026-11-20
 
 - 远端同步补齐：11 个版本标签强推覆盖成重写后的对象，删除遗留的 `refs/notes/release-status`（它仍指向重写前的旧提交，会让旧历史一直可检出）。
