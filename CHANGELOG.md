@@ -1,3 +1,9 @@
+## 2.8.3 — 2026-11-20
+
+- GitHub Actions 的 `verify` 剩下的红是环境差异不是断言差异：runner 会导出 `CI=true`，Ink 通过 `is-in-ci` 读到它后**根本不重绘主画面**（`onRender` 里直接 return，只在 unmount 时写最后一帧），所以所有基于「当前这一帧」的 TUI 断言在 CI 里拿到的是空字符串 —— `app-draft-undo.test.tsx` 7 例全红，「Matcher did not succeed in time / expected '' to contain 'previous answer'」。
+- 新增 `src/test-setup.ts` 并在 `vitest.config.ts` 里作为 `setupFiles` 注册：在测试文件导入 `ink` 之前删掉 `CI` / `CONTINUOUS_INTEGRATION`（`is-in-ci` 是在首次 import 时快照 env 的，晚删无效）。这些 TUI 测试本来就给 Ink 传假 TTY、用按键驱动，要的就是交互式渲染路径；真实 CLI 在 CI 里的行为不受影响。
+- 验证：与 runner 同构的 Linux（2 核、node 22.20.0、装了 zip、非 `/tmp` 检出、`CI=true TZ=UTC`）整套 `vitest run --retry=2`：226 文件通过 / 2 跳过、1631 passed / 14 skipped、0 failed；本机 `CI=true npx vitest run src/ui/app-draft-undo.test.tsx` 由 0/7 变 7/7。
+
 ## 2.8.2 — 2026-11-20
 
 - `src/core/update.test.ts` 里两例安装用例要用系统 `zip` 命令造归档，缺这个命令的环境（精简容器、Windows 开发机）会以未捕获的 `spawn zip ENOENT` 挂住 40s 再报超时。改成用 `spawnSync("zip", ["-v"])` 探测，缺失时 `it.skipIf` 跳过；GitHub runner 与装了 zip 的机器行为不变。
