@@ -69,7 +69,12 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
       if (request === opening.current) { setActive(path); setError(""); }
     } catch (cause) { setError(desktopErrorText(cause, path)); }
   };
-  useEffect(() => { if (store.file?.path) void open(store.file.path); }, [store.file?.path]); // Each selected file is loaded once, never over a dirty buffer.
+  // Keyed on the request counter, not the path: reopening the file whose tab was
+  // just closed is a new request for an unchanged path, and a path-only
+  // dependency swallowed it — the file stayed shut until some other file was
+  // opened first. `open` still refuses to reload a buffer that is already there,
+  // so requesting an open file only refocuses its tab and never clobbers edits.
+  useEffect(() => { if (store.file?.path) void open(store.file.path); }, [store.fileRequest]);
   useLayoutEffect(() => { bridge?.setDirty(dirty); }, [bridge, dirty]);
 
   const save = async (): Promise<void> => {

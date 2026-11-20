@@ -1,3 +1,17 @@
+## 2.7.15 — 2026-11-20
+
+- 开源准备：新增 [MIT `LICENSE`](LICENSE)（`Copyright (c) 2026 luban contributors`），`package.json` 补上 `license`、`author`、`repository`、`homepage`、`bugs`、`keywords`。此前仓库没有任何许可证，默认等于「保留所有权利」，别人即使拿到代码也没有使用与分发的许可。
+- README 新增「数据与隐私」：使用统计默认开启并上报到项目自建服务，写清上报字段（安装数、输入/输出 token、运行次数、按模型拆分、版本、平台、随机 `installId`）与**不上报**的内容（提示词、回复、文件路径、命令、密钥），以及 `usage_stats.enabled: false` / `LUBAN_USAGE_STATS=off` 关掉、`usage_stats.url` / `LUBAN_USAGE_STATS_URL` 换地址、`luban stats` 查本地账本；同时说明手机远控的中继只转发 HTTP 与 SSE、不保存对话，但 TLS 在中继处终结，运维方在链路上仍可能接触内容，可自行托管（`docs/relay.md`）；模型请求直达用户配置的 provider，升级检查走同一个统计服务并可用 `updates.check: false` 关闭。
+- README 新增「许可」一节（MIT；第三方依赖与桌面包内的 Electron / Chromium 各自保留其许可证），顶部锚点导航同步。
+- `docs/release.md` 里把本机绝对路径的说法改成「`luban-server` 仓库与 luban 检出在同一层目录」。
+- 验证：`npm pkg get license author repository homepage bugs`；README 相对链接与页内锚点逐条校验；`npm pack --dry-run` 确认 tarball 自动带上 `LICENSE`；`npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.client.json --noEmit && npm run build`；`git grep` 复查全仓库已无个人路径、内网/公网 IP 与主机名（只剩 `docs/opensource-checklist.md` 里那条示例 grep 模式）。
+
+## 2.7.14 — 2026-11-20
+
+- 修桌面端「关掉标签后再点同一个文件打不开，得先点别的文件再点回来」：文件树的点击只是把路径写进 `store.file`，而编辑器用 `[store.file?.path]` 当加载依赖——同一个路径第二次点击时依赖没变，加载不会重跑，标签就再也回不来。现在 `openFile` 每次都把 `fileRequest` 加一（`src/web/client/store.ts`），编辑器按这个序号加载：关掉标签后点同一个文件会真的重新读盘，而已经打开的缓冲只会切到它的标签、不会被重读覆盖（未保存的修改不会被冲掉）。
+- 新增 `npm run probe:desktop:editor`（`scripts/probe-desktop-editor.cjs`）：在真 Electron 窗口里点开 `alpha.txt` → 按标签上的 × 关掉（回到欢迎页）→ 再点同一个文件必须重新出现标签与内容 → 同一文件连点两次不能开出两个标签 → 关掉当前标签要切到剩下的那个，并且它还能再次打开。把依赖改回 `[store.file?.path]` 复跑，探针稳定停在「关掉后再点同一个文件打不开（需要先点别的文件）」，与用户报的现象一致。
+- 验证：`npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.client.json --noEmit`；`npm run build`（2.7.14）；`npx vitest run src/web/client` 全部通过；`npm run probe:desktop:editor` 修复后 `open / closed / reopen / switch / final` 五步全绿，红跑见上条。
+
 ## 2.7.13 — 2026-11-20
 
 - 新增自动升级：`src/core/update.ts` 是唯一一份检查/下载/替换实现，终端、网页工作台、桌面应用、造物主共用。启动时检测一次（`updates.check`，默认开），有新版才提示，选「稍后」本次不动、选「不再提醒」把版本号写进 `updates.skipped_version`，手动检查仍然会显示它。

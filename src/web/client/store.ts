@@ -46,6 +46,13 @@ export interface WorkbenchStore {
   tree: FileEntry[];
   treePath: string;
   file?: FileContent;
+  /**
+   * Counts every `openFile` call. A path alone cannot separate two clicks on the
+   * same file, so the editor keys its loader on this number instead: a file
+   * whose tab was just closed must load again, while unrelated re-renders must
+   * not reload the buffer.
+   */
+  fileRequest: number;
   fileError?: string;
   diff?: DiffPayload;
   session?: SessionDetail;
@@ -102,6 +109,7 @@ export function useWorkbench(): WorkbenchStore {
   const [tree, setTree] = useState<FileEntry[]>([]);
   const [treePath, setTreePath] = useState("");
   const [file, setFile] = useState<FileContent>();
+  const [fileRequest, setFileRequest] = useState(0);
   const [fileError, setFileError] = useState<string>();
   const [diff, setDiff] = useState<DiffPayload>();
   const [session, setSession] = useState<SessionDetail>();
@@ -239,7 +247,12 @@ export function useWorkbench(): WorkbenchStore {
     if (!project) return;
     setPreviewTab("files");
     setFileError(undefined);
-    try { setFile(await api.file(project, path)); }
+    try {
+      setFile(await api.file(project, path));
+      // Bump only after the payload is in hand, so the editor's loader sees a
+      // request number together with the file it belongs to.
+      setFileRequest(count => count + 1);
+    }
     catch (error) {
       setFile(undefined);
       setFileError(error instanceof Error ? error.message : String(error));
@@ -507,13 +520,13 @@ export function useWorkbench(): WorkbenchStore {
 
   return useMemo<WorkbenchStore>(() => ({
     node, connected, connectionError, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
-    project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy, queued,
+    project, mode, sideTab, previewTab, tree, treePath, file, fileRequest, fileError, diff, session, busy, queued,
     notify, dismiss, selectJob, startNew, submit, clearQueue, cancel, resume, decide, answerQuestion,
     setProject, setModel, setMode, setSideTab, setPreviewTab, browse, openFile, openSession, leaveSession,
     refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   }), [
     node, connected, connectionError, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
-    project, mode, sideTab, previewTab, tree, treePath, file, fileError, diff, session, busy, queued,
+    project, mode, sideTab, previewTab, tree, treePath, file, fileRequest, fileError, diff, session, busy, queued,
     notify, dismiss, selectJob, startNew, submit, clearQueue, cancel, resume, decide, answerQuestion,
     setProject, setModel, browse, openFile, openSession, leaveSession, refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   ]);

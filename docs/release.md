@@ -58,7 +58,7 @@ Linux 输出 CLI/Desktop `.deb`；macOS 输出 CLI `.zip`、Desktop `.dmg`、造
 
 打包和发布是两步：`npm run release` 只在本地产出文件，`npm run publish:release` 才把它们交给所有客户端。
 
-升级服务就是统计服务（`/Users/lulu/Documents/luban-server`），同一台机器两个接口：
+升级服务就是统计服务（`luban-server` 仓库，通常与 luban 检出在同一层目录），同一台机器两个接口：
 
 | 接口 | 作用 |
 | --- | --- |

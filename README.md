@@ -6,7 +6,7 @@
 
 终端 · 桌面 · 浏览器 · 手机 —— 同一份项目、同一套会话
 
-[安装](#安装) · [快速开始](#快速开始) · [常驻-bot](#常驻-bot) · [桌面工作台](#桌面工作台) · [配置模型](#配置模型) · [详细参考](docs/reference.md)
+[安装](#安装) · [快速开始](#快速开始) · [常驻-bot](#常驻-bot) · [桌面工作台](#桌面工作台) · [配置模型](#配置模型) · [数据与隐私](#数据与隐私) · [详细参考](docs/reference.md)
 
 </div>
 
@@ -100,6 +100,15 @@ macOS 登录后自动启动与权限边界见 [Bot 使用指南](bot.md)。
 
 协议切换、额度与重连等细节见 [详细参考](docs/reference.md#配置)。
 
+## 数据与隐私
+
+- **使用统计默认开启**，上报到本项目自建的统计服务（`https://submitting-reseller-trustee-fairy.trycloudflare.com/api/report`），不经过任何第三方分析平台。内容是：安装数、输入/输出 token、运行次数、按 `provider/model` 的拆分、客户端版本、平台，以及安装目录首次使用时随机生成的 `installId`（与硬件、账号、邮箱无关）。**不含**提示词、模型回复、文件路径、命令、密钥。
+- 服务端只用来源 IP 做限流与城市级粗略地区解析，不保存请求内容；请求体约 200 字节，默认 15 分钟最多一次，空闲时不发。
+- 关掉或改地址：`~/.luban/config.json` 的 `usage_stats.enabled: false`，或环境变量 `LUBAN_USAGE_STATS=off`（账本仍记在本地，但不发请求）；`usage_stats.url` / `LUBAN_USAGE_STATS_URL` 可指向自建服务，服务端见 [luban-server](https://github.com/holylong/luban-server)。`luban stats` 随时查看本地账本与生效地址，细节见[使用统计](docs/usage-stats.md)。
+- **手机远控走本项目的中继**（`https://thickness-oxygen-life-resistant.trycloudflare.com`）：设备令牌由本机生成，中继只转发 HTTP 与 SSE、不保存对话；TLS 在中继处终结，所以运维方在链路上仍可能接触到内容。想完全自己托管见[中继部署](docs/relay.md)，地址可用 `remote.relay_url` 或 `LUBAN_RELAY_PUBLIC_URL` 覆盖。
+- 模型请求从本机直接发给你配置的 provider，不经过上面两个服务；原始交互日志默认关闭，只写本地（见下一节）。
+- 自动升级检查请求同一个服务的 `/api/update`，可用 `updates.check: false` 或 `LUBAN_NO_UPDATE_CHECK=1` 关闭。
+
 ## 原始模型交互日志
 
 排查模型行为时用，默认关闭：
@@ -126,3 +135,7 @@ npm run release -- --dry-run        # 预览而不构建
 ## 更多
 
 局域网协作、手机远控、皮肤与加载宠物、日报周报、MCP 与编辑器接入、安全边界、开发验证，见 [详细参考](docs/reference.md)。版本变化与升级说明见 [版本记录](CHANGELOG.md)。
+
+## 许可
+
+[MIT](LICENSE)。第三方依赖各自保留原许可证，随包分发的主要是 MIT / ISC / Apache-2.0 / BSD；桌面版与 Creator 安装包内还包含 Electron 与 Chromium，按它们各自的许可证分发。

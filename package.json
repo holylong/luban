@@ -1,7 +1,25 @@
 {
   "name": "luban",
-  "version": "2.7.13",
+  "version": "2.7.15",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
+  "license": "MIT",
+  "author": "luban contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holylong/luban.git"
+  },
+  "homepage": "https://github.com/holylong/luban#readme",
+  "bugs": {
+    "url": "https://github.com/holylong/luban/issues"
+  },
+  "keywords": [
+    "agent",
+    "coding-agent",
+    "tui",
+    "cli",
+    "mesh",
+    "llm"
+  ],
   "type": "module",
   "bin": {
     "luban": "dist/cli.js"
@@ -32,6 +50,7 @@
     "smoke:desktop": "npm run build && node scripts/smoke-desktop-windows.cjs",
     "probe:desktop:terminal": "node scripts/desktop-terminal-probe.cjs",
     "probe:desktop:recovery": "node scripts/probe-desktop-recovery.cjs",
+    "probe:desktop:editor": "node scripts/probe-desktop-editor.cjs",
     "smoke:creator": "node scripts/smoke-creator.mjs",
     "smoke:creator:blank": "node scripts/smoke-creator-blank.mjs",
     "smoke:creator:drive": "node scripts/smoke-creator-drive.mjs",

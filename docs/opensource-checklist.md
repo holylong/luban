@@ -3,6 +3,17 @@
 把仓库从私有转公开之前按这份清单走一遍。这里**只写检查项和命令，不记录任何具体地址、
 账号、家目录或内网路径**——清单本身也会被公开，写进去就等于又泄露一次。
 
+## 现状（2.7.15）
+
+- §1–§3 已在本仓库跑过通过：工作树与历史都没有凭据、真实公网/内网 IP、主机名或个人家目录，
+  `dist/`、`release/`、Android `build/`、`local.properties` 均未入库。
+- §4 已完成：根目录 `LICENSE`（MIT，`Copyright (c) 2026 luban contributors`），`package.json`
+  的 `license`、`author`、`repository`、`homepage`、`bugs`、`keywords` 已补齐，README 有「许可」一节。
+- §5 已决定：默认上报与中继继续使用项目自建地址（用户可直接用这两个服务），并在 README
+  「数据与隐私」写明上报字段、关闭开关（`usage_stats.enabled: false` / `LUBAN_USAGE_STATS=off`）
+  与自托管入口。
+- 未做，发布前定：GitHub 仓库公开时机、`SECURITY.md` / `CONTRIBUTING.md`、打包产物附第三方 NOTICE。
+
 ## 1. 凭据与端点
 
 ```bash
