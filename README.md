@@ -6,7 +6,7 @@
 
 终端 · 桌面 · 浏览器 · 手机 —— 同一份项目、同一套会话
 
-[安装](#安装) · [快速开始](#快速开始) · [常驻-bot](#常驻-bot) · [桌面工作台](#桌面工作台) · [配置模型](#配置模型) · [数据与隐私](#数据与隐私) · [详细参考](docs/reference.md)
+[安装](#安装) · [快速开始](#快速开始) · [常驻-bot](#常驻-bot) · [桌面工作台](#桌面工作台) · [配置模型](#配置模型) · [详细参考](docs/reference.md)
 
 </div>
 
@@ -89,37 +89,22 @@ macOS 登录后自动启动与权限边界见 [Bot 使用指南](bot.md)。
 
 ## 配置模型
 
-- 内置 provider：codex、opendesign（自带模型表，需自填 `base_url`）、opencode-go / zen、deepseek、dashscope，以及本地 Qwen / Strata。
-- 首次启动且 `~/.luban/config.json` 不存在时，会自动写入一份可移植的默认配置：保留端口、超时、上下文、同步忽略、worker/step 上限与自动批准编辑，不包含任何 API Key、内网节点、私有网关或 relay 地址。已有配置不会被改写；删除 `config.json` 可在下次启动重新生成。
-- 默认模型是免密的 `opencode-zen/deepseek-v4.1-flash-free`，新安装无需先配置 Key 即可对话；要换成自己的模型，用 `/models` 选择（选中 provider 后按 `Ctrl+A` 可设置或登录）。
-- 在终端（含桌面内嵌终端）执行 `/models`，选中 provider 或进入其模型列表后按 `Ctrl+A` 配置鉴权：`K` 遮罩输入/更新 API Key，`D` 删除已保存 Key（需确认），`O` 打开支持的服务商密钥控制台。Codex 用 `L` 启动官方 CLI 设备码登录，按提示在浏览器授权；需要预先安装 `@openai/codex`。
-- Key 保存到 `~/.luban/provider-auth.json`（或 `LUBAN_HOME`），是本地明文，Unix 文件权限为 `0600`，不进入项目配置、输入历史或会话。保存后立即应用于该 provider 的所有模型，无需重启；优先于配置/环境变量，删除后恢复原来源。任务运行中需先等任务完成才能修改。当前独立 Web 模型选择器没有此鉴权面板。
-- Open Design 先把自己的网关写进 `providers.opendesign.base_url`（仓库不附带地址），再设 `OPEN_DESIGN_API_KEY`；OpenCode 设 `OPENCODE_API_KEY` 或 `OPENCODE_ZEN_API_KEY`。
-- 自定义 OpenAI 兼容接口：在 `~/.luban/config.json` 里配置 `base_url`、`api_key_env` 与 `models`，示例见 [config.example.json](config.example.json)。
-- Codex 账号：装好官方 Codex CLI 后运行 `luban login codex`，再选 `codex/default`。
+默认模型免密可用（`opencode-zen/deepseek-v4.1-flash-free`），新装就能对话；换成自己的模型或账号按下面走。终端与桌面内嵌终端里的 `/models` 是同一个入口。
 
-协议切换、额度与重连等细节见 [详细参考](docs/reference.md#配置)。
+| 想做的事 | 操作 |
+| --- | --- |
+| 换模型 | `/models` 选择；支持原生推理强度的模型会多出档位 |
+| 配 API Key | `/models` 里选中 provider 按 `Ctrl+A`：`K` 输入、`D` 删除、`O` 打开服务商密钥控制台 |
+| 用 Codex 账号 | 先装 `@openai/codex`，在 `/models` 里按 `L` 走设备码登录，再选 `codex/default` |
+| 接自己的 OpenAI 兼容接口 | `~/.luban/config.json` 里写 `base_url`、`api_key_env`、`models`，示例见 [config.example.json](config.example.json) |
 
-## 数据与隐私
+**内置 provider**：`codex`、`deepseek`、`dashscope`、`opencode-go` / `opencode-zen`、`opendesign`、本地 Qwen / Strata。`opendesign` 自带模型表但仓库不附带网关地址，要先填 `providers.opendesign.base_url` 再设 `OPEN_DESIGN_API_KEY`；OpenCode 用 `OPENCODE_API_KEY` 或 `OPENCODE_ZEN_API_KEY`。
 
-- **使用统计默认开启**，上报到本项目自建的统计服务（`https://submitting-reseller-trustee-fairy.trycloudflare.com/api/report`），不经过任何第三方分析平台。内容是：安装数、输入/输出 token、运行次数、按 `provider/model` 的拆分、客户端版本、平台，以及安装目录首次使用时随机生成的 `installId`（与硬件、账号、邮箱无关）。**不含**提示词、模型回复、文件路径、命令、密钥。
-- 服务端只用来源 IP 做限流与城市级粗略地区解析，不保存请求内容；请求体约 200 字节，默认 15 分钟最多一次，空闲时不发。
-- 关掉或改地址：`~/.luban/config.json` 的 `usage_stats.enabled: false`，或环境变量 `LUBAN_USAGE_STATS=off`（账本仍记在本地，但不发请求）；`usage_stats.url` / `LUBAN_USAGE_STATS_URL` 可指向自建服务，服务端见 [luban-server](https://github.com/holylong/luban-server)。`luban stats` 随时查看本地账本与生效地址，细节见[使用统计](docs/usage-stats.md)。
-- **手机远控走本项目的中继**（`https://thickness-oxygen-life-resistant.trycloudflare.com`）：设备令牌由本机生成，中继只转发 HTTP 与 SSE、不保存对话；TLS 在中继处终结，所以运维方在链路上仍可能接触到内容。想完全自己托管见[中继部署](docs/relay.md)，地址可用 `remote.relay_url` 或 `LUBAN_RELAY_PUBLIC_URL` 覆盖。
-- 模型请求从本机直接发给你配置的 provider，不经过上面两个服务；原始交互日志默认关闭，只写本地（见下一节）。
-- 自动升级检查请求同一个服务的 `/api/update`，可用 `updates.check: false` 或 `LUBAN_NO_UPDATE_CHECK=1` 关闭。
+**Key 存在哪**：`~/.luban/provider-auth.json`（或 `LUBAN_HOME` 下），本地明文、Unix 权限 `0600`，不进项目配置、输入历史与会话。保存后立刻对该 provider 的所有模型生效，优先于配置与环境变量，删除后回退到原来源；任务运行中要等这一轮结束才能改。网页工作台独立打开时的模型选择器没有鉴权面板。
 
-## 原始模型交互日志
+**首次启动**：`~/.luban/config.json` 不存在时会写入一份可移植默认值（端口、超时、上下文、同步忽略、worker/step 上限、自动批准编辑），不含任何 API Key、内网节点、私有网关或 relay 地址；已有配置不会被改写，删掉它下次启动重新生成。
 
-排查模型行为时用，默认关闭：
-
-```json
-{ "interaction_log": { "enabled": true } }
-```
-
-OpenAI、Anthropic 和 Responses HTTP 请求会记录实际发送的 JSON body，以及消费到的流式或非流式响应原始字节（包括原始 usage 字段）。日志位于 `<luban home>/logs/interactions/YYYY-MM-DD.jsonl`，按 UTC 日期分文件；每条带时间、请求 ID、模型、从 0 开始的重试 attempt、HTTP 状态或传输/流错误事件。`body` 是 Base64，按请求 ID 拼接 `response_bytes` 后解码即可查看原始响应。每次重试使用独立请求 ID。
-
-不会记录 URL、请求/响应 headers、认证元数据或错误消息；配置的当前模型 API key 会在 body 中替换为 `[REDACTED]`（跨响应块也会脱敏）。除此之外 body **可能包含完整提示词、工具结果、图片及其他敏感信息**；开启前请确认，日志不会自动上传或清理。目录和文件在 Unix 上分别使用 `0700` / `0600` 权限。只记录应用实际读取的响应字节，不会通过 clone 缓冲整份响应；日志写入失败不影响模型请求。Codex CLI 后端不在此 HTTP 日志范围内。
+协议切换、额度与重连见[详细参考](docs/reference.md#配置)。
 
 ## 打包发布
 

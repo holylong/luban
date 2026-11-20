@@ -9,9 +9,9 @@
   `dist/`、`release/`、Android `build/`、`local.properties` 均未入库。
 - §4 已完成：根目录 `LICENSE`（MIT，`Copyright (c) 2026 luban contributors`），`package.json`
   的 `license`、`author`、`repository`、`homepage`、`bugs`、`keywords` 已补齐，README 有「许可」一节。
-- §5 已决定：默认上报与中继继续使用项目自建地址（用户可直接用这两个服务），并在 README
-  「数据与隐私」写明上报字段、关闭开关（`usage_stats.enabled: false` / `LUBAN_USAGE_STATS=off`）
-  与自托管入口。
+- §5 已决定：默认上报与中继继续使用项目自建地址（用户可直接用这两个服务）。上报字段、关闭
+  开关（`usage_stats.enabled: false` / `LUBAN_USAGE_STATS=off`）与自托管入口写在
+  `docs/usage-stats.md`、`docs/relay.md`，README 不放这些细节。
 - 未做，发布前定：GitHub 仓库公开时机、`SECURITY.md` / `CONTRIBUTING.md`、打包产物附第三方 NOTICE。
 
 ## 1. 凭据与端点

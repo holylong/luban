@@ -75,6 +75,7 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
 - [日常交互](#日常交互)
 - [工作日报、周报、月报与年报](#工作日报周报月报与年报)
 - [运行时的实时反馈](#运行时的实时反馈)
+- [原始模型交互日志（排查用）](#原始模型交互日志排查用)
 - [速度与规划](#速度与规划)
 - [局域网协作](#局域网协作)
   - [远程任务和本地任务一样可见](#远程任务和本地任务一样可见)
@@ -224,7 +225,7 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
 
 ### 集成（MCP / 编辑器 / 兼容）
 
-- 工作区/用户级 `SKILL.md` 技能，以及标准输入输出型 MCP Server 桥接；仓库自带[股票持仓监控场景插件](../plugins/stock-monitor/README.md)。
+- 工作区/用户级 `SKILL.md` 技能，以及标准输入输出型 MCP Server 桥接。
 - stdio 与 Streamable HTTP MCP，支持持久 session、SSE 响应和自定义认证 headers；`mcpMaxTools`/`mcp.lazy` 控制 schema 预算，`mcp_search_tools` 按需检索，`read_image` 报告视觉能力。
 - 编辑器接入：`luban acp` 以 stdio 提供 Agent Client Protocol，配套 VS Code 扩展见 `editors/vscode/`。
 - 可选保留 `--backend`，用于兼容旧的 Python Web API 自动化。
@@ -862,6 +863,22 @@ luban report yearly --date 2026-01-01
 “上次那个 edit 没落盘”。现在客户端会识别这种块，把它还原成真正的工具调用并从正文里去掉，
 `bash` / `edit_file` / `apply_patch` 等照常执行；普通回答不含这种标记时完全不受影响。
 
+## 原始模型交互日志（排查用）
+
+排查模型行为时用，默认关闭：
+
+```json
+{ "interaction_log": { "enabled": true } }
+```
+
+OpenAI、Anthropic 和 Responses HTTP 请求会记录实际发送的 JSON body，以及消费到的流式或非流式响应原始字节（包括原始 usage 字段）。日志位于 `<luban home>/logs/interactions/YYYY-MM-DD.jsonl`，按 UTC 日期分文件；每条带时间、请求 ID、模型、从 0 开始的重试 attempt、HTTP 状态或传输/流错误事件。`body` 是 Base64，按请求 ID 拼接 `response_bytes` 后解码即可查看原始响应。每次重试使用独立请求 ID。
+
+- 不会记录 URL、请求/响应 headers、认证元数据或错误消息；配置的当前模型 API key 会在 body 中替换为 `[REDACTED]`（跨响应块也会脱敏）。
+- 除此之外 body **可能包含完整提示词、工具结果、图片及其他敏感信息**；开启前请确认，日志不会自动上传或清理。
+- 目录和文件在 Unix 上分别使用 `0700` / `0600` 权限。
+- 只记录应用实际读取的响应字节，不会通过 clone 缓冲整份响应；日志写入失败不影响模型请求。
+- Codex CLI 后端不在此 HTTP 日志范围内。
+
 ## 速度与规划
 
 默认不再强制 Agent 先调用 `update_plan`：那是一次完整的模型往返，长任务值得、单步任务纯粹是开销。三种模式：
@@ -1409,7 +1426,6 @@ AGENT/AUTO 默认启用 `model.reconnect`：模型连接断开、空闲超时、
 luban 的“插件”由两部分组合：`SKILL.md` 约束流程，MCP Server 提供工具。
 
 - **技能**：从项目的 `.luban/skills/*/SKILL.md`、`.agents/skills/*/SKILL.md` 和 `~/.luban/skills/*/SKILL.md` 发现，用于把特定场景的分析流程固定下来。
-- **股票持仓监控插件**（`plugins/stock-monitor/`）：用 Skill 约束深套/加减仓分析流程，并用 stdio MCP 接入延迟行情、仓位诊断与自选持仓扫描，可复制安装，用法见[插件说明](../plugins/stock-monitor/README.md)。扫描为主动调用，不是脱离进程的行情推送服务。
 - **编辑器**：`luban acp <workspace>` 通过 stdio 提供 Agent Client Protocol；仓库自带 VS Code 扩展（`editors/vscode/`），可用 `npm run package:vscode` 打包。
 
 ## 安全边界
@@ -1461,6 +1477,5 @@ src/
   web/               HTTP 后台与 API；client/ 为 React + Vite 浏览器工作台
   evals/             脚本化评测集
 scripts/             构建脚本与真实 PTY 冒烟测试
-plugins/             可复制安装的场景插件（SKILL.md + stdio MCP Server）
 editors/             编辑器集成（VS Code 扩展，走 `luban acp`）
 ```

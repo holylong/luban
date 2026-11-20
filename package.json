@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.7.15",
+  "version": "2.7.18",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "license": "MIT",
   "author": "luban contributors",
@@ -31,7 +31,6 @@
     "scripts/patch-ink.mjs",
     "scripts/lib/ink-text-cache.mjs",
     "docs",
-    "plugins",
     "README.md",
     "bot.md"
   ],

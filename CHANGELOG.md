@@ -1,3 +1,22 @@
+## 2.7.18 — 2026-11-20
+
+- 删除 `plugins/stock-monitor/`（4 个文件：`SKILL.md`、`README.md`、`server.mjs`、`analysis.mjs`）和它的 `src/core/stock-plugin.test.ts`。它是一个可复制安装的示例场景（股票持仓监控：延迟行情 + 仓位诊断 + 自选扫描），不属于运行时功能，仓库里也没有任何代码引用它；MCP 桥接本身仍由 `src/core/mcp.test.ts` 覆盖。
+- 同步清掉文档里的三处提及（`docs/reference.md` 的集成小节、插件小节、项目结构树）与 `package.json` `files` 白名单里的 `plugins` 条目，安装包不再带这个空目录。
+- 验证：`npx vitest run src/core/mcp.test.ts`；`npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.client.json --noEmit && npm run build`；README/docs 相对链接与锚点校验（含被删掉的 `../plugins/stock-monitor/README.md` 不再出现）；`git grep stock-monitor` 无残留。
+
+## 2.7.17 — 2026-11-20
+
+- README 去掉「数据与隐私」整节：默认上报、中继、升级检查这些细节本来就写在 `docs/usage-stats.md`、`docs/relay.md`、`docs/reference.md` 里，首页重复一遍反而把安装和用法挤下去。`docs/opensource-checklist.md` 的「现状」同步改成指向那几篇。
+- 「配置模型」重排：原来八条长 bullet 压成一张「想做的事 / 操作」表格（换模型、配 Key、Codex 账号、自建兼容接口），下面三段短的分别说内置 provider、Key 存在哪、首次启动写什么；细节仍指向 [详细参考](docs/reference.md#配置)。
+- README 现在 126 行、9 个小节：亮点 / 安装 / 快速开始 / 常驻 Bot / 桌面工作台 / 配置模型 / 打包发布 / 更多 / 许可。
+- 验证：README 与 docs 的相对链接、页内锚点逐条校验全部通过；`npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.client.json --noEmit && npm run build`。
+
+## 2.7.16 — 2026-11-20
+
+- README 只留「是什么、怎么用、数据去哪了」：`## 原始模型交互日志` 整节（JSON 开关示例 + 两段实现细节）移进 [详细参考](docs/reference.md#原始模型交互日志排查用)，README 的「数据与隐私」里一句话交代「默认关、只写本地」并给出链接。README 由 140 行降到 129 行，十个小节。
+- 移动时顺手把长段落拆成分条（不记录的字段、可能含敏感信息、权限、只记实际读取字节、Codex 后端不在范围内），`docs/reference.md` 目录同步加一条。
+- 验证：README/docs 相对链接与页内锚点逐条校验（含新锚点 `#原始模型交互日志排查用`）；`npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.client.json --noEmit && npm run build`。
+
 ## 2.7.15 — 2026-11-20
 
 - 开源准备：新增 [MIT `LICENSE`](LICENSE)（`Copyright (c) 2026 luban contributors`），`package.json` 补上 `license`、`author`、`repository`、`homepage`、`bugs`、`keywords`。此前仓库没有任何许可证，默认等于「保留所有权利」，别人即使拿到代码也没有使用与分发的许可。
