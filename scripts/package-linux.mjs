@@ -34,7 +34,7 @@ function packageVariant(kind) {
     mkdirSync(app, { recursive: true });
     mkdirSync(bin, { recursive: true });
     cpSync(join(root, "dist"), join(app, "dist"), { recursive: true });
-    cpSync(join(root, "plugins"), join(app, "plugins"), { recursive: true });
+    if (existsSync(join(root, "plugins"))) cpSync(join(root, "plugins"), join(app, "plugins"), { recursive: true });
     mkdirSync(join(app, "scripts", "lib"), { recursive: true });
     copyFileSync(join(root, "scripts", "patch-ink.mjs"), join(app, "scripts", "patch-ink.mjs"));
     copyFileSync(join(root, "scripts", "lib", "ink-text-cache.mjs"), join(app, "scripts", "lib", "ink-text-cache.mjs"));

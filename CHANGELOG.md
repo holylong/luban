@@ -1,3 +1,8 @@
+## 2.7.19 — 2026-11-20
+
+- 修 2.7.18 删掉 `plugins/` 之后打不出安装包：`scripts/package-{macos,linux,windows}.mjs` 里把 `plugins/` 当必选项复制，目录不存在时 `cpSync` 直接 ENOENT，`npm run release` 以 exit 1 结束。现在三处都先判断目录存在再复制（Windows 覆盖层早就是这么写的），没有插件的工作区照常打 cli / desktop / Creator。
+- 验证：`npm run release` 重新出包（2.7.19），三个产物与 SHA256SUMS 齐全；`node --check` 三个打包脚本。
+
 ## 2.7.18 — 2026-11-20
 
 - 删除 `plugins/stock-monitor/`（4 个文件：`SKILL.md`、`README.md`、`server.mjs`、`analysis.mjs`）和它的 `src/core/stock-plugin.test.ts`。它是一个可复制安装的示例场景（股票持仓监控：延迟行情 + 仓位诊断 + 自选扫描），不属于运行时功能，仓库里也没有任何代码引用它；MCP 桥接本身仍由 `src/core/mcp.test.ts` 覆盖。
