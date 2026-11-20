@@ -28,7 +28,11 @@ export interface UpdateArtifact {
   publishedAt: string;
   notes: string;
   file: string;
-  /** Path on the release host (`/downloads/<file>`), not an absolute URL. */
+  /**
+   * Where the bytes are: a path on the release host (`/downloads/<file>`) or an
+   * absolute `https://…` URL. The GitHub Releases mirror publishes absolute
+   * URLs so an upgrade does not depend on the release server staying reachable.
+   */
   url: string;
   sha256: string;
   size: number;
@@ -60,6 +64,8 @@ export interface UpdateCheck {
   artifact?: UpdateArtifact;
   /** Why the check did not produce a version, for `--json` and notices. */
   reason?: string;
+  /** Which host answered: the release server, or the GitHub mirror behind it. */
+  source?: "server" | "github";
 }
 
 export interface CheckOptions {
@@ -73,6 +79,8 @@ export interface CheckOptions {
   arch?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** `owner/repo` of the GitHub mirror; defaults to the public project. */
+  githubRepo?: string;
 }
 
 const VERSION = /^(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/u;
@@ -108,8 +116,15 @@ export function releaseEndpoint(base: string): string {
   return /\/api\/update$/u.test(trimmed) ? trimmed : `${trimmed}/api/update`;
 }
 
-/** Absolute download URL for an artifact advertised by the manifest. */
+/**
+ * Absolute download URL for an artifact advertised by the manifest.
+ *
+ * A manifest may advertise either a path on the release host or an absolute
+ * URL (the GitHub mirror does the latter); an absolute URL is used verbatim so
+ * the package really is fetched from the host the publisher named.
+ */
 export function artifactUrl(base: string, artifact: Pick<UpdateArtifact, "url">): string {
+  if (/^https?:\/\//iu.test(artifact.url)) return artifact.url;
   const root = (base || DEFAULT_UPDATE_URL).trim().replace(/\/+$/u, "").replace(/\/api\/update$/u, "");
   return `${root}${artifact.url.startsWith("/") ? "" : "/"}${artifact.url}`;
 }
@@ -143,6 +158,17 @@ export function startupCheckAllowed(env: NodeJS.ProcessEnv = process.env): boole
  * can show or ignore, because a version check must never block a startup.
  */
 export async function checkForUpdate(options: CheckOptions): Promise<UpdateCheck> {
+  const primary = await checkReleaseServer(options);
+  if (primary.status !== "unreachable") return { ...primary, source: "server" };
+  // The release server is a Cloudflare quick tunnel, and those hostnames rotate
+  // (and are blocked outright on some networks). Every release is also published
+  // to GitHub, so a dead manifest host must not turn every upgrade into "手动下".
+  const mirror = await checkGithubReleases(options);
+  if (!mirror) return primary;
+  return { ...mirror, source: "github", reason: mirror.reason ?? primary.reason };
+}
+
+async function checkReleaseServer(options: CheckOptions): Promise<UpdateCheck> {
   const current = options.currentVersion;
   if (!current) return { status: "unreachable", current, reason: "unknown local version" };
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -187,6 +213,110 @@ export async function checkForUpdate(options: CheckOptions): Promise<UpdateCheck
     return { status: "no-build", current, latest, reason: `no ${kind} build for ${platform}-${arch} in ${latest}` };
   }
   return { status: "current", current, latest, ...(artifact ? { artifact } : {}) };
+}
+
+/** Public mirror of every release; `LUBAN_GITHUB_REPO` overrides it for forks. */
+export const DEFAULT_GITHUB_REPO = "holylong/luban";
+
+/**
+ * File names a GitHub release is expected to carry for one triple.
+ *
+ * Mirrors `scripts/package-*.mjs`: macOS CLI is a zip and the GUI is a dmg
+ * (zip when hdiutil failed), Windows is a portable zip, Linux is a .deb.
+ */
+export function githubAssetNames(kind: UpdateKind, platform: string, arch: string, version: string): string[] {
+  if (platform === "darwin") {
+    return kind === "cli"
+      ? [`luban-cli-${version}-mac-${arch}.zip`]
+      : [`luban-${kind}-${version}-mac-${arch}.dmg`, `luban-${kind}-${version}-mac-${arch}.zip`];
+  }
+  if (platform === "win32") return [`luban-${kind}-${version}-win-${arch}.zip`];
+  if (platform === "linux") return [`luban-${kind}_${version}_${arch === "x64" ? "amd64" : arch}.deb`];
+  return [];
+}
+
+/**
+ * Ask GitHub for the newest release instead of the release server.
+ *
+ * `undefined` means "the mirror could not answer" so the caller keeps the
+ * original server failure; a release without a build for this triple is
+ * reported as `no-build`, not as an error.
+ */
+async function checkGithubReleases(options: CheckOptions): Promise<UpdateCheck | undefined> {
+  const current = options.currentVersion;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const kind = options.kind ?? currentKind();
+  const repo = (options.githubRepo ?? process.env.LUBAN_GITHUB_REPO ?? DEFAULT_GITHUB_REPO).trim();
+  if (!repo) return undefined;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1_000, options.timeoutMs ?? 8_000));
+  let body: unknown;
+  try {
+    const response = await fetchImpl(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers: { accept: "application/vnd.github+json", "user-agent": `luban/${current}` },
+      signal: controller.signal,
+    });
+    if (!response.ok) return undefined;
+    body = await response.json();
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const record = (body ?? {}) as Record<string, unknown>;
+  const tag = typeof record.tag_name === "string" ? record.tag_name.trim().replace(/^v/iu, "") : "";
+  const version = parseVersionText(tag) ? tag : "";
+  if (!version) return undefined;
+  const assets = Array.isArray(record.assets) ? (record.assets as Record<string, unknown>[]) : [];
+  const artifact = readGithubArtifact(assets, { kind, platform, arch, version, notes: record.body, publishedAt: record.published_at });
+  if (!artifact) {
+    return isNewer(version, current)
+      ? { status: "no-build", current, latest: version, reason: `no ${kind} build for ${platform}-${arch} in ${version}` }
+      : { status: "current", current, latest: version };
+  }
+  if (options.skippedVersion && artifact.version === options.skippedVersion && isNewer(artifact.version, current)) {
+    return { status: "skipped", current, latest: version, artifact };
+  }
+  if (isNewer(artifact.version, current)) return { status: "available", current, latest: version, artifact };
+  return { status: "current", current, latest: version, artifact };
+}
+
+/**
+ * The matching asset, with the digest GitHub publishes for it.
+ *
+ * An asset without a sha256 digest is skipped: the downloader proves the bytes
+ * against that digest, so an unverified mirror entry is worse than no upgrade.
+ */
+function readGithubArtifact(
+  assets: Record<string, unknown>[],
+  want: { kind: UpdateKind; platform: string; arch: string; version: string; notes: unknown; publishedAt: unknown },
+): UpdateArtifact | undefined {
+  const wanted = githubAssetNames(want.kind, want.platform, want.arch, want.version);
+  for (const name of wanted) {
+    const row = assets.find(asset => asset && asset.name === name);
+    if (!row) continue;
+    const url = typeof row.browser_download_url === "string" ? row.browser_download_url : "";
+    const digest = typeof row.digest === "string" ? row.digest.trim().toLowerCase() : "";
+    const sha256 = digest.startsWith("sha256:") ? digest.slice("sha256:".length) : "";
+    const size = Number(row.size);
+    if (!/^https:\/\//iu.test(url) || !/^[0-9a-f]{64}$/u.test(sha256) || !Number.isSafeInteger(size) || size <= 0) continue;
+    return {
+      version: want.version,
+      publishedAt: typeof want.publishedAt === "string" ? want.publishedAt : "",
+      notes: typeof want.notes === "string" ? want.notes.slice(0, 8_000) : "",
+      file: name,
+      url,
+      sha256,
+      size,
+      kind: want.kind,
+      platform: want.platform,
+      arch: want.arch,
+    };
+  }
+  return undefined;
 }
 
 function readArtifact(value: unknown): UpdateArtifact | undefined {

@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { collectArtifacts, describeArtifact, main, parseArgs } from "./publish-release.mjs";
+import { collectArtifacts, describeArtifact, githubArtifacts, main, parseArgs } from "./publish-release.mjs";
 
 const VERSION = "2.7.12";
 const NAME = `luban-cli-${VERSION}-mac-x64.zip`;
@@ -104,6 +104,76 @@ test("upload sends the bytes with a sha256 the manifest repeats", async () => {
   } finally {
     await server.close();
   }
+});
+
+/** The GitHub release listener: one tag with the assets the workflow uploads. */
+function githubRelease(tag, assets) {
+  return async (input) => {
+    const url = String(input);
+    if (!url.startsWith("https://api.github.com/repos/holylong/luban/releases/tags/")) {
+      return new Response("not found", { status: 404 });
+    }
+    return new Response(JSON.stringify({ tag_name: tag, assets }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+}
+
+const githubAsset = (name, body, { digest = true } = {}) => ({
+  name,
+  size: body.length,
+  ...(digest ? { digest: `sha256:${createHash("sha256").update(body).digest("hex")}` } : {}),
+  browser_download_url: `https://github.com/holylong/luban/releases/download/v${VERSION}/${name}`,
+});
+
+test("linux debs map to the linux-x64 row", () => {
+  const deb = describeArtifact(`luban-desktop_${VERSION}_amd64.deb`);
+  assert.deepEqual({ ...deb, path: undefined }, {
+    file: `luban-desktop_${VERSION}_amd64.deb`, kind: "desktop", version: VERSION, platform: "linux", arch: "x64", extension: "deb", path: undefined,
+  });
+});
+
+test("mirroring a GitHub release uploads nothing and points every row at GitHub", async () => {
+  const server = await fakeServer();
+  try {
+    const fetchImpl = githubRelease(`v${VERSION}`, [
+      githubAsset(`luban-cli-${VERSION}-mac-x64.zip`, Buffer.from("cli bytes")),
+      githubAsset(`luban-desktop-${VERSION}-mac-x64.zip`, Buffer.from("zip fallback")),
+      githubAsset(`luban-desktop-${VERSION}-mac-x64.dmg`, Buffer.from("dmg bytes")),
+      githubAsset(`luban-cli_${VERSION}_amd64.deb`, Buffer.from("deb bytes")),
+      githubAsset(`luban-cli-${VERSION}-mac-arm64.zip`, Buffer.from("arm")),
+    ]);
+    const code = await main(["--version", VERSION, "--url", server.url, "--github", `v${VERSION}`, "--notes", "GitHub"], { token: "secret", githubFetch: fetchImpl });
+    assert.equal(code, 0);
+    assert.equal(server.seen.uploads.length, 0);
+    const [release] = server.seen.releases;
+    const rows = release.artifacts.map(item => [item.platform, item.arch, item.kind, item.file]);
+    assert.deepEqual(rows, [
+      ["darwin", "x64", "desktop", `luban-desktop-${VERSION}-mac-x64.dmg`],
+      ["darwin", "x64", "cli", `luban-cli-${VERSION}-mac-x64.zip`],
+      ["darwin", "arm64", "cli", `luban-cli-${VERSION}-mac-arm64.zip`],
+      ["linux", "x64", "cli", `luban-cli_${VERSION}_amd64.deb`],
+    ]);
+    // The zip fallback lost to the dmg, so the desktop row is unique per arch.
+    assert.equal(release.artifacts.filter(item => item.kind === "desktop").length, 1);
+    const desktop = release.artifacts.find(item => item.kind === "desktop");
+    assert.equal(desktop.url, `https://github.com/holylong/luban/releases/download/v${VERSION}/luban-desktop-${VERSION}-mac-x64.dmg`);
+    assert.equal(desktop.sha256, createHash("sha256").update("dmg bytes").digest("hex"));
+    assert.equal(desktop.size, "dmg bytes".length);
+    assert.equal(release.artifacts.every(item => String(item.url).startsWith("https://github.com/")), true);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a GitHub asset without a digest is refused instead of published unverifiable", async () => {
+  const fetchImpl = githubRelease(`v${VERSION}`, [githubAsset(`luban-cli-${VERSION}-mac-x64.zip`, Buffer.from("x"), { digest: false })]);
+  await assert.rejects(() => githubArtifacts("holylong/luban", `v${VERSION}`, VERSION, { githubFetch: fetchImpl }), /sha256 digest/u);
+});
+
+test("--github must name the tag of --version", () => {
+  assert.throws(() => parseArgs(["--version", VERSION, "--github", "v9.9.9"]), /does not match/u);
+  const options = parseArgs(["--version", VERSION, "--github", `v${VERSION}`, "--github-repo", "someone/fork"]);
+  assert.equal(options.github, `v${VERSION}`);
+  assert.equal(options.githubRepo, "someone/fork");
 });
 
 test("a missing token fails before any request is sent", async () => {

@@ -35,7 +35,8 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner(config(workspace));
     expect(runner.toolset).toBe("all");
     expect(runner.tools.has("bash")).toBe(true);
-    expect(runner.tools.has("computer")).toBe(true);
+    // The computer tool is macOS-only: on other platforms it is the one tool missing.
+    expect(runner.tools.has("computer")).toBe(process.platform === "darwin");
   });
 
   it.each(["once", "always", "tool", "deny"] as const)("requires explicit single-command restart approval even with automatic trust: %s", async decision => {
@@ -1085,7 +1086,10 @@ describe("soul identity", () => {
     expect(plain).toContain("the coding agent working in their workspace");
     expect(plain).not.toContain("造物主");
     const soul = String(initialMessages(workspace, "m", "auto", "model", false, "造物主 (the creator of this workspace)")[0].content);
-    expect(soul).toContain("In this background body you are 造物主 (the creator of this workspace)");
+    // 2.5.11 replaced the old "In this background body you are …" sentence with
+    // the global identity profile wording; the foreground prompt is untouched.
+    expect(soul).toContain("You are the Creator assistant, powered by luban.");
+    expect(soul).toContain("造物主 (the creator of this workspace)");
     expect(soul).not.toContain("the coding agent working in their workspace");
   });
 });

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   artifactUrl, checkForUpdate, cliInstallRoot, compareVersions, currentKind, downloadUpdate,
-  installUpdate, isNewer, parseVersionText, releaseEndpoint, type UpdateArtifact,
+  githubAssetNames, installUpdate, isNewer, parseVersionText, releaseEndpoint, type UpdateArtifact,
 } from "./update.js";
 
 const digest = (body: Uint8Array | string) => createHash("sha256").update(body).digest("hex");
@@ -63,6 +63,8 @@ describe("endpoints", () => {
     expect(releaseEndpoint("https://example.com/api/update")).toBe("https://example.com/api/update");
     expect(artifactUrl("https://example.com", { url: "/downloads/a.zip" })).toBe("https://example.com/downloads/a.zip");
     expect(artifactUrl("https://example.com/api/update", { url: "/downloads/a.zip" })).toBe("https://example.com/downloads/a.zip");
+    const mirrored = "https://github.com/holylong/luban/releases/download/v2.7.19/luban-cli-2.7.19-mac-x64.zip";
+    expect(artifactUrl("https://example.com", { url: mirrored })).toBe(mirrored);
   });
 
   it("reads the product from the environment", () => {
@@ -132,6 +134,108 @@ describe("checkForUpdate", () => {
     const check = await checkForUpdate({ ...base, fetchImpl: impl });
     expect(check.artifact).toBeUndefined();
     expect(check.status).toBe("no-build");
+  });
+});
+
+describe("github mirror", () => {
+  const base = { currentVersion: "2.7.18", kind: "cli" as const, platform: "darwin", arch: "x64" };
+  const release = (assets: Record<string, unknown>[], tag = "v2.7.19") => ({
+    tag_name: tag,
+    body: "GitHub Releases 上的说明",
+    published_at: "2026-11-20T12:05:00Z",
+    assets,
+  });
+  const asset = (name: string, body = "zip bytes") => ({
+    name,
+    size: Buffer.byteLength(body),
+    digest: `sha256:${digest(body)}`,
+    browser_download_url: `https://github.com/holylong/luban/releases/download/v2.7.19/${name}`,
+  });
+
+  /** Serves the release server and GitHub from one stub, recording both hits. */
+  function routedFetch(server: unknown, github: unknown) {
+    const calls: string[] = [];
+    const impl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.startsWith("https://api.github.com/")) {
+        return github === undefined
+          ? new Response("offline", { status: 503 })
+          : new Response(JSON.stringify(github), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return server === undefined
+        ? Promise.reject(new Error("ENOTFOUND"))
+        : new Response(JSON.stringify(server), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  }
+
+  it("uses the GitHub release when the release server is unreachable", async () => {
+    const { impl, calls } = routedFetch(undefined, release([asset("luban-cli-2.7.19-mac-x64.zip")]));
+    const check = await checkForUpdate({ ...base, fetchImpl: impl });
+    expect(check.status).toBe("available");
+    expect(check.source).toBe("github");
+    expect(check.latest).toBe("2.7.19");
+    expect(check.artifact).toMatchObject({
+      file: "luban-cli-2.7.19-mac-x64.zip",
+      url: "https://github.com/holylong/luban/releases/download/v2.7.19/luban-cli-2.7.19-mac-x64.zip",
+      size: Buffer.byteLength("zip bytes"),
+      sha256: digest("zip bytes"),
+    });
+    expect(calls[1]).toBe("https://api.github.com/repos/holylong/luban/releases/latest");
+  });
+
+  it("downloads a mirror artifact from the absolute URL it advertises", async () => {
+    const body = "installer bytes";
+    const directory = await mkdtemp(join(tmpdir(), "luban-dl-"));
+    const seen: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      seen.push(String(input));
+      return new Response(body, { status: 200 });
+    }) as unknown as typeof fetch;
+    const artifact = artifactFrom(body, {
+      url: "https://github.com/holylong/luban/releases/download/v2.7.19/luban-cli-2.7.19-mac-x64.zip",
+    });
+    await downloadUpdate(artifact, { baseUrl: "https://example.com", directory, fetchImpl });
+    expect(seen).toEqual([artifact.url]);
+  });
+
+  it("keeps the server answer when the server actually answered", async () => {
+    const artifact = artifactFrom("x", { version: "2.7.19" });
+    const { impl, calls } = routedFetch({ ok: true, latest: { version: "2.7.19" }, artifact }, release([asset("luban-cli-2.7.19-mac-x64.zip")]));
+    const check = await checkForUpdate({ ...base, fetchImpl: impl });
+    expect(check.status).toBe("available");
+    expect(check.source).toBe("server");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("reports no-build when the mirror ships nothing for this triple", async () => {
+    const { impl } = routedFetch(undefined, release([asset("luban-cli-2.7.19-win-x64.zip")]));
+    const check = await checkForUpdate({ ...base, fetchImpl: impl });
+    expect(check.status).toBe("no-build");
+    expect(check.latest).toBe("2.7.19");
+    expect(check.reason).toContain("darwin-x64");
+  });
+
+  it("ignores a mirror asset without a sha256 digest", async () => {
+    const broken = { ...asset("luban-cli-2.7.19-mac-x64.zip"), digest: undefined };
+    const { impl } = routedFetch(undefined, release([broken]));
+    expect((await checkForUpdate({ ...base, fetchImpl: impl })).status).toBe("no-build");
+  });
+
+  it("falls back to unreachable when neither host answers", async () => {
+    const { impl } = routedFetch(undefined, undefined);
+    const check = await checkForUpdate({ ...base, fetchImpl: impl });
+    expect(check.status).toBe("unreachable");
+    expect(check.source).toBeUndefined();
+  });
+
+  it("names the asset each platform actually ships", () => {
+    expect(githubAssetNames("desktop", "darwin", "arm64", "2.7.19"))
+      .toEqual(["luban-desktop-2.7.19-mac-arm64.dmg", "luban-desktop-2.7.19-mac-arm64.zip"]);
+    expect(githubAssetNames("cli", "win32", "x64", "2.7.19")).toEqual(["luban-cli-2.7.19-win-x64.zip"]);
+    expect(githubAssetNames("desktop", "linux", "x64", "2.7.19")).toEqual(["luban-desktop_2.7.19_amd64.deb"]);
+    expect(githubAssetNames("cli", "freebsd", "x64", "2.7.19")).toEqual([]);
   });
 });
 

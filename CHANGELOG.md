@@ -1,3 +1,11 @@
+## 2.7.20 — 2026-11-20
+
+- 升级不再依赖发布服务器在线：`checkForUpdate` 在发布服务器不可达（隧道域名轮换、被网络拦截、502/超时）时，回退到 GitHub Releases（`GET /repos/holylong/luban/releases/latest`），按 `平台-架构-产品` 选资产、用 GitHub 给该资产公布的 `digest` 当 sha256，`update --json` 多一个 `source: "github"`。发布服务器正常回答时不发这次请求，`no-build` / `skipped` 一类的结论也不会被镜像覆盖。`LUBAN_GITHUB_REPO` 可以换成 fork。
+- `artifactUrl` 接受清单里的绝对 URL：清单写 `https://github.com/…/releases/download/v2.7.19/…` 时就真的从 GitHub 下，而不是拼到发布服务器域名后面。下载仍然先写 `.part`、校验大小与 sha256 才改名。
+- `npm run publish:release -- --github v2.7.19` 新增镜像发布：不本机上传任何文件，直接从 GitHub Release 读各资产的 `name`/`size`/`digest`，把 `url` 指向 GitHub 写进升级清单；资产缺少 digest 直接报错，不会发出无法校验的条目。`--github-repo` 覆盖仓库，`--kind` 仍然可用。
+- 修 3 处让 GitHub Actions 的 `verify` 一直红的陈旧测试（打包与发布不受影响，但公开仓库的 CI 一直是红的）：`src/core/computer.test.ts` 的 `computer control` 整块与 `rim overlay` 里漏了 guard 的一条都在调用 macOS 原生 helper，改成 `describe.skipIf(process.platform !== "darwin")` 并补上平台 early-return；`src/runtime-env.test.ts` 断言 CLI 第一行是 `runtime-env`，而 2.3.12 起第一个 import 是 `terminal-boot`，改为断言它在前、且 `runtime-env` 早于任何 React import；`src/core/agent.test.ts` 仍在断言 2.5.11 之前的身份措辞，同步改成全局身份档案的说法，并让 `computer` 工具的存在性按平台判断。
+- 验证：`npx vitest run src/core/update.test.ts`（24 例，含镜像回退、绝对 URL 下载、只在服务器不可达时才问 GitHub）；`node --test scripts/publish-release.test.mjs` 12 例、`node --test scripts/release.test.mjs` 7 例；三个改过的测试文件在 darwin 74/74 全绿，用临时 setup 把 `process.platform` 模拟成 linux 复跑 64 passed / 10 skipped。`luban-server` 侧 75 例（新增外部 URL 校验与「不上传也能发布」）。
+
 ## 2.7.19 — 2026-11-20
 
 - 修 2.7.18 删掉 `plugins/` 之后打不出安装包：`scripts/package-{macos,linux,windows}.mjs` 里把 `plugins/` 当必选项复制，目录不存在时 `cpSync` 直接 ENOENT，`npm run release` 以 exit 1 结束。现在三处都先判断目录存在再复制（Windows 覆盖层早就是这么写的），没有插件的工作区照常打 cli / desktop / Creator。

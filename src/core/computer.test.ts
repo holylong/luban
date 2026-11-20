@@ -62,7 +62,9 @@ const calls = async (): Promise<Array<Record<string, unknown>>> => {
 
 // Every action spawns the helper process; under a 59-file parallel run the
 // spawn alone can take seconds, so these cases get a generous budget.
-describe("computer control", { timeout: 30_000 }, () => {
+// The whole block drives the macOS helper, so on Linux/Windows runners there is
+// nothing to spawn: skip instead of asserting macOS-only messages.
+describe.skipIf(process.platform !== "darwin")("computer control", { timeout: 30_000 }, () => {
   it("refuses every action until a human opens the session", async () => {
     const control = new ComputerControl({ home: root, workspace: root });
     await expect(control.act("click", { x: 10, y: 20 })).rejects.toThrow("电脑操控未开启：请先在 luban 界面打开「电脑操控」开关；终端 TUI 可运行 /computer on，然后重试。");
@@ -231,6 +233,7 @@ describe("rim overlay", { timeout: 30_000 }, () => {
   });
 
   it("clears failed activity without disabling authorization", async () => {
+    if (process.platform !== "darwin") return; // the rim overlay is macOS-only
     await fakeRim();
     const events: string[] = [];
     const control = new ComputerControl({ home: root, notify: event => events.push(event.event) });

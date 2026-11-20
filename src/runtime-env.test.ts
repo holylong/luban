@@ -18,6 +18,13 @@ test.each([undefined, "", "development", "test", "production"])("initializes Rea
 
 test("CLI loads environment first without an earlier generated JSX import", () => {
   const source = readFileSync(new URL('./cli.tsx', import.meta.url), "utf8");
-  expect(source.split('\n')[1]).toBe('import "./runtime-env.js";');
+  // Both bootstraps stay ahead of React/Ink: terminal-boot fixes the color level
+  // and runtime-env sets NODE_ENV before any JSX or React import runs.
+  const firstImport = source.split('\n').find(line => line.startsWith('import '));
+  expect(firstImport).toBe('import "./ui/terminal-boot.js";');
+  const envAt = source.indexOf('import "./runtime-env.js";');
+  const reactAt = source.indexOf('from "react"');
+  expect(envAt).toBeGreaterThan(-1);
+  expect(reactAt).toBeGreaterThan(envAt);
   expect(source).not.toContain('<App ');
 });
