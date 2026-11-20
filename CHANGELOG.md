@@ -1,3 +1,58 @@
+## 2.7.3 — 2026-11-20
+
+- 脱敏复扫并清理：`apps/android-native/app/build/`（100 个文件，含 `app-debug.apk`、`classes.dex`）、`.gradle/`（13 个文件）、`build/` 报告和 `local.properties`（记着构建机的 SDK 路径）移出版本库并补进 `.gitignore`——这些产物的日志里带着完整构建机家目录与旧版硬编码地址。
+- 删除 30 个 `scripts/tmp-*.ps1` 临时排查脚本（写死某台 Windows 机器的绝对路径与模型缓存位置，不属于构建流程）。
+- 文档与测试里的个人信息换成占位符：内网 IP、家目录绝对路径、自定义 SSH 端口、用户名；`scripts/probe-mobile-flicker.cjs` 改为从仓库根/临时目录取夹具路径；`docs/reference.md` 与 `CHANGELOG.md` 的示例地址改成 `<局域网IP>` 之类。
+- `src/core/default-config.test.ts` 不再点名某个地址前缀，改为断言「种子配置里除 `0.0.0.0`/`127.0.0.1` 外不得出现任何点分四段地址」。
+- 重写 `docs/opensource-checklist.md`：只保留检查项与命令，不再记录具体 IP、账号、家目录、行号——清单本身也要公开。
+- 复扫结果：服务器 IP、内网地址、真实用户名与家目录、自定义 SSH 端口在跟踪文件中均为 0 命中；`git ls-files` 里已无构建目录。
+
+## 2.7.2 — 2026-11-20
+
+- 新增 `docs/relay-deploy.md`：中继服务器的完整部署文档——它不是独立二进制而是 `luban relay` 子命令、打包必须带上 `dist/web-ui/`、服务器目录约定、`relay.env` 凭据项、三种 TLS 形态、线上 systemd 单元全文、自检命令、公网入口（直连/快速隧道/自有域名）与 `--public-url` 的坑、升级回滚、按现象排错表。
+- `docs/relay-domain.md` 与 `docs/reference.md` 的手机远控一节加上指向该文档的入口。
+
+## 2.7.1 — 2026-11-20
+
+- 默认地址收敛到单一来源：新增 `src/core/service-defaults.ts`，中继 `DEFAULT_RELAY_URL` 与统计 `DEFAULT_USAGE_STATS_URL` 只在这里写一次，`usage-stats.ts` / `stats-command.ts` / `config.ts` 全部引用它；此前统计地址在 `stats-command.ts` 里重复硬编码，改一处会漏一处。
+- `remote.relay_url` 现在有内置默认值（当前隧道地址），优先级为 `config.json` > `LUBAN_RELAY_PUBLIC_URL` > 内置默认；未配置中继时 `luban relay`、TUI 的「登录中继」对话框和 `--remote` 都直接拿到正确地址，`remote.enabled` 仍默认关闭，不会因此在后台自动拨号。
+- 使用统计地址保持同样的覆盖顺序（`usage_stats.url` > `LUBAN_USAGE_STATS_URL` > 内置默认），`luban stats` 打印的就是最终生效的 endpoint。
+- 文档补上「内置默认地址」对照表（`docs/relay-domain.md`）以及两处覆盖说明（`docs/reference.md`、`docs/usage-stats.md`）；隧道再次换域名时只需改 `service-defaults.ts` 一处，或只改本机配置。
+
+## 2.6.20 — 2026-11-20
+
+- 两条临时隧道改由 systemd 托管：新增 `luban-tunnel-relay.service`（`https://localhost:443`）与 `luban-tunnel-stats.service`（`http://localhost:18080`），`Restart=always`、`RestartSec=5`，已 `enable` 开机自启，取代原先手工 `setsid` 起的裸进程；服务器重启后两条隧道会自动回来，不再需要手动拉起。
+- 因为快速隧道每次启动都会重新分配域名，代码与文档里的默认地址同步刷新为当前值：relay `https://thickness-oxygen-life-resistant.trycloudflare.com`，统计 `https://submitting-reseller-trustee-fairy.trycloudflare.com`。
+- 提醒：只要 `systemctl restart luban-tunnel-*` 或重装服务，域名就会再变一次；长期固定仍需自有域名 + 命名隧道，或改用自己的上报地址（`LUBAN_USAGE_STATS_URL` / `~/.luban/config.json` 的 `usage_stats.url`）。
+
+## 2.6.19 — 2026-11-20
+
+- 仓库里 27 处服务器明文 IP 全部替换为 Cloudflare 隧道地址：使用统计默认上报地址（`src/core/usage-stats.ts`、`src/core/stats-command.ts`）改为 `https://submitting-reseller-trustee-fairy.trycloudflare.com/api/report`；Android 默认中继（`MainActivity.DEFAULT_SERVER`）改为 `https://thickness-oxygen-life-resistant.trycloudflare.com`；文档与 CHANGELOG 里的地址、SSH 命令、`dig` 示例一并改写，不再出现源站 IP。
+- 为了让上报链路在替换后仍然可用，统计服务单独开了一条隧道（`localhost:18080`），看板与 `/api/report` 不再依赖 IP 直连；实测 `luban stats` 退出时自动推送 10,306,401 input / 65,013 output / 3 runs 成功，服务端总量同步从 1,556,909,928 涨到 1,567,281,342、runs 686→689。
+- 临时隧道地址会随进程重启变化；要长期稳定仍需自有域名（见 `docs/relay-domain.md`）。`apps/android-native/app/build/` 等已入库的构建产物二进制里仍残留旧 IP，属于同一批待清理文件。
+
+## 2.6.18 — 2026-11-19
+
+- 更正 `docs/relay-domain.md` 里关于临时隧道不可达的结论：手机拿到的 `Error 1033`（Cloudflare Tunnel error，带 Ray ID）是 Cloudflare 自己返回的错误页，说明请求已经到达边缘，只是那条隧道没有在线 connector（进程被重启、URL 已换）。此前据此推断「`*.trycloudflare.com` 被按域名拦」证据不足。
+- 补一张排查表，按错误页来源区分：`1033`（隧道未连）、浏览器「无法连接」且无 Ray ID（没到 Cloudflare）、能打开但空白（前端资源/登录态）。
+
+## 2.6.17 — 2026-11-19
+
+- 修复 relay 走本地反向代理（最典型的是 `cloudflared` 拨到 `localhost:443`）时，所有手机共用同一个限流桶：令牌失败计数和 `/api/auth/*` 的尝试限制原先只按 socket 地址记账，代理后面每个客户端都是 `127.0.0.1`，一个客户端把额度打满、或有人扫端口乱试，所有人一起被 429 挡在外面。
+- 现在只在对端是回环地址（说明请求来自本机代理）时才采信 `CF-Connecting-IP` / `X-Forwarded-For` 的第一个地址；直连的请求仍然只按 socket 地址记账，避免客户端伪造头重置自己的锁定期。
+- 补回归测试：代理后面不同客户端互不影响、直连伪造 `X-Forwarded-For` 依然会被锁定、缺头或非法值回落到 socket 地址。
+
+## 2.6.16 — 2026-11-19
+
+- 补充 `docs/relay-domain.md` 的实测结论：`*.trycloudflare.com` 临时隧道在国内手机上打不开（同机打开 `cloudflare.com` 正常，服务端公网两边都 200），即该域名的 SNI 被单独拦截；临时隧道只能验证「服务器 → Cloudflare」半条链，手机可用性必须用自有域名验证。
+- 记录区分方法：`cloudflare.com` 也打不开说明该网络到 Cloudflare 整体不通，免费藏 IP 在此网络上不成立；能打开而临时隧道打不开，则换成自有域名走同一 Cloudflare 边缘即可。
+
+## 2.6.15 — 2026-11-19
+
+- 新增 `docs/relay-domain.md`：把手机访问从「裸 IP + 自签名证书」换成域名的完整取舍与步骤。文档先拆开两个常被混为一谈的目标——好记/受信证书 vs 隐藏源站 IP——并说明域名 A 记录和证书透明度日志会让 IP 必然公开，要藏 IP 必须让流量先落到 CDN/隧道。含免费域名清单（能否改 NS 决定能不能接 Cloudflare）、三条路线在广州→北京的实测延迟（直连 145/50 ms、Cloudflare 隧道 830/520 ms，`colo=LAX` 的缘故）、Let's Encrypt 只能走 DNS-01 且需备案的现实约束，以及回滚方法。
+- 新增 `scripts/setup-relay-tunnel.sh`：已有 relay 上一条命令接入 Cloudflare 隧道——`cloudflared service install` 装服务、备份 unit 后把 `--public-url` 改成新域名并重启、等域名可用再探活 `/m/`、`assets/mobile-*.js` 与未授权 `/api/node`。支持 `--dry-run`（不写任何文件）与 `--skip-relay-url`，可重复执行。
+- 实测环境：源站 relay 仍跑在 443 自带证书、`:80` 被占用，故隧道指向 `https://localhost:443` 并勾 No TLS Verify；临时隧道验证 `/m/` 与直连同字节（2381 B）、静态资源 200、WS 升级能到达 relay。
+
 ## 2.6.14 — 2026-11-18
 
 - 修复 Codex（ChatGPT 后端）在带 MCP 工具时整轮请求 400 `invalid_json_schema`：工具 schema 在发送前会去掉后端编译器不支持的 JSON Schema 关键字（`if`/`then`/`else`、`not`、`propertyNames`、`patternProperties`、`uniqueItems`、`dependent*`/`unevaluated*`），只保留调用所需的结构、类型、枚举与说明。此前只要有一个 MCP 服务器（例如 rea 的 `inspect_python_pyc`、`inspect_managed_members`）发布这类 schema，整轮对话都会失败。
@@ -222,9 +277,9 @@
 - 常驻后台默认让手机按 IP 直连：`--host 0.0.0.0`、固定端口 8642。
   - 2.4.17 的后台监听 `127.0.0.1` + 随机端口：手机在局域网里按 `http://<电脑IP>:<端口>/m/` 根本连不上，而且每次重启端口都变，手机里存的地址必然失效——「关掉终端也能连」只对中继成立。
   - `ensureDaemon` 默认改为 `--host 0.0.0.0 --port 8642`（`--host` / `--port` 或 `LUBAN_DAEMON_HOST` / `LUBAN_DAEMON_PORT` 可改）；`DaemonState` 记下绑定的网卡，旧状态文件缺这个字段时按 `127.0.0.1` 处理，不会被误报成局域网可达。
-  - `luban daemon start` 新增 `--host/--port`，输出把每张网卡的链接连同令牌一起打印（`http://192.168.1.10:8642/m/?token=…`），并提示「同一网络里拿到链接的人都能操控这台电脑」；`daemon url` 同样列出全部链接。
+  - `luban daemon start` 新增 `--host/--port`，输出把每张网卡的链接连同令牌一起打印（`http://<局域网IP>:8642/m/?token=…`），并提示「同一网络里拿到链接的人都能操控这台电脑」；`daemon url` 同样列出全部链接。
   - `phoneLinks()`：循环地址在前，按绑定的网卡过滤——`--host 127.0.0.1` 时只给本机链接，绝不打印一张连不上的局域网地址。
-  - 实测：`daemon start` 后 `lsof -iTCP:8642` 显示 `TCP *:8642 (LISTEN)`；`http://192.168.1.10:8642/m/?token=…` 返回 200（2381B）并引用 `assets/mobile-N6T0ecwJ.js`，同地址 `/api/sessions` 无令牌 401，`/api/node` 带令牌返回 2.4.17 与项目表。
+  - 实测：`daemon start` 后 `lsof -iTCP:8642` 显示 `TCP *:8642 (LISTEN)`；`http://<局域网IP>:8642/m/?token=…` 返回 200（2381B）并引用 `assets/mobile-N6T0ecwJ.js`，同地址 `/api/sessions` 无令牌 401，`/api/node` 带令牌返回 2.4.17 与项目表。
   - 新增 `src/core/daemon-command.test.ts`（2 例：多网卡链接与令牌编码、只广播真正监听的地址），`daemon.test.ts` 增加绑定网卡/端口与旧状态迁移断言（15 例）。
   - 顺带修掉 `luban … | head` 的 EPIPE 崩溃：标准输出管道被 reader 关掉时安静退出（退出码 0），不再打印 `unhandled exception: write EPIPE`。
 
@@ -439,7 +494,7 @@
 
 ## 2.3.15 — 2026-11-12
 
-- 查清「手机上一条消息接在了不相关的会话上、工作目录还是 /tmp/luban-phone」：本机一直留着一个 `luban web /tmp/luban-phone --relay` 的测试进程（11-11 08:11 起），手机仍钉在它上报的中继节点上，于是会话列表是那个临时目录的测试会话；而任务列表是整机范围的（`/api/jobs` 把 `~/.luban/jobs` 全量返回），所以 Conductor 会话里那句「你帮我看看第二个实验主要是做什么？」在这台手机上看起来像是接着那个测试会话。桌面侧其实是对的：该任务 `project_id=Conductor`、`session_id=20261109131529-vi33k3`、`workspace=/Users/me/Documents/Conductor`。已停掉该残留进程。
+- 查清「手机上一条消息接在了不相关的会话上、工作目录还是 /tmp/luban-phone」：本机一直留着一个 `luban web /tmp/luban-phone --relay` 的测试进程（11-11 08:11 起），手机仍钉在它上报的中继节点上，于是会话列表是那个临时目录的测试会话；而任务列表是整机范围的（`/api/jobs` 把 `~/.luban/jobs` 全量返回），所以那个会话里那句「你帮我看看第二个实验主要是做什么？」在这台手机上看起来像是接着那个测试会话。桌面侧其实是对的：该任务 `project_id=<项目>`、`session_id=…`、`workspace=~/Documents/<项目>`。已停掉该残留进程。
 - `GET /api/jobs` 支持 `?project=`（`MeshJobStore.list` / `MeshRuntime.jobs` 增加项目过滤；没有 `project_id` 的旧任务仍然可见）。不带参数仍是整机视图，桌面控制台行为不变；手机按当前工作区拉取任务，不再把别的项目的会话列进自己的任务流。
 - `continuationForPrompt` 现在把**被打开会话自己的 project** 带进接续请求（之前丢弃 project，`project_id` 回退成手机当前工作区）：手机停在一个工作区、看着另一个工作区的会话时，下一条指令不会再跑错目录。
 - 修一个自动选会话的抢跑：点了任务但任务详情还没回来时，`job` 是空的，自动选会话会趁机把一个无关会话设成「待接续」；现在任务列表里存在的选中任务也算「活动视图」。
@@ -449,7 +504,7 @@
 
 - 定位「ssh 里一直闪」的真正来源：手机远控的中继日志走 `console.error`，Ink 对 console 的处理是「擦掉整帧 + 写这行 + 整帧重画」，链路抖动时每 2～3 秒一次，远端看到的就是整屏闪一下。日志改为交给 TUI（`subscribeRelayLog`），在状态区占一行最多 8 秒，不再碰终端帧；无 TUI 时仍写 stderr。
 - `terminal-output.ts` 增加兜底：只有行擦除（`2K`/`1A`/`G`）不含内容的写入直接丢弃，并让紧随其后的整帧重画补齐。任何来源的 console 输出都不会再先擦空屏幕；`\u001b[2J` 之类整屏清除仍原样下发。
-- 服务器实测（203.0.113.7:22，120×74 PTY）：修复前 13 秒内 5 次 `erase2k=74` + 每次 20KB 整帧重画，修复后仅剩按行重画。
+- 服务器实测（自定义 SSH 端口，120×74 PTY）：修复前 13 秒内 5 次 `erase2k=74` + 每次 20KB 整帧重画，修复后仅剩按行重画。
 - 验证：新增 `terminal-output.test.tsx`「丢弃整帧擦除后仍整帧重画」与 `app-relay-notice.test.tsx`「中继日志进状态行、不进 console」；`npx tsc -p tsconfig.json --noEmit`、`npm run build`、`vitest src/ui src/web` 通过。
 
 ## 2.3.13 — 2026-11-11
@@ -494,15 +549,15 @@
 
 ## 2.3.7 — 2026-11-11
 
-- 203.0.113.7 上的使用统计服务其实从来没装起来：没有 `luban-stats.service`、没有 `/opt/luban-stats`、`ss` 里 18080 也没有监听，所以客户端一直在往一个没人接的端口上报。现在按 `deploy/luban-stats.service` 装好并 `enable --now`，`POST /api/report` → `/var/lib/luban-stats/reports.jsonl` → `GET /api/stats` 全链路打通，`GET /` 看板 200。
+- 服务器上的使用统计服务其实从来没装起来：没有 `luban-stats.service`、没有 `/opt/luban-stats`、`ss` 里 18080 也没有监听，所以客户端一直在往一个没人接的端口上报。现在按 `deploy/luban-stats.service` 装好并 `enable --now`，`POST /api/report` → `/var/lib/luban-stats/reports.jsonl` → `GET /api/stats` 全链路打通，`GET /` 看板 200。
 - 部署脚本在 macOS 上会把 `._server.js` 这类 AppleDouble 文件一起打进包里、落到 `/opt/luban-stats`；现在打包用 `COPYFILE_DISABLE=1` 加 `--exclude '._*'`。
 - 单元里的 `ExecStart=/usr/bin/node` 是写死的，这台机器上根本没有 `/usr/bin/node`（node 在 `/usr/local/bin/node`，systemd 直接 `status` 就起不来）：`deploy/luban-stats.service` 改成 `/usr/bin/env node` 并显式声明 `PATH`，`scripts/deploy-stats.sh` 安装时再把 `ExecStart` 改写成远端 `command -v node` 找到的绝对路径。
-- `docs/usage-stats.md` 补上「只有 sudo 普通用户、没有 root 直连」时的等价部署步骤（`203.0.113.7` 的 `deploy` 就是这种情况）。
-- 验证：`npm run build:server` 通过；`npx vitest run src/stats src/core/usage-stats.test.ts`（14 passed）；本机另起一份 `dist/stats/server.js` 跑通 health/report/stats/看板；远端 `systemd-analyze verify` 0、`is-enabled=enabled`、`is-active=active`、`curl http://127.0.0.1:18080/health` 返回 `{"ok":true}`，从外网 `curl http://203.0.113.7:18080/health` 也是 200（ufw 未启用、iptables INPUT ACCEPT、安全组已放行），测试上报的数据已从 `reports.jsonl` 清掉并重启确认统计归零。
+- `docs/usage-stats.md` 补上「只有 sudo 普通用户、没有 root 直连」时的等价部署步骤（只有 sudo 权限、没有 root 直连的普通用户就是这种情况）。
+- 验证：`npm run build:server` 通过；`npx vitest run src/stats src/core/usage-stats.test.ts`（14 passed）；本机另起一份 `dist/stats/server.js` 跑通 health/report/stats/看板；远端 `systemd-analyze verify` 0、`is-enabled=enabled`、`is-active=active`、`curl http://127.0.0.1:18080/health` 返回 `{"ok":true}`，从外网 `curl http://https://submitting-reseller-trustee-fairy.trycloudflare.com/health` 也是 200（ufw 未启用、iptables INPUT ACCEPT、安全组已放行），测试上报的数据已从 `reports.jsonl` 清掉并重启确认统计归零。
 
 ## 2.3.6 — 2026-11-11
 
-- 新增独立使用统计服务 `src/stats/server.ts`，部署在 203.0.113.7:18080，零依赖、只用 Node 内置模块：`POST /api/report` 收客户端增量，`GET /api/stats` 出汇总 JSON，`GET /` 是中文看板（安装数、7/30 天活跃、总 token、输入/输出分开、最近 30 天按天、按版本、按平台），`GET /health` 供 systemd/监控探活。数据是一个追加写入的 `reports.jsonl`，内存汇总，重启重放日志恢复；按 IP 限流 120 次/分钟，请求体上限 16 KB，可选 `LUBAN_STATS_TOKEN` 给看板加 Bearer 鉴权。
+- 新增独立使用统计服务 `src/stats/server.ts`，部署在 `https://submitting-reseller-trustee-fairy.trycloudflare.com`，零依赖、只用 Node 内置模块：`POST /api/report` 收客户端增量，`GET /api/stats` 出汇总 JSON，`GET /` 是中文看板（安装数、7/30 天活跃、总 token、输入/输出分开、最近 30 天按天、按版本、按平台），`GET /health` 供 systemd/监控探活。数据是一个追加写入的 `reports.jsonl`，内存汇总，重启重放日志恢复；按 IP 限流 120 次/分钟，请求体上限 16 KB，可选 `LUBAN_STATS_TOKEN` 给看板加 Bearer 鉴权。
 - 客户端新增 `src/core/usage-stats.ts`：`~/.luban/usage-stats.json` 保存随机安装 id、待上报增量、已确认总量；agent 每轮结束在 `finally` 里按 `RunMetrics.requests[].usage` 累加（每次模型调用算一次，含 compaction/handoff，中断的运行也算已产生的部分），默认 6 小时最多上传一次，约 200 字节，空闲且无待报数据时完全不发请求。
 - 失败不丢数据也不风暴：上传失败保留增量、间隔按 2 的幂翻倍（最多 16 倍），恢复后一次性补发；全新安装会发一条 0 token 心跳把「装了」和「跑了」区分开。开关：`usage_stats.enabled` / `LUBAN_USAGE_STATS=off`，地址可配 `usage_stats.url` / `LUBAN_USAGE_STATS_URL`。
 - 新增 `src/core/usage-stats.test.ts`（8 条：记账、安装 id 稳定、心跳、间隔节流、成功后清零、失败退避、关闭后静默、坏文件恢复）与 `src/stats/server.test.ts`（6 条：去重安装数、输入输出分列、重启重放、坏请求拒绝、活跃窗口、看板与鉴权）；`docs/usage-stats.md` 写明上报字段、配置、接口与部署；`scripts/deploy-stats.sh` + `deploy/luban-stats.service` 一键部署（编译、校验 sha256、装服务、健康检查）。
@@ -745,7 +800,7 @@
 
 ## 2.0.25 — 2026-11-08
 
-- `luban login relay` 支持直接跟中继地址：`luban login relay https://203.0.113.7` 不再报 “too many arguments”，`--relay <url>` 写法保持可用。
+- `luban login relay` 支持直接跟中继地址：`luban login relay https://thickness-oxygen-life-resistant.trycloudflare.com` 不再报 “too many arguments”，`--relay <url>` 写法保持可用。
 - 中继地址省略协议时默认按 HTTPS 处理（只有本机回环地址会补 `http://`），省得先被 “必须使用 HTTPS” 挡住。
 - 更新 `docs/reference.md` 的登录示例与 `--help` 提示。
 

@@ -21,9 +21,9 @@ describe("project registry hygiene", () => {
 
   it("hides transient and missing registrations but never the running project", () => {
     const visible = visibleProjects({
-      luban: "/Users/me/Documents/luban",
+      luban: process.cwd(),
       probe: "/private/var/folders/jw/T/luban-term-kKcgL5",
-      gone: "/home/deploy/dev/myapp",
+      gone: "/home/me/dev/myapp",
       current: "/private/var/folders/jw/T/luban-a-probe",
     }, { keep: "current" });
     expect(Object.keys(visible)).toEqual(["luban", "current"]);
@@ -54,9 +54,9 @@ describe("project registry hygiene", () => {
   it("cleans a relay snapshot without touching other machines' real paths", () => {
     expect(durableProjects({
       luban: "/Users/me/Documents/luban",
-      dpan: "/home/deploy/WorkStation/dpan",
+      demo: "/home/me/work/demo",
       "luban-term-kKcgL5": "/private/var/folders/jw/T/luban-term-kKcgL5",
       scratch: "/tmp/probe",
-    })).toEqual({ luban: "/Users/me/Documents/luban", dpan: "/home/deploy/WorkStation/dpan" });
+    })).toEqual({ luban: "/Users/me/Documents/luban", demo: "/home/me/work/demo" });
   });
 });

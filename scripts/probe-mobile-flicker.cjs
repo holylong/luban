@@ -15,7 +15,15 @@ if (!process.versions.electron) {
   const { app, BrowserWindow } = require("electron");
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "luban-flicker-probe-"));
   app.setPath("userData", path.join(home, "profile"));
-  const projects = { luban: "/Users/me/Documents/luban", cooler: "/Users/me/Documents/cooler" };
+  // Fixture paths only: derive them from the repo instead of hard-coding a
+  // developer's home. Both directories must exist and must not look like a
+  // scratch probe, or the device page hides their rows and the probe measures
+  // nothing.
+  const repoRoot = path.resolve(__dirname, "..");
+  const projects = {
+    luban: process.env.LUBAN_PROBE_PROJECT || repoRoot,
+    cooler: process.env.LUBAN_PROBE_COOLER || path.join(repoRoot, "apps", "creator"),
+  };
   const session = (id, project, title) => ({ id, project, title, workspace: projects[project], model: "test", mode: "agent",
     messages: 2, edits: 0, createdAt: "2026-11-14T10:00:00Z", updatedAt: "2026-11-14T11:00:00Z" });
   const sessions = {

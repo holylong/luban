@@ -35,11 +35,13 @@ luban 每隔一段时间向独立统计服务上报一次**增量**：安装数�
 {
   "usage_stats": {
     "enabled": true,
-    "url": "http://203.0.113.7:18080/api/report",
+    "url": "https://submitting-reseller-trustee-fairy.trycloudflare.com/api/report",
     "interval_hours": 0.25
   }
 }
 ```
+
+不写 `url` 时使用内置默认上报地址（当前 `https://submitting-reseller-trustee-fairy.trycloudflare.com/api/report`），`luban stats` 显示的就是最终生效的地址；`LUBAN_USAGE_STATS_URL` 只在该键为空时生效，`usage_stats.enabled: false` 或 `LUBAN_USAGE_STATS=off` 则完全不发请求。
 
 `interval_hours` 允许小数（`0.25` = 15 分钟，最小 `0.0166` 约 1 分钟）。看板不是实时的：
 它显示的是**最近一次成功上报**的状态，所以最多滞后一个上报间隔。想立刻看到最新数字：
@@ -85,7 +87,7 @@ luban stats --json   # 机器可读，便于脚本排查
 
 部署见该仓库 README「部署」：`scripts/package.sh` 打包 → `deploy/install.sh` 校验 sha256、
 装 systemd 单元、`enable --now` 并自检 `/health`。线上实例仍是
-http://203.0.113.7:18080/ ，数据在 `/var/lib/luban-stats/reports.jsonl`，把新服务的
+https://submitting-reseller-trustee-fairy.trycloudflare.com/ ，数据在 `/var/lib/luban-stats/reports.jsonl`，把新服务的
 `LUBAN_STATS_DIR` 指向同目录即可沿用历史数据。
 
 本仓库只保留客户端：`src/core/usage-stats.ts`。

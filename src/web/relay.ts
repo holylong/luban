@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { networkInterfaces } from "node:os";
 import { webAssetPath, WEB_CONTENT_TYPES } from "./assets.js";
-import { AuthGate, clearCookie, generateToken, parseCookie, rejectAuth, tokenCookie, tokenMatches } from "./auth.js";
+import { AuthGate, clearCookie, clientAddress, generateToken, parseCookie, rejectAuth, tokenCookie, tokenMatches } from "./auth.js";
 import {
   ACCOUNT_COOKIE, AccountError, AuthThrottle, RelayAccountStore, accountCookie, normalizeEmail,
   clearAccountCookie, type RelayAccountView, type RelayStoredDevice,
@@ -496,7 +496,7 @@ export class LubanRelayServer {
     if (url.pathname === "/api/auth/send-code") {
       if (req.method !== "POST") throw new HttpError(405, "method not allowed");
       if (!this.sameOrigin(req)) throw new HttpError(403, "跨站请求被拒绝");
-      const key = req.socket.remoteAddress || "unknown";
+      const key = clientAddress(req);
       if (!this.authThrottle.check(key)) throw new HttpError(429, "尝试次数过多，请稍后再试");
       const body = await this.jsonBody(req);
       const email = normalizeEmail(typeof body.email === "string" ? body.email : "");
@@ -518,7 +518,7 @@ export class LubanRelayServer {
     if (url.pathname === "/api/auth/register" || url.pathname === "/api/auth/login") {
       if (req.method !== "POST") throw new HttpError(405, "method not allowed");
       if (!this.sameOrigin(req)) throw new HttpError(403, "跨站请求被拒绝");
-      const key = req.socket.remoteAddress || "unknown";
+      const key = clientAddress(req);
       if (!this.authThrottle.check(key)) throw new HttpError(429, "尝试次数过多，请稍后再试");
       const body = await this.jsonBody(req);
       const email = typeof body.email === "string" ? body.email : "";

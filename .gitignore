@@ -51,3 +51,9 @@ Thumbs.db
 /images/
 /introduce.txt
 workbuddy.jpg
+
+# Android build output and the machine-local SDK path
+apps/android-native/.gradle/
+apps/android-native/build/
+apps/android-native/app/build/
+apps/android-native/local.properties

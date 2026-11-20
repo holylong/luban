@@ -6,6 +6,7 @@ import type { ConflictPolicy, LubanConfig, McpServerSettings, MeshContact, Model
 import { consoleAccessToken } from "./opencode-console.js";
 import { readProviderKeys } from "./provider-auth.js";
 import { ensureStarterConfig } from "./default-config.js";
+import { DEFAULT_RELAY_URL } from "./service-defaults.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -927,7 +928,8 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
       enabled: remoteRaw.enabled === true || remoteRaw.enabled === "true",
       host: text(remoteRaw.host, "127.0.0.1"),
       port: Math.max(0, Math.min(65_535, integer(remoteRaw.port, 0))),
-      relayUrl: text(remoteRaw.relay_url, remoteRaw.relayUrl, process.env.LUBAN_RELAY_PUBLIC_URL),
+      // config.json wins, then the environment, then the shipped tunnel address.
+      relayUrl: text(remoteRaw.relay_url, remoteRaw.relayUrl, process.env.LUBAN_RELAY_PUBLIC_URL, DEFAULT_RELAY_URL),
       nodeTokenEnv: text(remoteRaw.node_token_env, remoteRaw.nodeTokenEnv, "LUBAN_RELAY_NODE_TOKEN"),
       nodeTokenFile: resolve(text(remoteRaw.node_token_file, remoteRaw.nodeTokenFile, join(homedir(), ".config/luban/relay.env"))),
       deviceTokenEnv: text(remoteRaw.device_token_env, remoteRaw.deviceTokenEnv, "LUBAN_RELAY_DEVICE_TOKEN"),

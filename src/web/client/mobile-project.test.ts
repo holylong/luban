@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mobileProject, mobileProjects, scratchWorkspace } from "./mobile-project";
 
 describe("phone workspace selection", () => {
-  const node = { project: "timeagent-cpp", workspace: "D:\\WorkStation\\timeagent-cpp", projects: { myapp: "D:\\myapp", "timeagent-cpp": "D:\\WorkStation\\timeagent-cpp" } };
+  const node = { project: "timeagent-cpp", workspace: "D:\\projects\\timeagent-cpp", projects: { myapp: "D:\\myapp", "timeagent-cpp": "D:\\projects\\timeagent-cpp" } };
   it("puts the PC's open workspace first and keeps other registered projects", () => {
     expect(mobileProject(node, "")).toBe("timeagent-cpp");
     expect(mobileProjects(node)).toEqual({ "timeagent-cpp": node.workspace, myapp: "D:\\myapp" });
@@ -35,7 +35,7 @@ describe("scratch workspaces", () => {
   });
   it("leaves real workspaces and look-alike names alone", () => {
     expect(scratchWorkspace("/Users/me/Documents/luban")).toBe(false);
-    expect(scratchWorkspace("/home/deploy/dev/myapp")).toBe(false);
+    expect(scratchWorkspace("/home/me/dev/myapp")).toBe(false);
     expect(scratchWorkspace("/Users/me/tmp/app")).toBe(false);
     expect(scratchWorkspace("/var/foldersx/app")).toBe(false);
     expect(scratchWorkspace("/tmpish")).toBe(false);

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.js";
 import { STARTER_CONFIG, ensureStarterConfig, starterConfigSource } from "./default-config.js";
+import { DEFAULT_RELAY_URL } from "./service-defaults.js";
 
 let root: string;
 let home: string;
@@ -46,8 +47,12 @@ describe("starter configuration", () => {
     for (const forbidden of [
       "api_key", "apiKey", "OPEN_DESIGN_API_KEY", "OPENCODE_ZEN_API_KEY",
       "sk-", // max_tokens is a budget, not a credential; empty maps contain no private data.
-      "192.168.", "10.0.", "172.16.", "39.105.", "184.32.",
     ]) expect(source).not.toContain(forbidden);
+    // Only wildcard or loopback literals may appear: every other dotted quad
+    // would point at somebody's server.
+    for (const quad of source.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/gu) ?? []) {
+      expect(["0.0.0.0", "127.0.0.1"]).toContain(quad);
+    }
     const secretKeys: string[] = [];
     const walk = (value: unknown): void => {
       if (Array.isArray(value)) { value.forEach(walk); return; }
@@ -87,7 +92,9 @@ describe("starter configuration", () => {
     expect(raw.model.max_tokens).toBe(64000);
     expect(config.maxTokens).toBe(64000);
     expect(raw.remote).toEqual({ enabled: false, host: "127.0.0.1", port: 0 });
-    expect(config.remote).toMatchObject({ enabled: false, host: "127.0.0.1", port: 0, relayUrl: "" });
+    // The seeded file stays free of private services; only the resolved value
+    // falls back to the shipped tunnel address.
+    expect(config.remote).toMatchObject({ enabled: false, host: "127.0.0.1", port: 0, relayUrl: DEFAULT_RELAY_URL });
     expect(raw.kev).toEqual({ mode: "model", url: "", timeout_seconds: 120 });
     expect(config.kev).toMatchObject({ mode: "model", url: "", timeoutSeconds: 120 });
     expect(raw.contacts).toEqual([]);

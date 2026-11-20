@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, refreshCodexModels, savePermissionMode, savePreferredModel, saveProject, saveTheme, stripJsonComments } from "./config.js";
+import { DEFAULT_RELAY_URL, DEFAULT_USAGE_STATS_URL } from "./service-defaults.js";
 
 const originalHome = process.env.LUBAN_HOME;
 const originalUserHome = process.env.HOME;
@@ -255,6 +256,42 @@ describe("config", () => {
     expect(raw.projects).toEqual({ old: "/old", picked: "/work/picked" });
     expect(raw.permission).toEqual({ mode: "edits" });
     expect(loadConfig({ workspace }).mesh.projects).toEqual({ old: "/old", picked: "/work/picked" });
+  });
+
+  it("resolves service addresses from config, the environment, then the shipped defaults", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-addresses-"));
+    const workspace = join(home, "project");
+    await mkdir(workspace);
+    process.env.LUBAN_HOME = home;
+    const relayEnv = process.env.LUBAN_RELAY_PUBLIC_URL;
+    const statsEnv = process.env.LUBAN_USAGE_STATS_URL;
+    delete process.env.LUBAN_RELAY_PUBLIC_URL;
+    delete process.env.LUBAN_USAGE_STATS_URL;
+    try {
+      // A fresh install resolves the built-in tunnel address without writing it.
+      expect(loadConfig({ workspace }).remote.relayUrl).toBe(DEFAULT_RELAY_URL);
+      expect(loadConfig({ workspace }).remote.enabled).toBe(false);
+
+      // config.json wins over the built-in value, so a rotated tunnel only needs an edit here.
+      await writeFile(join(home, "config.json"), JSON.stringify({
+        remote: { enabled: true, relay_url: "https://relay.example.com" },
+        usage_stats: { url: DEFAULT_USAGE_STATS_URL },
+      }));
+      expect(loadConfig({ workspace }).remote.relayUrl).toBe("https://relay.example.com");
+      expect(loadConfig({ workspace }).usageStats.url).toBe(DEFAULT_USAGE_STATS_URL);
+
+      // The environment only fills in when the file is silent, so a copied
+      // config cannot be shadowed by a stale shell variable.
+      process.env.LUBAN_RELAY_PUBLIC_URL = "https://env.example.com";
+      expect(loadConfig({ workspace }).remote.relayUrl).toBe("https://relay.example.com");
+      await writeFile(join(home, "config.json"), JSON.stringify({ remote: { enabled: true } }));
+      expect(loadConfig({ workspace }).remote.relayUrl).toBe("https://env.example.com");
+    } finally {
+      if (relayEnv === undefined) delete process.env.LUBAN_RELAY_PUBLIC_URL;
+      else process.env.LUBAN_RELAY_PUBLIC_URL = relayEnv;
+      if (statsEnv === undefined) delete process.env.LUBAN_USAGE_STATS_URL;
+      else process.env.LUBAN_USAGE_STATS_URL = statsEnv;
+    }
   });
 
   it("resolves the terminal theme from flags, config, and the last choice", async () => {

@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { loadConfig } from "./config.js";
 import { VERSION } from "../version.js";
+import { DEFAULT_USAGE_STATS_URL } from "./service-defaults.js";
 import { flushUsageStats, readUsageLedger, usageLedgerPath } from "./usage-stats.js";
 
 /** `12345678` -> `12,345,678`, stable regardless of locale. */
@@ -38,7 +39,7 @@ export async function runStats(argv: string[]): Promise<number> {
   const config = loadConfig({ workspace });
   const settings = config.usageStats;
   const ledger = readUsageLedger(config.home);
-  const url = settings.url || "http://203.0.113.7:18080/api/report";
+  const url = settings.url || DEFAULT_USAGE_STATS_URL;
 
   if (options.json) {
     process.stdout.write(`${JSON.stringify({ ledger, enabled: settings.enabled, intervalHours: settings.intervalHours, url }, null, 2)}\n`);

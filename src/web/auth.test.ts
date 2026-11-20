@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { AuthGate, generateToken, loginPage, parseCookie, tokenCookie, tokenMatches } from "./auth.js";
+import { AuthGate, clientAddress, generateToken, loginPage, parseCookie, tokenCookie, tokenMatches } from "./auth.js";
 
 /** Minimal request stand-in: only the fields the gate reads. */
 function request(headers: Record<string, string> = {}, address = "10.0.0.1"): IncomingMessage {
@@ -94,6 +94,27 @@ describe("auth gate", () => {
     expect(gate.check(attacker, url()).status).toBe(401);
   });
 
+  it("keeps one client from locking out everyone behind a local proxy", () => {
+    // cloudflared dials localhost, so every phone arrives from 127.0.0.1. The
+    // forwarded client address is what separates them.
+    const gate = new AuthGate("s3cret", { maxFailures: 2 });
+    const noisy = request({ "x-luban-token": "nope", "cf-connecting-ip": "203.0.113.7" }, "127.0.0.1");
+    gate.check(noisy, url());
+    gate.check(noisy, url());
+    expect(gate.check(noisy, url()).status).toBe(429);
+    const neighbour = request({ "x-luban-token": "nope", "cf-connecting-ip": "203.0.113.8" }, "127.0.0.1");
+    expect(gate.check(neighbour, url()).status).toBe(401);
+  });
+
+  it("ignores a forwarded address on a direct connection", () => {
+    // Otherwise a client could reset its own lockout by inventing a header.
+    const gate = new AuthGate("s3cret", { maxFailures: 2 });
+    for (const spoofed of ["1.1.1.1", "2.2.2.2", "3.3.3.3"]) {
+      gate.check(request({ "x-luban-token": "nope", "x-forwarded-for": spoofed }, "9.9.9.9"), url());
+    }
+    expect(gate.check(request({ "x-luban-token": "nope", "x-forwarded-for": "4.4.4.4" }, "9.9.9.9"), url()).status).toBe(429);
+  });
+
   it("forgets failures once the token is right", () => {
     const gate = new AuthGate("s3cret", { maxFailures: 2 });
     const client = request({ "x-luban-token": "nope" });
@@ -109,5 +130,18 @@ describe("login page", () => {
     expect(page).not.toContain("<script>alert(1)</script>");
     expect(page).toContain("&lt;script&gt;");
     expect(page).not.toContain('onload="x"');
+  });
+});
+
+describe("client address", () => {
+  it("prefers the proxy header only for loopback peers", () => {
+    expect(clientAddress(request({ "cf-connecting-ip": "203.0.113.9" }, "127.0.0.1"))).toBe("203.0.113.9");
+    expect(clientAddress(request({ "x-forwarded-for": "203.0.113.10, 10.0.0.1" }, "::1"))).toBe("203.0.113.10");
+    expect(clientAddress(request({ "x-forwarded-for": "203.0.113.10" }, "198.51.100.4"))).toBe("198.51.100.4");
+  });
+
+  it("falls back to the peer when the header is absent or junk", () => {
+    expect(clientAddress(request({}, "127.0.0.1"))).toBe("127.0.0.1");
+    expect(clientAddress(request({ "x-forwarded-for": "not-an-address" }, "::ffff:127.0.0.1"))).toBe("::ffff:127.0.0.1");
   });
 });

@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { VERSION } from "../version.js";
+import { DEFAULT_USAGE_STATS_URL } from "./service-defaults.js";
 import type { RunMetrics, UsageStatsSettings } from "./types.js";
 
 export interface UsageDelta {
@@ -58,9 +59,8 @@ export interface UsageFlushOptions {
   onError?: (error: unknown) => void;
 }
 
-// 443 is the relay's own TLS listener, so the stats service lives on its own
-// plain-HTTP port; the payload is an anonymous id plus three counters.
-const DEFAULT_URL = "http://203.0.113.7:18080/api/report";
+// The payload is an anonymous id plus three counters; the address itself lives
+// in service-defaults.ts so every caller shares one literal.
 const MAX_HOURS = 24 * 7;
 const MAX_BACKOFF_STEPS = 4;
 /** A crashed uploader leaves its lock behind; anything older is not a live one. */
@@ -266,7 +266,7 @@ async function performFlush(options: UsageFlushOptions): Promise<"sent" | "skipp
   } finally {
     if (typeof lock === "object") lock.release();
   }
-  const url = options.settings.url || DEFAULT_URL;
+  const url = options.settings.url || DEFAULT_USAGE_STATS_URL;
   // The acknowledgement subtracts what was actually sent instead of writing a
   // snapshot read before the request: a run that ends mid-upload is added to
   // the ledger by its own process and must survive this write.

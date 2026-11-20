@@ -17,6 +17,28 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 export const TOKEN_COOKIE = "luban_token";
 export const TOKEN_HEADER = "x-luban-token";
 
+const LOOPBACK = /^(?:::1|::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/u;
+const ADDRESS = /^[0-9a-fA-F:.]{2,45}$/u;
+
+/**
+ * Rate-limiting identity for one request.
+ *
+ * A direct connection is only ever keyed by its socket address, so a client
+ * cannot escape the lockout by inventing `X-Forwarded-For`. When the peer is
+ * loopback we are behind a local reverse proxy — `cloudflared` pointed at
+ * `localhost:443`, or nginx on the same host — and every phone would otherwise
+ * share the single `127.0.0.1` bucket: one noisy client, or one scanner, locks
+ * out everybody. Only in that case do the proxy's client-IP headers count.
+ */
+export function clientAddress(req: IncomingMessage): string {
+  const peer = req.socket.remoteAddress || "unknown";
+  if (!LOOPBACK.test(peer)) return peer;
+  const header = req.headers["cf-connecting-ip"] ?? req.headers["x-forwarded-for"];
+  const value = Array.isArray(header) ? header[0] : header;
+  const first = String(value || "").split(",")[0].trim();
+  return ADDRESS.test(first) ? first : peer;
+}
+
 /** 18 random bytes: 144 bits, short enough to type from a phone once. */
 export function generateToken(bytes = 18): string {
   return randomBytes(bytes).toString("base64url");
@@ -100,7 +122,7 @@ export class AuthGate {
   }
 
   private key(req: IncomingMessage): string {
-    return req.socket.remoteAddress || "unknown";
+    return clientAddress(req);
   }
 
   private recent(req: IncomingMessage): number[] {

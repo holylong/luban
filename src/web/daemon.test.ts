@@ -51,8 +51,8 @@ describe("daemon state", () => {
 
   it("keeps the interface it bound, defaulting an old file to loopback", () => {
     const home = tempHome();
-    writeDaemonState(home, state(home, { host: "192.168.1.10" }));
-    expect(readDaemonState(home)?.host).toBe("192.168.1.10");
+    writeDaemonState(home, state(home, { host: "192.168.1.37" }));
+    expect(readDaemonState(home)?.host).toBe("192.168.1.37");
     writeFileSync(daemonPaths(home).state, JSON.stringify({ pid: 12, port: 4000, token: "x".repeat(12) }));
     // Files written before `host` existed were loopback-only daemons: never
     // advertise them as reachable from the phone's network.

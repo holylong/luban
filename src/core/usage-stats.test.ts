@@ -2,6 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_USAGE_STATS_URL } from "./service-defaults.js";
 import { flushUsageStats, flushUsageStatsOnExit, readUsageLedger, recordRunUsage, runUsage, usageLedgerPath } from "./usage-stats.js";
 
 const homes: string[] = [];
@@ -45,6 +46,17 @@ it("sums every model call of a run, including a failed one that still reported u
     { index: 3, purpose: "compaction", elapsedMs: 10, ok: true },
   ] });
   expect(usage).toEqual({ input: 2000, output: 300, runs: 1 });
+});
+
+it("uploads to the shipped stats address when the config leaves the url empty", async () => {
+  const home = makeHome();
+  const urls: string[] = [];
+  const fetchImpl = (async (url: unknown) => {
+    urls.push(String(url));
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  expect(await flushUsageStats({ home, settings: { ...settings, url: "" }, fetchImpl, now: () => 10 * HOUR })).toBe("sent");
+  expect(urls).toEqual([DEFAULT_USAGE_STATS_URL]);
 });
 
 it("sends one zero-token heartbeat on a fresh install, then only real deltas", async () => {

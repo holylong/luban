@@ -65,14 +65,14 @@ describe("device workspace inventory", () => {
             luban: "/Users/me/Documents/luban",
             "luban-term-kKcgL5": "/private/var/folders/jw/T/luban-term-kKcgL5",
             "luban-a-uafP5D": "/private/var/folders/jw/T/luban-a-uafP5D",
-            splitvoice: "/Users/me/Documents/splitvoice",
+            webapp: "/Users/me/Documents/webapp",
           },
         }
         : [summary("s", parsed.searchParams.get("project")!)]);
     }) as unknown as typeof fetch;
     const entries = await loadDeviceWorkspaces(undefined, new AbortController().signal, fetcher);
-    expect(entries.map(entry => entry.project)).toEqual(["luban", "splitvoice"]);
-    expect(urls.map(url => url.searchParams.get("project")).filter(Boolean)).toEqual(["luban", "splitvoice"]);
+    expect(entries.map(entry => entry.project)).toEqual(["luban", "webapp"]);
+    expect(urls.map(url => url.searchParams.get("project")).filter(Boolean)).toEqual(["luban", "webapp"]);
   });
 
   it("does not let one unreadable project's sessions hide the others", async () => {

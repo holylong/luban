@@ -14,7 +14,7 @@ const interfaces = {
   lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true } as never],
   en0: [
     { address: "fe80::1", family: "IPv6", internal: false } as never,
-    { address: "192.168.1.10", family: "IPv4", internal: false } as never,
+    { address: "192.168.1.37", family: "IPv4", internal: false } as never,
   ],
   utun3: [{ address: "100.64.0.9", family: "IPv4", internal: false } as never],
 };
@@ -24,7 +24,7 @@ describe("phone links", () => {
     const links = phoneLinks(state(), interfaces);
     expect(links).toEqual([
       "http://127.0.0.1:8642/m/?token=tok%20en%2F%2B",
-      "http://192.168.1.10:8642/m/?token=tok%20en%2F%2B",
+      "http://192.168.1.37:8642/m/?token=tok%20en%2F%2B",
       "http://100.64.0.9:8642/m/?token=tok%20en%2F%2B",
     ]);
   });
@@ -34,9 +34,9 @@ describe("phone links", () => {
     // URL would send it chasing a connection that always refuses.
     expect(phoneLinks(state({ host: "127.0.0.1" }), interfaces)).toEqual(["http://127.0.0.1:8642/m/?token=tok%20en%2F%2B"]);
     // A pinned interface answers on that interface only.
-    expect(phoneLinks(state({ host: "192.168.1.10" }), interfaces)).toEqual([
+    expect(phoneLinks(state({ host: "192.168.1.37" }), interfaces)).toEqual([
       "http://127.0.0.1:8642/m/?token=tok%20en%2F%2B",
-      "http://192.168.1.10:8642/m/?token=tok%20en%2F%2B",
+      "http://192.168.1.37:8642/m/?token=tok%20en%2F%2B",
     ]);
   });
 });

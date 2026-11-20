@@ -46,7 +46,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_SERVER = "server_url";
     private static final String PREF_COOKIE = "account_cookie";
     private static final String PREF_EMAIL = "account_email";
-    private static final String DEFAULT_SERVER = "https://203.0.113.7";
+    private static final String DEFAULT_SERVER = "https://thickness-oxygen-life-resistant.trycloudflare.com";
     private static final String[] MODES = {"edits", "agent", "read"};
     private static final String[] MODE_LABELS = {"可改文件", "可执行", "只读"};
 
