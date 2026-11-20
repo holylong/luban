@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.7.7",
+  "version": "2.7.8",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "type": "module",
   "bin": {
