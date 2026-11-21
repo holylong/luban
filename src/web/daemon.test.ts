@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -105,6 +105,20 @@ describe("daemon state", () => {
   it("refuses to spawn a dev entry instead of the compiled CLI", () => {
     expect(daemonEntry("/opt/luban/dist/cli.js")).toBe("/opt/luban/dist/cli.js");
     expect(() => daemonEntry("/opt/luban/src/cli.tsx")).toThrow(/dist\/cli\.js/u);
+  });
+
+  it("accepts the symlinked launcher npm installs", () => {
+    // `luban daemon start` from a global install runs …/bin/luban, a symlink:
+    // process.argv[1] then has no .js extension even though dist/cli.js is live.
+    const root = tempHome();
+    const dist = join(root, "lib", "node_modules", "luban", "dist");
+    mkdirSync(dist, { recursive: true });
+    const cli = join(dist, "cli.js");
+    writeFileSync(cli, "#!/usr/bin/env node\n");
+    mkdirSync(join(root, "bin"));
+    const launcher = join(root, "bin", "luban");
+    symlinkSync(cli, launcher);
+    expect(daemonEntry(launcher)).toBe(cli);
   });
 });
 

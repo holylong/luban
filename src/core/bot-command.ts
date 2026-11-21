@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { AgentRunner, initialMessages } from "./agent.js";
 import { BotQueue, type BotExecute, type BotTaskPatch } from "./bot.js";
+import { resolveCliPath } from "./cli-entry.js";
 import { loadConfig } from "./config.js";
 import { injectMemory, memoryPrompt, noteRun, readProjectMemory, runSummary, stripMemory, type ProjectMemoryRecord } from "./memory.js";
 import type { ChatMessage, LubanConfig } from "./types.js";
@@ -201,9 +202,10 @@ export async function runBot(argv: string[]): Promise<number> {
   program.command("cancel <id>").action(async id => { await queue.cancel(id); process.stdout.write(`Cancelled ${id}\n`); });
   program.command("service").description("Print a macOS LaunchAgent plist; does not install or start it").action(async () => {
     if (process.platform !== "darwin") throw new Error("LaunchAgent is macOS-only; use bot run with your service manager");
-    if (!process.argv[1]?.endsWith(".js")) throw new Error("Build first and run node dist/cli.js bot service");
+    const cli = resolveCliPath(process.argv[1]);
+    if (!cli || !/\.(?:c|m)?js$/u.test(cli)) throw new Error("Build first and run node dist/cli.js bot service");
     await mkdir(join(home, "bot"), { recursive: true, mode: 0o700 });
-    process.stdout.write(botLaunchAgent(process.execPath, resolve(process.argv[1]), home, process.env.PATH || "/usr/bin:/bin"));
+    process.stdout.write(botLaunchAgent(process.execPath, resolve(cli), home, process.env.PATH || "/usr/bin:/bin"));
   });
   program.command("run").description("Run serial worker; Ctrl+C/SIGTERM stops safely").action(async () => {
     const lock = join(home, "bot", "worker.lock");

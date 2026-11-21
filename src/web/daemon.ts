@@ -11,6 +11,7 @@
  * is directory creation, which is atomic on every platform this ships on.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { compiledCliEntry } from "../core/cli-entry.js";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -119,7 +120,10 @@ export async function probeDaemon(
 
 /** The command a detached child has to be: the compiled CLI, never a dev loader. */
 export function daemonEntry(argv1: string | undefined = process.argv[1]): string {
-  if (argv1 && /\.(?:c|m)?js$/u.test(argv1)) return argv1;
+  // `luban` is normally a symlink to dist/cli.js, so the resolver follows the
+  // link before judging the name: `…/bin/luban` is the CLI, not a dev loader.
+  const entry = compiledCliEntry(argv1);
+  if (entry) return entry;
   throw new Error("常驻服务需要编译后的 CLI（dist/cli.js）：先 npm run build，或运行 luban daemon --help");
 }
 

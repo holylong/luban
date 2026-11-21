@@ -1,3 +1,10 @@
+## 2.8.7 — 2026-11-21
+
+- 修 `luban daemon start` 在正常安装下直接失败：`Error: 常驻服务需要编译后的 CLI（dist/cli.js）：先 npm run build`。原因不是没编译，而是 `daemonEntry()` 直接拿 `process.argv[1]` 判断「是不是编译后的 CLI」——npm 把可执行文件装成符号链接（`bin/luban` → `../lib/node_modules/luban/dist/cli.js`），Node 保留的是 `…/bin/luban` 这个别名，没有 `.js` 后缀，于是明明装着 dist/cli.js 也被判成开发入口。现在先 `realpath` 解析启动器再看扩展名，脱离的子进程拿到的就是真实的 `dist/cli.js`。
+- 同一个根因在另外两处也埋着：`ensureBotWorker()` 用 `/(?:^|[\\/])cli\.(?:js|mjs)$/` 判断能不能起队列 worker，符号链接安装时会静默返回 `no-entry`，于是一个提醒都不会响；`luban bot service` 打印 LaunchAgent 时同样以 `argv[1].endsWith(".js")` 为准。三处统一改用新的 `src/core/cli-entry.ts`（`resolveCliPath` / `compiledCliEntry`）：跟随符号链接链，解析不到时保留原路径，开发入口（`src/cli.tsx`）与测试运行器仍被拒绝。
+- 新增回归测试 7 例：`src/core/cli-entry.test.ts` 5 例（npm 式符号链接、链接链、普通编译路径、开发入口/空入口、解析不到的路径保持原样），`src/web/daemon.test.ts` 加「接受 npm 安装的符号链接启动器」，`src/core/remind.test.ts` 加「符号链接启动器仍能起 worker」。红绿证明——把 `resolveCliPath` 改成直接返回入参后 4 例（cli-entry 2 例、remind 1 例、daemon 1 例）立即变红；把 `daemonEntry` 改回直读 `argv[1]` 时 daemon 那一例同样变红，恢复后 35 例全绿。
+- 验证：`npm run build` + `tsc -p tsconfig.json --noEmit` 通过；`npx vitest run src/core/cli-entry.test.ts src/web/daemon.test.ts src/core/remind.test.ts` 35 例全绿；真实的全局符号链接 `luban`（`…/node-v22.19.0-linux-x64/bin/luban`）现在 `luban daemon start` 成功启动，`ps` 显示子进程是 `node …/agi/luban/dist/cli.js web … --daemon-child`，`luban daemon status` 报「运行中」并列出 2 个项目。
+
 ## 2.8.6 — 2026-11-21
 
 - 真机验证（Android 14，1220×2712）把手机接到生产中继上的真实账户跑了一遍，修掉四个只在真数据上出现的问题。

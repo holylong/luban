@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BotQueue, type BotTask } from "./bot.js";
+import { resolveCliPath } from "./cli-entry.js";
 /**
  * "5 分钟后提醒我下班" belongs in luban's own queue, not in the system calendar.
  *
@@ -160,15 +161,18 @@ export function ensureBotWorker(home: string, entry = process.argv[1], binary = 
   const current = workerFile(home);
   if (current.running) return { ...current, started: false, reason: "already-running" };
   if (current.launchAgent) return { ...current, started: false, reason: "launch-agent" };
+  // `luban` is usually a symlink to dist/cli.js, so resolve the launcher before
+  // judging the name — otherwise a normal install looks like a dev loader.
+  const cli = resolveCliPath(entry);
   // Only a built CLI can be asked to run the worker: no guessing at test
   // runners or a `tsx src/cli.tsx` dev session, where the flag means nothing.
-  if (!entry || !/(?:^|[\\/])cli\.(?:js|mjs)$/u.test(entry)) return { ...current, started: false, reason: "no-entry" };
+  if (!cli || !/(?:^|[\\/])cli\.(?:js|mjs)$/u.test(cli)) return { ...current, started: false, reason: "no-entry" };
   const directory = join(home, "bot");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const log = join(directory, "worker.log");
   const fd = openSync(log, "a", 0o600);
   try {
-    const child = spawn(binary, [entry, "bot", "run"], {
+    const child = spawn(binary, [cli, "bot", "run"], {
       env: { ...process.env, LUBAN_HOME: home },
       detached: true,
       stdio: ["ignore", fd, fd],

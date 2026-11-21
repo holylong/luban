@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -104,6 +104,20 @@ describe("worker detection", () => {
     // `bot run` would start something unrelated.
     expect(ensureBotWorker(home, "/tmp/vitest.mjs").reason).toBe("no-entry");
     expect(ensureBotWorker(home, undefined).reason).toBe("no-entry");
+  });
+
+  it("finds the CLI behind a symlinked launcher", async () => {
+    // A global install runs `…/bin/luban`, a symlink: the worker still has to be
+    // spawned from the real dist/cli.js, not skipped as a dev loader.
+    const bin = join(home, "bin");
+    await mkdir(bin, { recursive: true });
+    const cli = join(home, "dist", "cli.js");
+    await mkdir(join(home, "dist"), { recursive: true });
+    await writeFile(cli, "#!/usr/bin/env node\n");
+    await symlink(cli, join(bin, "luban"));
+    const started = ensureBotWorker(home, join(bin, "luban"), "/bin/true");
+    expect(started.reason).toBe("spawned");
+    expect(started.started).toBe(true);
   });
 });
 
