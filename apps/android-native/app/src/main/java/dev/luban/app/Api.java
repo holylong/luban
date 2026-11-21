@@ -119,8 +119,10 @@ final class Api {
         HttpURLConnection connection = (HttpURLConnection) new URL(base + path).openConnection();
         try {
             connection.setRequestMethod(method);
-            connection.setConnectTimeout(9000);
-            connection.setReadTimeout(20000);
+            connection.setConnectTimeout(12000);
+            // A long session transcript can be hundreds of kilobytes and the
+            // relay adds a round trip; 20s used to time out on real accounts.
+            connection.setReadTimeout(45000);
             connection.setRequestProperty("accept", "application/json");
             if (!cookie.isEmpty()) connection.setRequestProperty("cookie", cookie);
             if (body != null) {
@@ -248,6 +250,30 @@ final class Api {
 
     JSONArray questions(String node) throws IOException, JSONException {
         return getArray("/api/questions", node);
+    }
+
+    /**
+     * Remove one computer from the account.
+     *
+     * The relay drops every registration it owns; device tokens are revoked by
+     * the same call, so a phone that removes a stale laptop is not just
+     * hiding it.
+     */
+    JSONObject deleteDevice(String deviceId) throws IOException, JSONException {
+        return call("DELETE", "/api/account/devices/" + enc(deviceId), null);
+    }
+
+    /** Delete a saved session; the relay answers 409 while a job still owns it. */
+    JSONObject deleteSession(String node, String project, String id) throws IOException, JSONException {
+        return post("/api/sessions/" + enc(id) + "/delete?project=" + enc(project), node, new JSONObject());
+    }
+
+    /** Switch the model (and reasoning effort) used for the next task. */
+    JSONObject setModel(String node, String id, String effort) throws IOException, JSONException {
+        JSONObject body = new JSONObject().put("model", id);
+        // An explicit null is "this model's default"; omitting it would keep the old effort.
+        body.put("reasoning_effort", effort == null ? JSONObject.NULL : effort);
+        return post("/api/model", node, body);
     }
 
     JSONObject answer(String node, String id, String answer) throws IOException, JSONException {

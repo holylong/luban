@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.8.4",
+  "version": "2.8.6",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "license": "MIT",
   "author": "luban contributors",
@@ -57,6 +57,7 @@
     "publish:release": "node scripts/publish-release.mjs",
     "test:release": "node --test scripts/release.test.mjs",
     "test:publish": "node --test scripts/publish-release.test.mjs",
+    "test:android": "node --test scripts/android-navigation.test.mjs",
     "eval": "tsx src/evals/run.ts",
     "package:vscode": "node scripts/package-vscode.mjs",
     "package:linux": "node scripts/package-linux.mjs",

@@ -7,6 +7,20 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { collectArtifacts, describeArtifact, githubArtifacts, main, parseArgs } from "./publish-release.mjs";
 
+/** A CHANGELOG the publishing tests can point at without touching the real file. */
+const CHANGELOG = [
+  "# CHANGELOG",
+  "",
+  "## 2.7.12 — 2026-01-01",
+  "",
+  "- 用户可见的变化一",
+  "- 用户可见的变化二",
+  "",
+  "## 9.9.9 — 2025-01-01",
+  "",
+  "- 旧版本",
+  "",
+].join("\n");
 const VERSION = "2.7.12";
 const NAME = `luban-cli-${VERSION}-mac-x64.zip`;
 
@@ -180,7 +194,7 @@ test("a missing token fails before any request is sent", async () => {
   const dir = await buildDir({ [NAME]: "x" });
   const server = await fakeServer();
   try {
-    await assert.rejects(() => main(["--version", VERSION, "--dir", dir, "--url", server.url], { token: undefined }), /releases-token/u);
+    await assert.rejects(() => main(["--version", VERSION, "--dir", dir, "--url", server.url], { token: undefined, changelog: CHANGELOG }), /releases-token/u);
     assert.equal(server.seen.auth.length, 0);
   } finally {
     await server.close();
@@ -191,7 +205,7 @@ test("a rejected upload stops before the manifest is announced", async () => {
   const dir = await buildDir({ [NAME]: "x" });
   const server = await fakeServer({ rejectUpload: true });
   try {
-    await assert.rejects(() => main(["--version", VERSION, "--dir", dir, "--url", server.url], { token: "secret" }), /upload .* failed: HTTP 409/u);
+    await assert.rejects(() => main(["--version", VERSION, "--dir", dir, "--url", server.url], { token: "secret", changelog: CHANGELOG }), /upload .* failed: HTTP 409/u);
     assert.equal(server.seen.releases.length, 0);
   } finally {
     await server.close();
@@ -200,11 +214,38 @@ test("a rejected upload stops before the manifest is announced", async () => {
 
 test("an empty release directory is explained instead of published", async () => {
   const dir = await buildDir({ "notes.md": "nothing built" });
-  await assert.rejects(() => main(["--version", VERSION, "--dir", dir, "--url", "http://127.0.0.1:1"], { token: "secret" }), /run npm run release first/u);
+  await assert.rejects(() => main(["--version", VERSION, "--dir", dir, "--url", "http://127.0.0.1:1"], { token: "secret", changelog: CHANGELOG }), /run npm run release first/u);
 });
 
 test("dry run lists the files without touching the network", async () => {
   const dir = await buildDir({ [NAME]: "x" });
-  const code = await main(["--version", VERSION, "--dir", dir, "--url", "http://127.0.0.1:1", "--dry-run"], { token: "secret" });
+  const code = await main(["--version", VERSION, "--dir", dir, "--url", "http://127.0.0.1:1", "--dry-run"], { token: "secret", changelog: CHANGELOG });
   assert.equal(code, 0);
+});
+
+test("release notes default to this version's CHANGELOG section", async () => {
+  const dir = await buildDir({ [NAME]: "x" });
+  const server = await fakeServer();
+  try {
+    await main(["--version", VERSION, "--dir", dir, "--url", server.url], { token: "secret", changelog: CHANGELOG });
+    const [release] = server.seen.releases;
+    assert.equal(release.notes, "- 用户可见的变化一\n- 用户可见的变化二");
+  } finally {
+    await server.close();
+  }
+});
+
+test("a version without a CHANGELOG entry is refused before anything is sent", async () => {
+  const dir = await buildDir({ [NAME]: "x" });
+  const server = await fakeServer();
+  try {
+    await assert.rejects(
+      () => main(["--version", VERSION, "--dir", dir, "--url", server.url], { token: "secret", changelog: "## 9.9.9 — 2025-01-01\n\n- 旧版本" }),
+      /no release notes for 2\.7\.12/u,
+    );
+    assert.equal(server.seen.uploads.length, 0);
+    assert.equal(server.seen.releases.length, 0);
+  } finally {
+    await server.close();
+  }
 });

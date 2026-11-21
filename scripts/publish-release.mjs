@@ -15,7 +15,10 @@
  *   LUBAN_RELEASES_URL    base URL of the release server (default: built-in)
  *   LUBAN_RELEASES_TOKEN  bearer token; or ~/.luban/releases-token (0600)
  *
- *   npm run publish:release -- --version 2.7.12 --notes "…" [--dry-run]
+ *   npm run publish:release -- --version 2.7.12 [--notes "…"] [--dry-run]
+ *
+ * Notes default to the matching CHANGELOG.md section: every published version must
+ * say what changed, otherwise the update prompt ships an empty log.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -31,6 +34,7 @@ const help = `Usage: npm run publish:release -- --version X.Y.Z [--notes "…"] 
 
   --version  release version; every artifact in --dir must carry it  (required)
   --notes    release notes shown by luban update and the update panel
+             (default: this version's CHANGELOG.md section — an empty log is refused)
   --dir      directory holding the built files              (default: release/)
   --url      release server base URL        (default: LUBAN_RELEASES_URL or built-in)
   --kind     only publish these kinds, comma separated (default: every file found)
@@ -62,6 +66,35 @@ export function describeArtifact(name) {
   if (!match) return undefined;
   const [, kind, version, platformWord, archWord, extension] = match;
   return { file: text, kind, version, platform: PLATFORM_WORDS[platformWord], arch: ARCH_WORDS[archWord], extension };
+}
+
+/**
+ * Pull one version's section out of CHANGELOG.md.
+ *
+ * Every published version is supposed to describe itself; when the section is
+ * missing the release is refused rather than announced with an empty log.
+ */
+export function changelogNotes(version, text) {
+  const body = String(text ?? "").replace(/\r\n/gu, "\n");
+  const heading = new RegExp(`^## ${String(version).replace(/\./gu, "\\.")}(?:\\s|$).*$`, "mu");
+  const start = heading.exec(body);
+  if (!start) return "";
+  const from = start.index + start[0].length;
+  const rest = body.slice(from);
+  const next = /^## /mu.exec(rest);
+  return rest.slice(0, next ? next.index : rest.length)
+    .replace(/^\s+|\s+$/gu, "")
+    .slice(0, 8_000);
+}
+
+/** The CHANGELOG shipped next to this script. */
+async function changelogText(deps) {
+  if (typeof deps.changelog === "string") return deps.changelog;
+  try {
+    return await readFile(join(root, "CHANGELOG.md"), "utf8");
+  } catch {
+    return "";
+  }
 }
 
 /** Parse `--flag value` pairs into a record; unknown flags are an error. */
@@ -223,6 +256,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (options.help) { process.stdout.write(help); return 0; }
   const url = String(options.url ?? deps.env?.LUBAN_RELEASES_URL ?? process.env.LUBAN_RELEASES_URL ?? deps.url ?? builtinUrl()).trim().replace(/\/+$/u, "");
   if (!url) throw new Error("no release server URL: pass --url or set LUBAN_RELEASES_URL");
+  const notes = String(options.notes ?? "").trim() || changelogNotes(options.version, await changelogText(deps));
+  if (!notes) {
+    throw new Error(`no release notes for ${options.version}: add a "## ${options.version} — <date>" section to CHANGELOG.md (or pass --notes) — a version with an empty log is not worth publishing`);
+  }
   const githubRepo = String(options.githubRepo ?? deps.env?.LUBAN_GITHUB_REPO ?? process.env.LUBAN_GITHUB_REPO ?? DEFAULT_GITHUB_REPO).trim();
   const artifacts = options.github !== undefined
     ? await githubArtifacts(githubRepo, `v${options.version}`, options.version, { ...deps, kinds: options.kinds })
@@ -235,6 +272,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const lines = artifacts.map(item => `  ${item.kind.padEnd(7)} ${item.platform}-${item.arch}  ${item.file}${item.url ? `  <- ${item.url}` : ""}`);
   if (options.dryRun) {
     process.stdout.write(`would publish ${options.version} to ${url}\n${lines.join("\n")}\n`);
+    process.stdout.write(`notes (${notes.length} chars):\n${notes.split("\n").slice(0, 4).join("\n")}\n`);
     return 0;
   }
   // A caller that names `token` — even as undefined — is deciding for itself, so
@@ -251,7 +289,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     uploaded.push(await upload(url, token, artifact, deps));
     process.stdout.write("ok\n");
   }
-  const reply = await announce(url, token, options.version, String(options.notes ?? ""), uploaded, deps);
+  const reply = await announce(url, token, options.version, notes, uploaded, deps);
   process.stdout.write(`published ${reply.version ?? options.version}: ${reply.artifacts ?? uploaded.length} artifacts\n${lines.join("\n")}\n`);
   process.stdout.write(`check it with: LUBAN_UPDATES_URL=${url} luban update --json\n`);
   return 0;

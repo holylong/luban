@@ -1293,6 +1293,27 @@ adb -s <设备序列号> install -r app/build/outputs/apk/debug/app-debug.apk
 
 调试 APK 适合自用和测试；正式分发需自行配置 Android release 签名。任务和界面由 luban 服务提供，APK 不包含模型；只更新 Web 界面时重新构建并重启服务即可，APK 无需重装。
 
+### 原生控制台（apps/android-native）
+
+`apps/android-native/` 是同一套中继 REST API 的原生 Android 实现，不加载 WebView 页面，适合想要更快的冷启动和更省电的常驻场景。它的结构是「电脑 → 工作区 → 会话」：中继把一个 `luban daemon` 的每个工作区注册成独立节点，App 按机器 id 合并成一张电脑卡片，卡片里列出这台电脑的全部工作区与最近会话。
+
+- **工作区属于电脑，而不是某个注册实例。** 同一台电脑的实例共用 `~/.luban`，项目表相同，所以 `Machine.servingNode(project)` 优先用拥有该路径的在线实例，其次用同机任一在线实例，最后才回落到离线的 owner。结果是：只要电脑上还有一个 daemon 在监听，任意工作区都能点开继续。
+- **离线可读可重试。** 设备列表与会话列表各有一份上次同步的缓存；电脑离线时仍能浏览、能看到上次在跑什么，点开会话会提示「这台电脑现在没有连上中继」并给出重试，连接恢复后重试即进入真正的会话。离线时输入框不会发出必失败的请求。
+- **任务按整台电脑聚合**：任务页合并各实例的 `/api/jobs` 去重排序，打开任务时路由到提交它的节点，详情页可取消任务。
+- **审批与提问**：可以「允许本次 / 本会话都允许 / 这个工具都允许 / 拒绝」；提问的选项直接点选，也可自由输入。
+- **模型**：设置页显示当前模型与推理强度，可切换模型（`POST /api/model`），对已运行的任务不生效、下一个任务生效。
+
+构建与测试（Android SDK 35 + JDK 21，AGP 需要 JDK 17 以上）：
+
+```bash
+cd /path/to/luban/apps/android-native
+export JAVA_HOME=/path/to/jdk-21
+./gradlew assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
+./gradlew testDebugUnitTest    # MachineTest：分组、路由、离线回退
+```
+
+`Machine`/`RelayNode` 是纯 Java + org.json，所以分组与路由逻辑有 JVM 单测；UI 部分没有自动化测试，改动界面后建议装到真机点一遍。
+
 ### 浏览器安装 PWA 与自签证书
 
 不用 APK 时，手机浏览器也能打开同一链接。浏览器要把 `/m/` 作为 PWA 安装到主屏幕，需要受信任的 HTTPS 安全上下文；局域网 HTTP 可在 APK 中使用，但不能作为可靠的 PWA 安装方式。推荐使用对访问域名有效、手机系统已信任的证书。
@@ -1444,6 +1465,7 @@ luban 的沙箱与权限是**协作防护**，不是系统级隔离容器：不�
 ```bash
 npm test          # 72 文件 / 390 用例（另有 1 个按平台跳过）
 npm run eval      # 脚本化评测集（单文件/跨文件/失败恢复/只读拒绝，无需付费 API）
+npm run test:android  # Android 原生控制台的结构断言（路由、离线、任务聚合、审批选项）
 npm run typecheck
 npm run build
 ```

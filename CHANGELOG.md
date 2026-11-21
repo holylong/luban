@@ -1,3 +1,28 @@
+## 2.8.6 — 2026-11-21
+
+- 真机验证（Android 14，1220×2712）把手机接到生产中继上的真实账户跑了一遍，修掉四个只在真数据上出现的问题。
+- **实时执行永远停在「执行中 · 0%」**：`/api/jobs/{id}/stream` 返回的 `complete` 只表示「回放缓冲区仍覆盖 `since`」（首次轮询 `since=0` 时恒为 `true`），手机端却把它当成「任务已结束」，于是第一次轮询就把 `liveRunning` 置假并停止刷新。现在只有 `job.status` 是 `done|failed|cancelled|paused` 才算结束，`events.complete` 不再参与判断。
+- **轮询会静默停摆**：原来下一次轮询只在上一次「成功且有结果」的分支里安排，任何一次失败、异常或回调被页面换代丢弃，循环就断掉且界面无提示。改成在 `finally` 里重新排程，入口守卫 `token/background/!liveRunning` 负责在任务结束后收尾，失败时界面显示「连接中断，正在重连」（每 1.2s 重试）。
+- 大会话首读超时：`Api` 的连接超时 9s→12s、读超时 20s→45s。真机上 215 条记录、740KB 的会话经中继中转会超过 20s，界面给出「读取失败 timeout」，重试才成功。
+- **冷启动第一屏谎报「0 台在线 / 共 0 台电脑」**：恢复页面与返回导航直接调用 `showDevices()`，把内存里的空列表画了出来，压根没发请求，只有手点 ⟳ 才回得来。现在本次会话还没成功读过一次 `/relay/nodes` 时先 `loadDevices()`（新增 `devicesLoaded` 标记，在线与离线缓存都算成功），账户真的没有电脑时仍显示「还没有电脑」，不会死循环刷新；`saveNodesCache()` 也不再让空回包抹掉离线缓存。
+- 电脑卡片整张可点：之前只有底部「打开并派活」按钮能进电脑，点卡片上的电脑名字毫无反应。`machineCard` 加卡片级 `setOnClickListener`，卡片内的「任务 / 移除」仍各自处理点击。
+- `scripts/android-navigation.test.mjs` 9→16 例（`npm run test:android`）：轮询必须在 `finally` 重新排程且结束只看 `job.status`、`showDevices` 先判断 `devicesLoaded` 再 `beginPage`、`saveNodesCache` 拒绝空列表、`machineCard` 有卡片级点击。红绿证明——把 `complete` 改回 `events.optBoolean("complete")`、删掉 `devicesLoaded` 守卫、删掉卡片点击，对应用例分别立即变红，恢复后 16 例全绿。
+- 验证：`./gradlew assembleDebug testDebugUnitTest --offline` 通过（`MachineTest` 8 例，APK 1.0.9 / versionCode 10）；真机 `adb install -r` 连生产中继实测：登录后显示「3 台在线 / 共 3 台电脑」，`am force-stop` 重启后连按两次返回落到设备页、**不点 ⟳** 直接显示 3 台在线（修复前同一条路径就是那张 0 台截图），点 my-mac 卡片进入电脑、3 个工作区与各自会话正常加载，CaoDrawPad 里 6 天前 215 条记录的老会话可打开并渲染工具调用，派活后 `执行中 0%` → 8 秒内自动变 `已完成` 并显示结果 `fourth ok`。
+- 另记：`*.trycloudflare.com` 在国内被 SNI 过滤（同一台手机能打开 `www.cloudflare.com`），所以手机连生产中继目前要走局域网 HTTP 反向代理（`/tmp/lan-relay-proxy.mjs`，`http://10.1.13.202:5399` → `https://39.105.10.158:443`，并把 cookie 的 `Secure` 去掉）。这是临时的联调通道，正式方案需要一个没被过滤的域名。
+
+## 2.8.5 — 2026-11-20
+
+- Android 原生版按 WebView 版的模型重做「电脑 → 工作区 → 会话」，重点是同一台电脑的工作区不再因为某个实例离线就打不开：新增 `Machine.servingNode(project)`，优先路由到拥有该路径的在线实例，其次是同机任意在线实例（同一 `~/.luban`，项目表相同，任一 daemon 都能打开本机工作区），最后才回落到离线的 owner。`openWorkspace`、会话列表、删除会话、派活（`sendDraft`）统一走这一个路由。
+- 离线不再是死路：点开缓存里的会话若电脑不在线，`MainActivity.offlineTranscript` 给出「这台电脑现在没有连上中继」+ 重试 + 回到工作区，重试成功即变成真正的会话；电脑离线时输入框直接提示「恢复连接后可以继续派活」，不会白白发一次必失败的请求。设备卡片上的「查看缓存」仍可浏览上次同步的工作区与会话。
+- 运行中的会话点开就是直播：`openLiveSession` 在该电脑各在线实例的任务里找 `session_id` 匹配且 `queued|pending|working` 的那一条，直接进实时流，而不是显示一份冻结的历史。
+- 任务页改为整台电脑一条队列：合并各注册实例的 `/api/jobs` 去重后按创建时间倒序，某个实例掉线不影响其余任务显示；打开任务时按 `jobOwner` 路由到提交它的节点；任务详情新增「取消任务」（确认后调用 `/api/jobs/{id}/cancel`）。
+- 审批与提问对齐 Web：审批卡显示工具、风险等级、参数，按钮为「允许本次 / 拒绝」，非一次性工具额外提供「本会话都允许 / 这个工具都允许」；提问的选项变成可点的按钮（原样回传 label），同时保留自由输入。
+- 设置页新增模型卡片：显示当前模型、推理强度、提供方，可切换模型并在模型支持时选择推理强度（「默认」= 回落到模型默认），电脑离线时说明原因而不是给一个点不动的按钮。
+- `Api` 补齐三个此前缺失的调用：`deleteDevice`（`DELETE /api/account/devices/{id}`）、`deleteSession`（`POST /api/sessions/{id}/delete?project=`）、`setModel`（`POST /api/model`，显式 `null` 表示默认强度）。
+- 首次给这个模块加了可跑的测试：`app/src/test/java/dev/luban/app/MachineTest.java` 8 例（同机多实例归并成一张卡、owner 离线时路由到在线兄弟、owner 在线时优先 owner、整机离线时保留缓存工作区、重启后的实例接管同一工作区、实例间路径冲突时「显示的路径 = 实际服务的节点」、有会话在跑时标题为「正在工作」、machine id 推导），`app/build.gradle` 加 `junit:junit:4.13.2` 与真实 `org.json`（mockable android.jar 的桩会返回 null）。APK 版本 1.0.7（versionCode 8）。
+- 另把 `scripts/android-navigation.test.mjs` 从 7 例扩到 13 例（`npm run test:android`）：工作区必须经 `servingNode` 路由、离线会话可重试、任务按整机聚合且可取消、运行中会话进实时流、审批提供「本会话/这个工具」、设置页可切模型；红绿证明——把 `openWorkspace` 改回 `route.nodeId` 后新增用例立即变红。
+- 验证：`JAVA_HOME=<jdk21> ./gradlew assembleDebug --offline` 通过（`aapt2 dump badging` 显示 versionCode 8 / versionName 1.0.7）；`./gradlew testDebugUnitTest --offline` 8 例全绿；`npm run test:android` 13 例全绿；红绿证明——删掉 `servingNode` 的「在线兄弟」回退后 `routesAWorkspaceToALiveSiblingWhenItsOwnerIsOffline` 立即变红，恢复后全绿。没有真机/模拟器可用环境（`emulator -list-avds` 为空、无 system image），点击流程只做了结构断言，未做设备级验证。
+
 ## 2.8.4 — 2026-11-20
 
 - 手机端「工作区与会话」不再列出空会话：`mobile-workspaces.tsx` 之前对 `/api/sessions` 带 `includeEmpty=1`，把每次 `luban` 启动时写下的「只有系统提示词、没有对话」的草稿记录也拉了回来，于是几乎每个工作区都挂着一串「未命名会话 · 0 条消息 · 尚未开始」，把真正要找的会话挤下去。桌面端会话列表本来就过滤这些草稿（`hasConversation`），手机端现在一致：不请求草稿，并在客户端再过滤一次 `messages === 0`（对接旧版 relay 时也一样），运行中的会话仍然保留。

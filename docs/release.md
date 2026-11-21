@@ -9,7 +9,10 @@
 - PATCH 从 1 数到 20：`2.2.1`、`2.2.2` …… `2.2.20`。
 - 下一个交付如果会超过 20，就把 MINOR 加 1、PATCH 回到 1：`2.2.20` 的下一版是 `2.3.1`，不是 `2.2.21`，也不是 `2.3.0`。
 - MAJOR 只在用户明确要求时变化，新 MAJOR 的第一个版本是 `3.0.1`；MINOR 同理不单独跳号。
-- 每个交付都要改版本：`npm version patch --no-git-tag-version`（或手工同步 package.json 与 package-lock.json），再到 CHANGELOG.md 顶部加一节。
+- 版本按「一次可发布的变化」计，不按每个小改动计：一轮工作里连续的小修、重构、文档整理、探针脚本都并进同一次交付、共用同一个版本号；只有对外部使用者有意义的东西才值得占一个版本。一天里连开 26 个版本（`2.7.x` 那天的实际情况）就是在制造空日志。
+- 发版前先攒：先把这一批改动做完、跑完验证，再 `npm version patch --no-git-tag-version`（或手工同步 package.json 与 package-lock.json），并在 CHANGELOG.md 顶部加一节，写清用户能感知到的变化。
+- 没有用户可见变化的整理（纯文档、纯测试、内部重命名）不单独升版本、不单独发版，跟着下一次真正的交付一起走。
+- 版本号必须带一节有内容的 CHANGELOG：`npm run publish:release` 默认把该版本的 CHANGELOG 一节当作更新日志上传，找不到这一节会直接拒绝发布（`--notes` 可显式覆盖），这样 `luban update` 和升级弹窗里不会再出现空日志。
 - `npm run release` 启动时用 `versionProblem()` 校验，`2.2.0`、`2.2.21`、`v2.2.3` 这类版本会直接报错退出；`npm run test:release` 覆盖了这些用例。
 - 规则从 `2.2.3` 开始生效；CHANGELOG 里更早的 `2.2.0` 等版本是历史记录，不回改。
 

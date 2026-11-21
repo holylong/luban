@@ -5,6 +5,8 @@ node_modules/
 # build output
 dist/
 release/
+# `npm pack` leftovers: they are build output, not sources
+*.tgz
 coverage/
 *.vsix
 

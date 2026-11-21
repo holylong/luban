@@ -8,8 +8,8 @@ android {
         applicationId 'dev.luban.app'
         minSdk 26
         targetSdk 35
-        versionCode 7
-        versionName '1.0.6'
+        versionCode 10
+        versionName '1.0.9'
     }
     buildTypes {
         release { minifyEnabled false }
@@ -18,4 +18,14 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    // Only the pure grouping/routing model is unit tested: it needs JUnit and a
+    // real org.json, because the mockable android.jar stubs return null.
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20160810'
 }
