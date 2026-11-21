@@ -2,6 +2,8 @@
 
 本文保留原 README 的详细配置、开发验证和历史实现说明。新用户请先阅读 [README](../README.md)。
 
+想用现成的提示词逐条验证链路，见 [提示词自测集](prompts.md)。
+
 Node.js/TypeScript 版 luban。它使用 Ink 渲染风格的终端工作台，原生实现了
 Python luban 的局域网发现、节点通信、远程任务和工作区同步。
 
