@@ -9,6 +9,7 @@ import { recoverTextToolCalls } from "./tool-call-text.js";
 import { describeModelError } from "./model-errors.js";
 import { randomUUID } from "node:crypto";
 import { goRequestHeaders, modelRetryDelay, recoverableGoStreamError } from "./opencode-go.js";
+import { splitPrompt } from "./wire.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -22,14 +23,12 @@ export function responsesEndpoint(baseUrl: string): string {
 
 /** Convert a chat transcript into Responses API input items. */
 export async function responsesInput(messages: ChatMessage[], workspace = ""): Promise<{ instructions: string; input: JsonObject[] }> {
-  const instructions = messages
-    .filter((message) => message.role === "system")
-    .map((message) => String(message.content ?? "").trim())
-    .filter(Boolean)
-    .join("\n\n");
+  // Only the stable head becomes `instructions`; volatile plan/verification
+  // records are appended as input items so a change there cannot invalidate the
+  // cached prompt prefix. See `splitPrompt`.
+  const { head: instructions, conversation, runtime } = splitPrompt(messages);
   const input: JsonObject[] = [];
-  for (const message of messages) {
-    if (message.role === "system") continue;
+  for (const message of conversation) {
     if (message.role === "tool") {
       input.push({
         type: "function_call_output",
@@ -55,6 +54,7 @@ export async function responsesInput(messages: ChatMessage[], workspace = ""): P
     }
     input.push({ role: message.role, content: parts });
   }
+  for (const record of runtime) input.push({ role: "user", content: [{ type: "input_text", text: record }] });
   return { instructions, input };
 }
 

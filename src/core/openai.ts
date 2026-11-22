@@ -7,6 +7,7 @@ import { describeModelError } from "./model-errors.js";
 import { modelThinkingFields } from "./model-controls.js";
 import { randomUUID } from "node:crypto";
 import { goRequestHeaders, modelRetryDelay, recoverableGoStreamError } from "./opencode-go.js";
+import { splitPrompt } from "./wire.js";
 
 /**
  * Ceiling for one response's output. It matches ABSOLUTE_MAX_OUTPUT_TOKENS so a
@@ -230,11 +231,9 @@ function retryableBody(status: number, body: string): boolean {
  * workspace at send time so saved sessions stay small. */
 export async function openAiWireMessages(messages: ChatMessage[], workspace = "", model?: LubanConfig["model"]): Promise<Array<Record<string, unknown>>> {
   const requireReasoning = /deepseek/iu.test(`${model?.id ?? ""} ${model?.model ?? ""} ${model?.provider ?? ""} ${model?.baseUrl ?? ""}`);
-  const system = messages.filter((message) => message.role === "system")
-    .map((message) => String(message.content ?? "").trim()).filter(Boolean).join("\n\n");
+  const { head: system, conversation: transcript, runtime } = splitPrompt(messages);
   const conversation: Array<Record<string, unknown>> = [];
-  for (const message of messages) {
-    if (message.role === "system") continue;
+  for (const message of transcript) {
     const { editPreview: _localPreview, images: _localImages, reasoning_content, ...fields } = message;
     const rest = {
       ...fields,
@@ -252,6 +251,10 @@ export async function openAiWireMessages(messages: ChatMessage[], workspace = ""
     }
     conversation.push({ ...rest, content: parts.length ? parts : (message.content ?? "") });
   }
+  // Volatile records (plan state, recorded checks) go last: a change there costs
+  // the tail, not the cached prefix. They stay `user` role so strict chat
+  // templates still see exactly one leading system message.
+  for (const record of runtime) conversation.push({ role: "user", content: record });
   return system ? [{ role: "system", content: system }, ...conversation] : conversation;
 }
 

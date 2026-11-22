@@ -116,6 +116,7 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
 - 压缩通知只在一次任务首次丢弃历史时写入记录（`Compacted N older messages`），之后每一步的再次压缩只更新工作行里的累计条数；否则长任务会把「Compacted 2 older messages」按步数刷满整条历史。
 - **并行只读工具**：同一条消息里连续的只读调用（读文件、搜索、列目录等）真正并发执行，写与 shell 保持严格串行；结果仍按调用顺序写入记录。
 - `update_plan` / `read_plan` 维护任务计划，`record_verification` / `read_verification` 记录测试命令与通过状态；计划与验证随会话保存、压缩保留，未验证成功会明确标注。`@截图.png` 以原生视觉部件发给视觉模型（OpenAI/Anthropic/Responses 三客户端全支持，8MB 上限，会话只存路径）。
+- **提示词缓存**：缓存只认逐字节相同的前缀，所以每次请求的开头必须不动。系统提示、命中的 AGENTS.md、压缩摘要合成固定开头，`update_plan` / `record_verification` 写入的 `[luban …]` 记录改到请求尾部以用户消息追加（`src/core/wire.ts` 的 `splitPrompt`），不再折进开头——一次计划更新或一次验证记录不会再让整段对话掉出缓存（修复前一条验证记录就把下一条请求的前缀从 100% 砍到 47%）。Anthropic 客户端在固定开头和对话末尾各打一个 `cache_control: ephemeral` 断点（此前完全没有显式断点，Claude 系模型命中率只能是 0）。命中率只按 provider 上报的缓存 token 计算，未上报就不显示，不会用 0% 冒充命中失败。
 - 大工具结果自动归档（`tool_output.retention_days`/`max_bytes` 自动清理，默认 7 天/500MB），`read_tool_output` 按页回读，避免为找回日志重复执行命令。
 - 可选会话历史镜像（`history.enabled`）：把每条消息追加进 SQLite，用 `luban history` 或 `GET /api/history` 检索历史，会话 JSON 始终是权威记录。
 - CLI/TUI 在工具调用前后保存进度；中断后恢复会补齐消息协议并标注执行状态未知。

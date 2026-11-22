@@ -108,17 +108,27 @@ describe("OpenAiClient output ceiling", () => {
 });
 
 describe("OpenAiClient", () => {
-  it("merges late and repeated system records into one leading message", async () => {
-    const wire = await openAiWireMessages([
-      { role: "system", content: "base rules" },
-      { role: "user", content: "work" },
-      { role: "assistant", content: "", tool_calls: [{ id: "1", type: "function", function: { name: "read_file", arguments: "{}" } }] },
-      { role: "tool", tool_call_id: "1", name: "read_file", content: "result", editPreview: "local only" },
-      { role: "system", content: "late plan" },
-    ]);
-    expect(wire.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool"]);
-    expect(wire[0]?.content).toBe("base rules\n\nlate plan");
+  it("keeps the leading system block stable and defers volatile records to the tail", async () => {
+    const base = [
+      { role: "system" as const, content: "base rules" },
+      { role: "user" as const, content: "work" },
+      { role: "assistant" as const, content: "", tool_calls: [{ id: "1", type: "function" as const, function: { name: "read_file", arguments: "{}" } }] },
+      { role: "tool" as const, tool_call_id: "1", name: "read_file", content: "result", editPreview: "local only" },
+    ];
+    const plan = { role: "system" as const, content: `[luban task plan]\n{"explanation":"","plan":[]}` };
+    const check = { role: "system" as const, content: `[luban verification]\n{"command":"npm test","status":"passed"}` };
+    // `update_plan` inserts right after the leading system run, `record_verification` appends.
+    const wire = await openAiWireMessages([base[0]!, plan, ...base.slice(1), check]);
+    const plain = await openAiWireMessages(base);
+    // A prompt cache only reuses a literal prefix: the leading system message must
+    // not move when a plan update or a recorded check lands.
+    expect(wire[0]).toEqual(plain[0]);
+    expect(wire[0]?.content).toBe("base rules");
     expect(wire.filter((message) => message.role === "system")).toHaveLength(1);
+    // Records are re-emitted after the transcript instead of merged into the head.
+    expect(wire.slice(0, 4)).toEqual(plain);
+    expect(wire[4]).toEqual({ role: "user", content: plan.content });
+    expect(wire[5]).toEqual({ role: "user", content: check.content });
     expect(wire[3]).not.toHaveProperty("editPreview");
   });
 

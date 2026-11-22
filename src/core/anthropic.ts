@@ -10,6 +10,7 @@ import { parseToolArguments } from "./json-args.js";
 import { recoverTextToolCalls } from "./tool-call-text.js";
 import { randomUUID } from "node:crypto";
 import { goRequestHeaders, modelRetryDelay, recoverableGoStreamError } from "./opencode-go.js";
+import { splitPrompt } from "./wire.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -25,11 +26,15 @@ function parseArguments(value: string): JsonObject {
   } catch { return {}; }
 }
 
-async function anthropicMessages(messages: ChatMessage[], workspace: string): Promise<{ system: string; messages: JsonObject[] }> {
-  const system = messages.filter((message) => message.role === "system").map((message) => String(message.content || "")).join("\n\n");
+async function anthropicMessages(messages: ChatMessage[], workspace: string): Promise<{ system: JsonObject[]; messages: JsonObject[] }> {
+  const { head, conversation, runtime } = splitPrompt(messages);
+  // Explicit breakpoints are the only way Anthropic caches anything: the prefix
+  // up to a marked block is reused. The head holds tools + system, the last
+  // message caches the conversation as it grows. Both are cheap and the API
+  // silently ignores a prefix below the model's minimum.
+  const system: JsonObject[] = head ? [{ type: "text", text: head, cache_control: { type: "ephemeral" } }] : [];
   const output: JsonObject[] = [];
-  for (const message of messages) {
-    if (message.role === "system") continue;
+  for (const message of conversation) {
     if (message.role === "tool") {
       const block = { type: "tool_result", tool_use_id: message.tool_call_id, content: message.content || "" };
       const previous = output.at(-1);
@@ -53,6 +58,18 @@ async function anthropicMessages(messages: ChatMessage[], workspace: string): Pr
       }
       output.push({ role: message.role, content });
     } else output.push({ role: message.role, content: message.content || "" });
+  }
+  // Plan state and recorded checks are re-emitted after the transcript so a
+  // change cannot invalidate the cached prefix behind them.
+  if (runtime.length) output.push({ role: "user", content: runtime.map((record: string) => ({ type: "text", text: record })) });
+  const last = output.at(-1);
+  if (last) {
+    if (typeof last.content === "string") {
+      if (last.content) last.content = [{ type: "text", text: last.content, cache_control: { type: "ephemeral" } }];
+    } else if (Array.isArray(last.content) && last.content.length) {
+      const finalBlock = last.content.at(-1) as JsonObject;
+      finalBlock.cache_control = { type: "ephemeral" };
+    }
   }
   return { system, messages: output };
 }
@@ -113,7 +130,7 @@ export class AnthropicClient {
           },
           body: JSON.stringify({
             model: this.config.model.model,
-            system: converted.system,
+            ...(converted.system.length ? { system: converted.system } : {}),
             messages: converted.messages,
             max_tokens: maxTokens,
             ...thinkingFields,

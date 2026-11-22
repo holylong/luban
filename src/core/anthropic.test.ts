@@ -34,7 +34,7 @@ describe("AnthropicClient", () => {
       [{ type: "function", function: { name: "read_file", description: "read", parameters: { type: "object" } } }],
       new AbortController().signal,
     );
-    expect(requestBody.system).toBe("rules");
+    expect(requestBody.system).toEqual([{ type: "text", text: "rules", cache_control: { type: "ephemeral" } }]);
     expect(requestBody.tools).toEqual([{ name: "read_file", description: "read", input_schema: { type: "object" } }]);
     expect(result.content).toBe("checking");
     expect(result.toolCalls[0]?.function).toEqual({ name: "read_file", arguments: '{"path":"a.ts"}' });
@@ -66,5 +66,35 @@ describe("AnthropicClient", () => {
     expect(result.toolCalls[0]?.function).toEqual({ name: "read_file", arguments: '{"path":"a.ts"}' });
     expect(result.usage).toEqual({ input: 8, output: 5 });
     expect(deltas).toEqual(["plan ", "hello"]);
+  });
+  it("places cache breakpoints and defers volatile records to the tail", async () => {
+    let requestBody: Record<string, unknown> = {};
+    server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 5, output_tokens: 2 } }));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no test address");
+    const model = { id: "anthropic/test", provider: "anthropic", model: "test", name: "test", baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: "", api: "anthropic" as const };
+    const config = { model, maxTokens: 100, temperature: 0, timeoutMs: 2_000, maxRetries: 0 } as LubanConfig;
+    await new AnthropicClient(config).complete([
+      { role: "system", content: "rules" },
+      { role: "system", content: "[luban task plan]\n{\"plan\":[]}" },
+      { role: "user", content: "go" },
+      { role: "system", content: "[luban verification]\n{\"status\":\"passed\"}" },
+    ], [], new AbortController().signal);
+    // Anthropic caches only up to a marked block, so the stable head carries one
+    // breakpoint and the growing conversation carries another.
+    expect(requestBody.system).toEqual([{ type: "text", text: "rules", cache_control: { type: "ephemeral" } }]);
+    const sent = requestBody.messages as Array<{ role: string; content: unknown }>;
+    expect(sent.map((message) => message.role)).toEqual(["user", "user"]);
+    const last = sent.at(-1)!.content as Array<Record<string, unknown>>;
+    expect(last[0]?.text).toBe('[luban task plan]\n{"plan":[]}');
+    expect(last).toHaveLength(2);
+    expect(last[1]).toEqual({ type: "text", text: '[luban verification]\n{"status":"passed"}', cache_control: { type: "ephemeral" } });
   });
 });

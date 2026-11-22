@@ -33,26 +33,29 @@ One model (`deepseek-flash`), one task (a single-file HTML + Three.js voxel pago
 
 <table>
 <tr>
-<td align="center" width="33%"><img src="docs/assets/bench/luban.jpg" alt="luban output" /><br /><b>luban 2.9.1</b><br />42 KB · 1,252 lines</td>
+<td align="center" width="33%"><img src="docs/assets/bench/luban.jpg" alt="luban output" /><br /><b>luban 2.9.3</b><br />73 KB · 1,872 lines</td>
 <td align="center" width="33%"><img src="docs/assets/bench/codex.jpg" alt="codex output" /><br /><b>codex-cli 0.166.0</b><br />76 KB · 2,065 lines</td>
 <td align="center" width="33%"><img src="docs/assets/bench/dsh.jpg" alt="dsh output" /><br /><b>dsh 0.2.2-rc.5</b><br />89 KB · 2,445 lines</td>
 </tr>
 </table>
 
-| | luban 2.9.1 | codex-cli 0.166.0 | dsh 0.2.2-rc.5 |
+| | luban 2.9.3 | codex-cli 0.166.0 | dsh 0.2.2-rc.5 |
 | --- | --- | --- | --- |
-| Wall clock | **11.7 min** (700 s) | 15.1 min (906 s) | 36.4 min (2182 s) |
-| Model calls | 45 | 62 commands + 10 file changes + 1 MCP | 123 steps |
-| Input tokens | **3,739,845** | 10,557,747 | 18,319,535 |
-| Cache hits | 3,210,880 (86%) | 10,343,168 (98%) | 18,245,504 (99.6%) |
-| Output tokens | 105,669 (of which reasoning 76,732) | 126,819 (reasoning 69,946) | 174,860 |
-| Structure | 50 functions / 18 prop types | 46 / 19 | 68 / 21 |
-| Frame detail (edge density) | **0.0235** | 0.0220 | 0.0208 |
+| Wall clock | 24.0 min (1442 s) | **15.1 min** (906 s) | 36.4 min (2182 s) |
+| Model calls | 128 (124 steps) | 62 commands + 10 file changes + 1 MCP | 123 steps |
+| Input tokens | 11,598,594 | 10,557,747 | 18,319,535 |
+| Cache hits | 11,044,224 (95.2%) | 10,343,168 (98%) | 18,245,504 (99.6%) |
+| Input billed at full rate | 554,370 | **214,579** | 74,031 |
+| Output tokens | 152,759 (of which reasoning 94,471) | 126,819 (reasoning 69,946) | 174,860 |
+| Structure | 58 functions / 25 prop types | 46 / 19 | 68 / 21 |
+| Frame detail (edge density) | **0.0237** | 0.0220 | 0.0208 |
 | Render check | 0 console errors, canvas 1280×800 | same | same |
 
-How to read it: token counts are each runtime's own accounting, wall clock is `/usr/bin/time -p` on the same machine. Input tokens are mostly the already-written HTML being pushed back into context every step, so the cache-hit rate is what drives real cost. All three produce a working scene that passes a render check without vision; the difference is that luban spent fewer tokens and less wall clock, and its file is smaller in bytes while matching on functions and prop types — written more compactly, not with fewer elements.
+How to read it: token counts are each runtime's own accounting, wall clock is `/usr/bin/time -p` on the same machine. Input is mostly the already-written HTML being pushed back into context on every step, so what actually costs money is the uncached part — luban was billed at full rate for 554,370 of its 11.6M input tokens, and 95.2% of the rest came back as cache hits (the previous 2.9.1 run on this same task was 86%).
 
-Caveats: the prompts share one source (the same `docs/demo-prompt.md` task), and the luban run used a Chinese paraphrase of it. Every number is a single run; variance is not measured.
+This luban run is not the fastest, and that is the interesting part: it made 128 calls where the old run made 45. The built-in `render_html` self-check kept reporting the frame as thin, so the agent kept re-rendering, re-measuring and adding detail — bridges, torii, stone lanterns, bamboo, koi, drifting petals, floating islets — until edge density reached 0.0237 with 458,160 voxels in 25 prop types, the densest and most varied of the three. Where 2.9.1 was fast and slightly thinner, 2.9.3 spends wall clock on getting the frame right; the cache fix is what keeps that iteration cheap, since four compactions and 124 steps still landed at a 95.2% hit rate.
+
+Caveats: the luban column was re-measured on 2.9.3 (the release with the prompt-cache fix) using the original English prompt in `docs/demo-prompt.md`; the codex-cli 0.166.0 and dsh 0.2.2-rc.5 columns are from the earlier run on the same machine, same task, same tool versions. Every number is a single run; variance is not measured.
 
 Reproduce:
 
