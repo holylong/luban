@@ -85,14 +85,10 @@ jobs:
           desktop="release/luban-desktop_${version}_amd64.deb"
           test -s "$cli"
           test -s "$desktop"
-          cat > release-notes.md <<EOF
-          Linux amd64 安装包：
-
-          - **luban-cli_${version}_amd64.deb**：终端版，安装后运行 \`luban\` 或 \`luban-cli\`。
-          - **luban-desktop_${version}_amd64.deb**：图形桌面版，安装后运行 \`luban-desktop\`。
-
-          两个安装包可单独安装，也可同时安装。Desktop 提供项目文件树、代码预览和 Agent 对话。
-          EOF
+          # The body is this version's CHANGELOG section plus the packages
+          # below: a release page that only lists file names answers none of
+          # the reader's questions.
+          node scripts/release-notes.mjs --version "$version" --platform linux --out release-notes.md
           # The Linux and Windows jobs publish to the same release concurrently, so
           # both may observe "no release yet" and race to create it. Treat a lost
           # race as retryable instead of failing the run.
@@ -167,16 +163,8 @@ jobs:
         shell: pwsh
         run: |
           $version = node -p "require('./package.json').version"
-          $lines = @(
-            "Windows x64 便携 ZIP（解压即用）：",
-            "",
-            "luban-cli-${version}-win-x64.zip：终端版，解压后运行 luban.cmd。",
-            "luban-desktop-${version}-win-x64.zip：图形桌面版，解压后运行 luban-desktop.cmd（内含 luban.cmd）。",
-            "",
-            "所有包均已内置 Node.js 运行时，无需预装 Node.js。",
-            "配置目录：%USERPROFILE%\.luban\config.json。"
-          )
-          Set-Content -Path windows-release-notes.md -Value $lines -Encoding utf8
+          node scripts/release-notes.mjs --version $version --platform windows --out windows-release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "release notes failed" }
       - name: Publish GitHub Release
         shell: pwsh
         env:
@@ -250,15 +238,7 @@ jobs:
       - name: Write release notes
         run: |
           version=$(node -p "require('./package.json').version")
-          cat > macos-release-notes.md <<EOF
-          macOS ${{ matrix.arch }} 包（无需安装，已内置 Node.js）：
-
-          - **luban-cli-${version}-mac-${{ matrix.arch }}.zip**：终端版，解压后运行 \`./luban\`。
-          - **luban-desktop-${version}-mac-${{ matrix.arch }}.dmg**：图形桌面版，把卷内 \`luban Desktop.app\` 拖入「应用程序」即可；构建机无法生成镜像时会改为发布同名 \`.zip\`（解压后同样拖入）。
-
-          安装包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
-          配置目录：\`~/.luban/config.json\`。
-          EOF
+          node scripts/release-notes.mjs --version "$version" --platform macos --out macos-release-notes.md
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -316,24 +296,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version=$(node -p "require('./package.json').version")
-          cat > notes.md <<EOF
-          **Linux**（\`.deb\`，安装后直接运行）
-
-          - \`luban-cli_${version}_amd64.deb\`：终端版，安装后运行 \`luban\` 或 \`luban-cli\`。
-          - \`luban-desktop_${version}_amd64.deb\`：图形桌面版，安装后运行 \`luban-desktop\`。
-
-          **Windows x64**（便携 ZIP，解压即用，已内置 Node.js）
-
-          - \`luban-cli-${version}-win-x64.zip\`：解压后运行 \`luban.cmd\`。
-          - \`luban-desktop-${version}-win-x64.zip\`：解压后运行 \`luban-desktop.cmd\`（含 \`luban.cmd\`）。
-
-          **macOS**（无需安装，已内置 Node.js；x64 与 arm64 各一份）
-
-          - \`luban-cli-${version}-mac-x64.zip\` / \`luban-cli-${version}-mac-arm64.zip\`：解压后运行 \`./luban\`。
-          - \`luban-desktop-${version}-mac-x64.dmg\` / \`luban-desktop-${version}-mac-arm64.dmg\`：把卷内 \`luban Desktop.app\` 拖入「应用程序」，App 自带 Node.js 与 CLI。若构建机无法生成镜像，对应架构改为发布同名 \`.zip\`。
-
-          macOS 包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 \`xattr -dr com.apple.quarantine .\`。
-
-          配置目录：Linux/macOS 为 \`~/.luban/config.json\`，Windows 为 \`%USERPROFILE%\\.luban\\config.json\`。
-          EOF
+          # Packaging jobs publish their own platform notes first; this final
+          # pass replaces them with 更新内容 + every platform, from one source.
+          node scripts/release-notes.mjs --version "$version" --platform all --out notes.md
           gh release edit "$GITHUB_REF_NAME" --notes-file notes.md

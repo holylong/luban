@@ -55,6 +55,8 @@ Linux 输出 CLI/Desktop `.deb`；macOS 输出 CLI `.zip`、Desktop `.dmg`、造
 `release/SHA256SUMS-<版本>-<平台>-<架构>-<kind>.txt` 只记录本次新生成的产物。
 脚本不会提交、打标签或上传。GitHub 标签发布工作流在目标系统打包，Windows 上传两个 ZIP。
 
+GitHub Release 的正文由 `scripts/release-notes.mjs` 生成：`## 更新内容` 取 CHANGELOG.md 中该版本一节，`## 安装包` 按平台列文件名与用法。打包 job 发布时带上本平台的正文，最后一个 `notes` job 用 `--platform all` 重写成完整正文，两处读的是同一份 CHANGELOG，所以发布页永远不会只剩一坨安装说明。该版本没有 CHANGELOG 一节时脚本直接失败，与 `publish:release` 一致。本地预览：`npm run notes:release -- --version 2.9.6`。
+
 验证命令：`npm run test:release`。打包完成不代表已人工验证 GUI 和安装器。
 
 ## 发布到升级服务器（`luban update`）
