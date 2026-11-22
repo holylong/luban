@@ -2,125 +2,162 @@
 
 <img src="docs/assets/luban-logo.png" alt="luban" width="380" />
 
-**AI 分布式通用助手**
+**A distributed general-purpose AI assistant**
 
-终端 · 桌面 · 浏览器 · 手机 —— 同一份项目、同一套会话
+Terminal · Desktop · Browser · Phone — one project, one session
 
-[安装](#安装) · [快速开始](#快速开始) · [常驻-bot](#常驻-bot) · [桌面工作台](#桌面工作台) · [配置模型](#配置模型) · [详细参考](docs/reference.md)
+**English** · [简体中文](README.zh-CN.md)
+
+[Install](#install) · [Quick start](#quick-start) · [Bot](#resident-bot) · [Desktop workbench](#desktop-workbench) · [Models](#configure-models) · [Reference](docs/reference.md)
 
 </div>
 
-luban 在你的项目里读代码、改文件、跑命令、验证结果，把一个想法做到能运行、能验证；也能把任务交给局域网里的其他电脑执行。
+luban reads code, edits files, runs commands and verifies the result inside your project — it carries an idea all the way to something that runs and can be checked. It can also hand a task to another computer on your LAN.
 
-> macOS [电脑操控](docs/computer-control.md) 默认在启动时开启（仍需系统授权）。全局配置 `computer.enabled: false` 或 `LUBAN_COMPUTER=0` 可关闭默认启动，项目配置不能授予此权限。
+> macOS [computer control](docs/computer-control.md) is enabled at startup by default (the OS permission is still required). Turn the default off with `computer.enabled: false` or `LUBAN_COMPUTER=0`; a project config cannot grant this.
 
-## 亮点
+## Highlights
 
-| 能力 | 说明 |
+| Capability | What it means |
 | --- | --- |
-| **过程可见** | 执行计划、命令输出，以及每处改动的文件路径、行号与前后对比 |
-| **四端一套会话** | 终端 TUI、桌面 App、浏览器工作台、手机远控，进度与审批同步 |
-| **跨机协作** | 自动发现局域网节点，同步项目文件，把任务交给别的电脑跑 |
-| **模型自由** | 云端与本地模型、OpenAI 兼容、Anthropic、Responses，也能复用 Codex 账号 |
-| **按需扩展** | 技能、MCP 与编辑器插件 |
-| **不藏权限** | 命令与文件操作都在你的机器上、以当前用户权限执行，不是沙箱 |
+| **Everything visible** | The plan, command output, and every edit with its file path, line numbers and before/after |
+| **One session, four front ends** | Terminal TUI, desktop app, browser workbench, phone remote — progress and approvals stay in sync |
+| **Across machines** | Auto-discovers LAN peers, syncs project files, runs a task on another computer |
+| **Any model** | Cloud and local models, OpenAI-compatible endpoints, Anthropic, Responses, or reuse a Codex account |
+| **Extend on demand** | Skills, MCP, and editor plugins |
+| **No hidden permissions** | Commands and file edits run on your machine with your user's rights — this is not a sandbox |
 
-## 安装
+## Same model, same task
 
-| 平台 | 安装包 | 启动 |
+One model (`deepseek-flash`), one task (a single-file HTML + Three.js voxel pagoda garden with at least 2000 blocks), one Mac running them one after another. The three final scenes:
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="docs/assets/bench/luban.jpg" alt="luban output" /><br /><b>luban 2.9.1</b><br />42 KB · 1,252 lines</td>
+<td align="center" width="33%"><img src="docs/assets/bench/codex.jpg" alt="codex output" /><br /><b>codex-cli 0.166.0</b><br />76 KB · 2,065 lines</td>
+<td align="center" width="33%"><img src="docs/assets/bench/dsh.jpg" alt="dsh output" /><br /><b>dsh 0.2.2-rc.5</b><br />89 KB · 2,445 lines</td>
+</tr>
+</table>
+
+| | luban 2.9.1 | codex-cli 0.166.0 | dsh 0.2.2-rc.5 |
+| --- | --- | --- | --- |
+| Wall clock | **11.7 min** (700 s) | 15.1 min (906 s) | 36.4 min (2182 s) |
+| Model calls | 45 | 62 commands + 10 file changes + 1 MCP | 123 steps |
+| Input tokens | **3,739,845** | 10,557,747 | 18,319,535 |
+| Cache hits | 3,210,880 (86%) | 10,343,168 (98%) | 18,245,504 (99.6%) |
+| Output tokens | 105,669 (of which reasoning 76,732) | 126,819 (reasoning 69,946) | 174,860 |
+| Structure | 50 functions / 18 prop types | 46 / 19 | 68 / 21 |
+| Frame detail (edge density) | **0.0235** | 0.0220 | 0.0208 |
+| Render check | 0 console errors, canvas 1280×800 | same | same |
+
+How to read it: token counts are each runtime's own accounting, wall clock is `/usr/bin/time -p` on the same machine. Input tokens are mostly the already-written HTML being pushed back into context every step, so the cache-hit rate is what drives real cost. All three produce a working scene that passes a render check without vision; the difference is that luban spent fewer tokens and less wall clock, and its file is smaller in bytes while matching on functions and prop types — written more compactly, not with fewer elements.
+
+Caveats: the prompts share one source (the same `docs/demo-prompt.md` task), and the luban run used a Chinese paraphrase of it. Every number is a single run; variance is not measured.
+
+Reproduce:
+
+```bash
+node dist/cli.js -p "$(cat docs/demo-prompt.md)" --yes --model deepseek/deepseek-flash
+```
+
+luban's self-check comes from the built-in `render_html` tool: one call returns a screenshot, console errors, canvas/WebGL state and pixel statistics (luminance, saturation, edge density, region map), so a model without vision can still tell whether the page actually draws something.
+
+## Install
+
+| Platform | Package | Start |
 | --- | --- | --- |
-| macOS x64 / arm64 | `luban-cli-<版本>-mac-<arch>.zip`<br>`luban-desktop-<版本>-mac-<arch>.dmg`（构建机无法生成镜像时为同名 `.zip`） | `./luban`<br>把 `luban.app` 拖入「应用程序」 |
-| Windows x64 | `luban-cli-<版本>-win-x64.zip`<br>`luban-desktop-<版本>-win-x64.zip` | `luban.cmd`<br>`luban-desktop.cmd` |
-| Linux x64 / arm64 | `luban-cli_<版本>_<arch>.deb`<br>`luban-desktop_<版本>_<arch>.deb` | `luban`<br>`luban-desktop` |
+| macOS x64 / arm64 | `luban-cli-<version>-mac-<arch>.zip`<br>`luban-desktop-<version>-mac-<arch>.dmg` (a `.zip` of the same name if the build host cannot create a DMG) | `./luban`<br />drag `luban.app` into Applications |
+| Windows x64 | `luban-cli-<version>-win-x64.zip`<br>`luban-desktop-<version>-win-x64.zip` | `luban.cmd`<br />`luban-desktop.cmd` |
+| Linux x64 / arm64 | `luban-cli_<version>_<arch>.deb`<br>`luban-desktop_<version>_<arch>.deb` | `luban`<br />`luban-desktop` |
 
-安装包自带 Node.js，解压或安装后即可运行。macOS 首次打开若被 Gatekeeper 拦截，执行 `xattr -dr com.apple.quarantine .`。
+The packages bundle Node.js, so unpacking or installing is enough. If macOS Gatekeeper blocks the first launch, run `xattr -dr com.apple.quarantine .`.
 
-从源码安装（Node.js 20 或更高版本）：
+From source (Node.js 20 or newer):
 
 ```bash
 npm install && npm run build && npm link
 ```
 
-## 快速开始
+## Quick start
 
 ```bash
-luban                                       # 在当前项目启动
-luban /path/to/project                      # 指定项目
-luban . --yes --prompt "运行测试并修复失败"   # 一句话跑一次任务
-luban web . --port 8642                     # 浏览器工作台
+luban                                       # start in the current project
+luban /path/to/project                      # start in a given project
+luban . --yes --prompt "run the tests and fix the failures"   # one task, one shot
+luban web . --port 8642                     # browser workbench
 ```
 
-启动后直接说目标，例如「解释这个项目的入口」。执行中可以继续补充要求，也可以用 `/queue <任务>` 排队。
+After startup, just state the goal, for example "explain this project's entry point". You can keep adding requirements while it works, or queue work with `/queue <task>`.
 
-常用命令：`/models` 选模型 · `/sessions` 恢复会话 · `/diff` 看改动 · `/export` 导出记录 · `/theme` 换配色 · `/skin` 换皮肤 · `/report weekly` 生成周报 · `/help` 查看全部。
+Common commands: `/models` pick a model · `/sessions` resume a session · `/diff` review changes · `/export` export a transcript · `/theme` change colours · `/skin` change the skin · `/report weekly` generate a weekly report · `/help` list everything.
 
-启动慢时用 `LUBAN_STARTUP_TRACE=1 luban` 打印各阶段耗时（`modules` / `config` / `mesh` / `render`，单位毫秒，含 Node 冷启动）。Windows 上 `modules` 通常最大：杀毒软件会逐个扫描启动时读取的模块文件，所以依赖按需加载，冷启动只读 ~260 个文件（早期版本 ~840 个）。
+If startup feels slow, `LUBAN_STARTUP_TRACE=1 luban` prints per-phase timings (`modules` / `config` / `mesh` / `render`, in milliseconds, cold start included). On Windows `modules` usually dominates: antivirus scans every module file read at startup, so dependencies are loaded on demand and a cold start reads ~260 files (early versions read ~840).
 
-## 常驻 Bot
+## Resident bot
 
-Bot 是桌宠的灵魂，在后台身体里自称「造物主」：**桌面 App 启动时自动拉起 worker**，状态灯显示未启动 / 待命 / 干活中 / 出错 / 锁残留，点开可看机器负载与内存、活跃 Agent、进程信息、最近任务结果、token 用量和待授权申请；退出 App 时请求停止自己启动的 worker（外部 worker 不会被抢占或停止）。
+The bot is what makes the desktop pet tick — inside it calls itself the creator. **The desktop app starts a worker automatically**; the status light shows not started / idle / working / error / stale lock, and opening it reveals machine load and memory, active agents, process info, recent task results, token usage and pending approvals. Quitting the app asks the worker it started to stop (a worker started elsewhere is never taken over or stopped).
 
-也可以完全脱离桌面使用：
+It also runs entirely without the desktop app:
 
 ```bash
-luban bot run                                        # 启动本机后台任务队列
-luban bot add "检查项目并总结风险" -w /path/to/project  # 另开终端下任务
+luban bot run                                        # start the local background queue
+luban bot add "review the project and summarise the risks" -w /path/to/project  # queue from another terminal
 ```
 
-支持 `--at` 定时、`--every` 周期执行、`list` 查看结果、`cancel` 取消任务。需审批操作由独立权限文件授权，未授权则记录申请；用 `luban bot permissions` 初始化，`luban bot requests` 查看申请。
+Scheduling with `--at`, repeating with `--every`, `list` to see results, `cancel` to stop a task. Operations that need approval are granted through a separate permission file; without it they are recorded as requests. Initialise with `luban bot permissions`, inspect requests with `luban bot requests`.
 
-macOS 登录后自动启动与权限边界见 [Bot 使用指南](bot.md)。
+Launch-at-login on macOS and the exact permission boundary are in the [bot guide](bot.md).
 
-## 桌面工作台
+## Desktop workbench
 
-安装版用 `luban` 启动 CLI、`luband` 启动 Desktop（Windows/macOS 便携包需将解压目录加入 PATH）。源码版运行 `npm run desktop -- /path/to/project`，或直接打开安装包里的 luban；切换工作区用左侧「打开文件夹…」或菜单「文件 → 打开项目文件夹」（`Ctrl/⌘ O`），桌面端会重启本地服务并打开新目录。
+The installers start the CLI with `luban` and the desktop app with `luband` (on the Windows/macOS portable packages, add the unpacked directory to `PATH`). From source, run `npm run desktop -- /path/to/project`, or open the `luban` app from the package. Switch workspaces with "Open folder…" on the left or "File → Open project folder" (`Ctrl/⌘ O`); the desktop app restarts its local service and opens the new directory.
 
-| 区域 | 做什么 |
+| Area | What it does |
 | --- | --- |
-| **桌宠** | 启动桌面 App 自动出现，同时拉起 bot worker；头顶「造物主」状态灯可展开任务与运行状态面板，bot 任务完成后气泡播报结果。点机器人打开主界面；拖入文本/代码文件并确认“喂给 luban”，处理时动画、完成后气泡返回结果。关闭主窗口会隐藏并保留桌宠，文件菜单可退出 |
-| **编辑器** | 文件树 + 多标签编辑、语法着色、`⌘P` 快速打开、`⌘S` 保存，保存前校验磁盘版本并拦截冲突 |
-| **中间区域** | 「代码 / 当前修改」共用同一个位置，新编辑自动展示对比；编辑器不卸载，未保存内容不会丢 |
-| **控制台** | 一次性命令实时输出，可停止、可回看，可切 Markdown 或原始文本 |
-| **终端** | 真 PTY（xterm.js），提示符、颜色、`cd`、`ssh`、`vim` 都按普通终端工作 |
-| **会话** | 多轮合并成一条时间线，执行中可直接追加指令并自动排队；思考过程默认折叠；标题由模型按任务主题命名 |
-| **主题与模型** | 复用 CLI 的配色与模型列表，支持推理强度档位并记忆选择 |
+| **Pet** | Appears when the desktop app starts and launches the bot worker; the creator status light expands into a task and runtime panel, and a speech bubble reports finished bot tasks. Click the robot to open the main window; drop a text or code file and confirm "feed to luban" to have it processed, with the result in a bubble when done. Closing the main window hides it and keeps the pet alive; quit from the file menu |
+| **Editor** | File tree plus multi-tab editing, syntax highlighting, `⌘P` quick open, `⌘S` save; saving validates the on-disk version first and refuses silent overwrites |
+| **Middle area** | "Code" and "current change" share the same slot, and a new edit shows its diff immediately; the editor is not unmounted, so unsaved content survives |
+| **Console** | One-off commands with live output, stop and replay, switchable between Markdown and raw text |
+| **Terminal** | A real PTY (xterm.js): prompts, colours, `cd`, `ssh`, `vim` all behave like a normal terminal |
+| **Sessions** | Several turns merged into one timeline; you can append instructions mid-run and they queue automatically; reasoning is collapsed by default; the title is named by the model from the task |
+| **Theme and model** | Reuses the CLI palettes and model list, supports reasoning-effort levels and remembers the choice |
 
-细节与已知限制见 [桌面工作台参考](docs/reference.md#桌面工作台)。
+Details and known limits: [desktop workbench reference](docs/reference.md#桌面工作台).
 
-## 配置模型
+## Configure models
 
-默认模型免密可用（`opencode-zen/deepseek-v4.1-flash-free`），新装就能对话；换成自己的模型或账号按下面走。终端与桌面内嵌终端里的 `/models` 是同一个入口。
+The default model needs no key (`opencode-zen/deepseek-v4.1-flash-free`), so a fresh install can talk immediately. To use your own model or account:
 
-| 想做的事 | 操作 |
+| Goal | How |
 | --- | --- |
-| 换模型 | `/models` 选择；支持原生推理强度的模型会多出档位 |
-| 配 API Key | `/models` 里选中 provider 按 `Ctrl+A`：`K` 输入、`D` 删除、`O` 打开服务商密钥控制台 |
-| 用 Codex 账号 | 先装 `@openai/codex`，在 `/models` 里按 `L` 走设备码登录，再选 `codex/default` |
-| 接自己的 OpenAI 兼容接口 | `~/.luban/config.json` 里写 `base_url`、`api_key_env`、`models`，示例见 [config.example.json](config.example.json) |
+| Switch model | `/models`; models with native reasoning effort expose extra levels |
+| Set an API key | In `/models` select the provider and press `Ctrl+A`: `K` to enter, `D` to delete, `O` to open the provider's key console |
+| Use a Codex account | Install `@openai/codex` first, press `L` in `/models` for device-code login, then choose `codex/default` |
+| Point at your own OpenAI-compatible endpoint | Set `base_url`, `api_key_env` and `models` in `~/.luban/config.json`; see [config.example.json](config.example.json) |
 
-**内置 provider**：`codex`、`deepseek`、`dashscope`、`opencode-go` / `opencode-zen`、`opendesign`、本地 Qwen / Strata。`opendesign` 自带模型表但仓库不附带网关地址，要先填 `providers.opendesign.base_url` 再设 `OPEN_DESIGN_API_KEY`；OpenCode 用 `OPENCODE_API_KEY` 或 `OPENCODE_ZEN_API_KEY`。
+**Built-in providers**: `codex`, `deepseek`, `dashscope`, `opencode-go` / `opencode-zen`, `opendesign`, plus local Qwen / Strata. `opendesign` ships a model table but no gateway URL, so set `providers.opendesign.base_url` and `OPEN_DESIGN_API_KEY` first; OpenCode uses `OPENCODE_API_KEY` or `OPENCODE_ZEN_API_KEY`.
 
-**Key 存在哪**：`~/.luban/provider-auth.json`（或 `LUBAN_HOME` 下），本地明文、Unix 权限 `0600`，不进项目配置、输入历史与会话。保存后立刻对该 provider 的所有模型生效，优先于配置与环境变量，删除后回退到原来源；任务运行中要等这一轮结束才能改。网页工作台独立打开时的模型选择器没有鉴权面板。
+**Where keys live**: `~/.luban/provider-auth.json` (or under `LUBAN_HOME`), plaintext locally with mode `0600`, never in project config, input history or sessions. A saved key applies to every model of that provider immediately and takes precedence over config and environment; deleting it falls back to the original source. A running task picks the change up when the turn ends. The model picker in a standalone web workbench has no auth panel.
 
-**首次启动**：`~/.luban/config.json` 不存在时会写入一份可移植默认值（端口、超时、上下文、同步忽略、worker/step 上限、自动批准编辑），不含任何 API Key、内网节点、私有网关或 relay 地址；已有配置不会被改写，删掉它下次启动重新生成。
+**First start**: when `~/.luban/config.json` is missing, a portable default is written (port, timeouts, context, sync ignores, worker/step limits, auto-approved edits) with no API keys, internal nodes, private gateways or relay addresses. An existing config is never rewritten; delete it and the next start regenerates it.
 
-协议切换、额度与重连见[详细参考](docs/reference.md#配置)。
+Protocol switching, quotas and reconnection: [reference](docs/reference.md#配置).
 
-## 打包发布
+## Packaging
 
-安装开发依赖后运行 `npm run release`，自动为当前系统打包 CLI 和 Desktop，产物及 SHA-256 校验清单保存在 `release/`。
+With dev dependencies installed, `npm run release` builds the CLI and the desktop app for the current system and writes the artifacts and SHA-256 manifest to `release/`.
 
 ```bash
-npm run release -- --kind desktop   # 只打包桌面版
-npm run release -- --dry-run        # 预览而不构建
+npm run release -- --kind desktop   # desktop app only
+npm run release -- --dry-run        # show the plan without building
 ```
 
-支持 Linux、Windows、macOS，需在对应系统上运行；完整选项及发布流程见 [发布指南](docs/release.md)。脚本不会自动提交、打标签或上传。
+Linux, Windows and macOS are supported, and each must build on its own system. Full options and the publishing flow are in the [release guide](docs/release.md). The script never commits, tags or uploads.
 
-## 更多
+## More
 
-局域网协作、手机远控、皮肤与加载宠物、日报周报、MCP 与编辑器接入、安全边界、开发验证，见 [详细参考](docs/reference.md)。想快速验证一条链路（模型、工具、审批、渲染、远控）是否正常，见 [提示词自测集](docs/prompts.md)。版本变化与升级说明见 [版本记录](CHANGELOG.md)。
+LAN collaboration, phone remote, skins and loading pets, daily and weekly reports, MCP and editor integration, the security boundary and development verification are all in the [reference](docs/reference.md). To quickly check a whole chain (model, tools, approvals, rendering, remote control) end to end, see the [self-test prompts](docs/prompts.md). Version history and upgrade notes live in the [changelog](CHANGELOG.md).
 
-## 许可
+## License
 
-[MIT](LICENSE)。第三方依赖各自保留原许可证，随包分发的主要是 MIT / ISC / Apache-2.0 / BSD；桌面版与 Creator 安装包内还包含 Electron 与 Chromium，按它们各自的许可证分发。
+[MIT](LICENSE). Third-party dependencies keep their own licences; what ships alongside luban is mostly MIT / ISC / Apache-2.0 / BSD, and the desktop and creator packages also contain Electron and Chromium under their own licences.
