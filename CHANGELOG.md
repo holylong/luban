@@ -1,3 +1,10 @@
+## 2.9.4 — 2026-11-23
+
+- 修掉打包版桌面「检查更新 / 升级」必崩的问题：`apps/desktop/main.cjs` 用 `__dirname/../../dist/core` 去动态 import `update.js`。开发检出里这正好是 `dist/core`，但在 `.app` 里 Electron 入口在 `Contents/Resources/app/desktop`、编译产物在 `Contents/Resources/luban/dist`，两者毫无关系——于是点升级直接报 `Cannot find module '/Applications/luban.app/Contents/Resources/dist/core/update.js'`。改为 `const cliDist = dirname(cli)`（`cli` 已经是 `LUBAN_CLI` 或开发检出的 `dist/cli.js`），macOS 入口桩、Windows `.cmd`、Linux 启动脚本本来都会设置 `LUBAN_CLI`，三个平台一次修好，开发检出行为不变。
+- 托盘图标、窗口图标原本就按 `dirname(cli)` 找 `web-ui/`，现在更新菜单和它们共用 `cliDist` 一个来源，不再有第二套「dist 在哪」的推断。
+- `src/desktop/packaging-names.test.ts` 增加回归用例：`main.cjs` 必须用 `pathToFileURL(cliDist)`，且不允许再出现 `resolve(__dirname, "../../dist/core")`。
+- 注意：2.9.3 及更早的桌面版菜单自己就是坏的，升级提示点不开，需要手动下载 2.9.4 覆盖安装一次；之后的版本可以正常在应用内升级。
+
 ## 2.9.3 — 2026-11-23
 
 - 用 `docs/demo-prompt.md` 的英文原文重测本机横评（`deepseek/deepseek-flash`，同一台 Mac），README 中英双版的 luban 一列与截图全部换成 2.9.3 的实测：24.0 分钟（1442 s）、128 次模型调用 / 124 步、输入 11,598,594、命中 11,044,224（95.2%）、输出 152,759（推理 94,471）、73 KB / 1,872 行 / 58 个函数 / 25 类道具、边缘密度 0.0237（1280×800，0 console error）、45.8 万个方块。

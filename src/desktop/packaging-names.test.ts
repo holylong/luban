@@ -15,6 +15,16 @@ describe("desktop packaging names", () => {
     expect(read("packaging/macos/luban-desktop")).toContain('"$root/luban.app/Contents/Resources"');
   });
 
+  it("resolves the update modules from the bundled CLI, not the entry folder", () => {
+    const main = read("apps/desktop/main.cjs");
+    // A bundle keeps the CLI at Resources/luban/dist, which __dirname knows
+    // nothing about: resolving ../../dist/core there threw MODULE_NOT_FOUND and
+    // made the menu's 检查更新 die in every installed app.
+    expect(main).toContain("const cliDist = dirname(cli);");
+    expect(main).toContain('pathToFileURL(join(cliDist, "core")).href');
+    expect(main).not.toContain('resolve(__dirname, "../../dist/core")');
+  });
+
   it("ships a rounded macOS icon and keeps the square one for the tray", () => {
     expect(existsSync(join(root, "assets", "luban-app-1024.png"))).toBe(true);
     expect(existsSync(join(root, "assets", "luban-512.png"))).toBe(true);

@@ -415,6 +415,11 @@ if (noGpuFlag && existsSync(noGpuFlag)) {
 
 const cli = process.env.LUBAN_CLI || resolve(__dirname, "../../dist/cli.js");
 const node = process.env.LUBAN_NODE_BIN || "node";
+/* Everything compiled sits beside the CLI, and inside a bundle that is the only
+ * copy: Resources/luban/dist, nowhere near __dirname. Deriving the directory
+ * from LUBAN_CLI is what keeps the menu's update import from throwing
+ * MODULE_NOT_FOUND in an installed app while still working in a checkout. */
+const cliDist = dirname(cli);
 
 /* ---- updates: the menu item, the startup check, and the relaunch ----
  * The renderer draws its own banner through `/api/update`, but replacing the
@@ -424,7 +429,7 @@ const node = process.env.LUBAN_NODE_BIN || "node";
  * agree on what "skipped" and "installed" mean.
  */
 async function updateModules() {
-  const base = pathToFileURL(join(resolve(__dirname, "../../dist/core"))).href;
+  const base = pathToFileURL(join(cliDist, "core")).href;
   return {
     update: await import(`${base}/update.js`),
     config: await import(`${base}/config.js`),
