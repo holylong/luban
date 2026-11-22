@@ -164,6 +164,20 @@ export interface LubanConfig {
   usageStats: UsageStatsSettings;
   /** Startup version check and the manual `luban update`; see `core/update.ts`. */
   updates: UpdateSettings;
+  /** Skill-pack storefront; see `core/plugins.ts`. */
+  plugins: PluginSettings;
+}
+
+/**
+ * `plugins` block of config.json.
+ *
+ * The registry is a static JSON catalog of skill packs. Empty means the built-in
+ * public catalog; `LUBAN_PLUGIN_REGISTRY` overrides both, which is how a test or
+ * a company mirror points the same UI at its own file.
+ */
+export interface PluginSettings {
+  /** Catalog URL; empty falls back to `DEFAULT_PLUGIN_REGISTRY`. */
+  registry: string;
 }
 
 /**

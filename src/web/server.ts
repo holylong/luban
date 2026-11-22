@@ -22,6 +22,10 @@ import { QuestionBroker } from "./question.js";
 import { AuthGate, clearCookie, rejectAuth, tokenCookie } from "./auth.js";
 import { beginComputerAtStartup, checkPermissions, computerControl, computerSupported } from "../core/computer.js";
 import { checkForUpdate, currentKind, downloadUpdate, installUpdate, type UpdateCheck } from "../core/update.js";
+import {
+  catalogView, DEFAULT_PLUGIN_REGISTRY, fetchCatalog, installPlugin, readInstallations, uninstallPlugin,
+  type PluginCatalog,
+} from "../core/plugins.js";
 
 const MAX_BODY = 1024 * 1024;
 const MAX_JOBS = 100;
@@ -204,6 +208,8 @@ export class LubanWebServer {
   /** One release check per (version, kind, server) per 10 minutes, shared by every browser tab. */
   private updateCache?: { key: string; at: number; value: UpdateCheck };
   private updateInstalling = false;
+  /** The plugin catalog is a static file; five minutes is plenty and keeps GitHub raw quiet. */
+  private pluginCache?: { url: string; at: number; catalog: PluginCatalog };
   host: string;
   port: number;
   readonly approvals?: ApprovalBroker;
@@ -329,6 +335,16 @@ export class LubanWebServer {
     }
   }
 
+  /** Fetch the catalog, memoised per registry URL unless `refresh` is asked for. */
+  private async pluginCatalog(refresh = false): Promise<PluginCatalog> {
+    const url = this.config.plugins?.registry || DEFAULT_PLUGIN_REGISTRY;
+    const cached = this.pluginCache;
+    if (!refresh && cached && cached.url === url && Date.now() - cached.at < 5 * 60_000) return cached.catalog;
+    const catalog = await fetchCatalog(url);
+    this.pluginCache = { url, at: Date.now(), catalog };
+    return catalog;
+  }
+
   private async get(url: URL, res: ServerResponse): Promise<void> {
     if (url.pathname === "/api/events") return this.eventStream(res);
     if (["/", "/index.html"].includes(url.pathname)) {
@@ -435,6 +451,30 @@ export class LubanWebServer {
       });
       this.updateCache = { key, at: Date.now(), value: check };
       return json(res, { ...base, check });
+    }
+    /**
+     * Skill-pack storefront. Filtering happens here so typing in the search box
+     * costs no extra request; installed state rides along so one payload draws
+     * the whole list.
+     */
+    if (url.pathname === "/api/plugins") {
+      const registry = this.config.plugins?.registry || DEFAULT_PLUGIN_REGISTRY;
+      const installations = await readInstallations(this.config.home);
+      try {
+        const catalog = await this.pluginCatalog(url.searchParams.get("refresh") === "1");
+        return json(res, {
+          ok: true, registry, updatedAt: catalog.updatedAt,
+          plugins: catalogView(catalog, installations, (url.searchParams.get("q") ?? "").trim()),
+          installed: Object.values(installations),
+        });
+      } catch (error) {
+        // Being offline is not a broken storefront: the installed list still
+        // works and the message says which URL did not answer.
+        return json(res, {
+          ok: true, registry, plugins: [], installed: Object.values(installations),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     if (url.pathname === "/api/peers") {
       return json(res, this.mesh.peers().map((peer) => ({
@@ -661,6 +701,19 @@ export class LubanWebServer {
       this.config.updates = { ...this.config.updates, ...(typeof body.check === "boolean" ? { check: body.check } : {}), ...(typeof skipped === "string" ? { skippedVersion: skipped } : {}) };
       this.updateCache = undefined;
       return json(res, { ok: true, settings: { check: this.config.updates.check, skippedVersion: this.config.updates.skippedVersion } });
+    }
+    if (url.pathname === "/api/plugins/install") {
+      const id = typeof body.id === "string" ? body.id.trim() : "";
+      if (!id) throw new HttpError(400, "缺少插件 id");
+      const catalog = await this.pluginCatalog(url.searchParams.get("refresh") === "1");
+      const entry = catalog.plugins.find(plugin => plugin.id === id);
+      if (!entry) throw new HttpError(404, `插件目录里没有 ${id}`);
+      return json(res, { ok: true, installed: await installPlugin(this.config.home, entry) });
+    }
+    if (url.pathname === "/api/plugins/uninstall") {
+      const id = typeof body.id === "string" ? body.id.trim() : "";
+      if (!id) throw new HttpError(400, "缺少插件 id");
+      return json(res, { ok: true, skills: await uninstallPlugin(this.config.home, id) });
     }
     if (url.pathname === "/api/update/install") {
       // The desktop app replaces its own bundle and reopens; that swap belongs

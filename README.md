@@ -24,7 +24,7 @@ luban reads code, edits files, runs commands and verifies the result inside your
 | **One session, four front ends** | Terminal TUI, desktop app, browser workbench, phone remote — progress and approvals stay in sync |
 | **Across machines** | Auto-discovers LAN peers, syncs project files, runs a task on another computer |
 | **Any model** | Cloud and local models, OpenAI-compatible endpoints, Anthropic, Responses, or reuse a Codex account |
-| **Extend on demand** | Skills, MCP, and editor plugins |
+| **Extend on demand** | Skills, MCP, editor plugins, and a searchable [plugin store](docs/plugins.md) |
 | **No hidden permissions** | Commands and file edits run on your machine with your user's rights — this is not a sandbox |
 
 ## Same model, same task
@@ -159,7 +159,7 @@ Linux, Windows and macOS are supported, and each must build on its own system. F
 
 ## More
 
-LAN collaboration, phone remote, skins and loading pets, daily and weekly reports, MCP and editor integration, the security boundary and development verification are all in the [reference](docs/reference.md). To quickly check a whole chain (model, tools, approvals, rendering, remote control) end to end, see the [self-test prompts](docs/prompts.md). Version history and upgrade notes live in the [changelog](CHANGELOG.md).
+LAN collaboration, phone remote, skins and loading pets, daily and weekly reports, MCP and editor integration, the security boundary and development verification are all in the [reference](docs/reference.md). Skill packs come from the [plugin store](docs/plugins.md): one JSON catalog, install and uninstall from the desktop status bar. To quickly check a whole chain (model, tools, approvals, rendering, remote control) end to end, see the [self-test prompts](docs/prompts.md). Version history and upgrade notes live in the [changelog](CHANGELOG.md).
 
 ## License
 

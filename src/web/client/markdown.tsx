@@ -95,7 +95,7 @@ export const HighlightedLine = React.memo(function HighlightedLine({ line, langu
 function inline(text: string, keyPrefix: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   // Inline code first so its contents are never re-interpreted as emphasis.
-  const pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\s]+\))|(~~[^~]+~~)|(https?:\/\/[^\s<>`，。！？；）\]]+)/gu;
+  const pattern = /(!\[[^\]\n]*\]\([^)\s]+\))|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\s]+\))|(~~[^~]+~~)|(https?:\/\/[^\s<>`，。！？；）\]]+)/gu;
   let last = 0;
   let match: RegExpExecArray | null;
   let index = 0;
@@ -103,7 +103,12 @@ function inline(text: string, keyPrefix: string): React.ReactNode[] {
     if (match.index > last) nodes.push(text.slice(last, match.index));
     const token = match[0];
     const key = `${keyPrefix}-i${index++}`;
-    if (token.startsWith("`")) nodes.push(linkNode(token.slice(1, -1), <code className="inline">{token.slice(1, -1)}</code>, key));
+    const image = /^!\[([^\]]*)\]\(([^)\s]+)\)$/u.exec(token);
+    // A document preview meets `![alt](path)` on its first line. Rendering it as
+    // the escaped link text would litter the page with brackets, so the alt text
+    // becomes the label and the destination keeps its link/file semantics.
+    if (image) nodes.push(linkNode(image[2]!, <span className="md-image">{image[1] ? `🖼 ${image[1]}` : "🖼 图片"}</span>, key));
+    else if (token.startsWith("`")) nodes.push(linkNode(token.slice(1, -1), <code className="inline">{token.slice(1, -1)}</code>, key));
     else if (isWebLink(token)) {
       const url = token.replace(/[.,;!?)]+$/u, "");
       nodes.push(linkNode(url, url, key), token.slice(url.length));
@@ -252,7 +257,8 @@ export const Markdown = React.memo(function Markdown({ text }: { text: string })
           if (items.length && lines[index]!.trim() && /^\s{2,}\S/u.test(lines[index]!)) { items[items.length - 1] += ` ${lines[index]!.trim()}`; index += 1; continue; }
           break;
         }
-        items.push(item[1] ?? "");
+        // Task lists: a checkbox is content, not a literal "[x]".
+        items.push((item[1] ?? "").replace(/^\[( |x|X)\]\s+/u, (_mark, state: string) => state === " " ? "☐ " : "☑ "));
         index += 1;
       }
       const Tag = ordered ? "ol" : "ul";

@@ -167,6 +167,8 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 /* The dock sits next to the connection light so an available build is visible
    from any pane; its panel opens upward out of the status bar. */
 .desktop-status .update-dock { margin-left: 8px; flex: none; }
+.desktop-status .plugin-dock { margin-left: 8px; flex: none; }
+.desktop-status .plugin-button { padding: 1px 7px; }
 .desktop-status .update-button { padding: 1px 7px; }
 .desktop-status span:last-child { margin-left: 12px; }
 .desktop-editor button, .desktop-console button { background: transparent; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); padding: 4px 8px; cursor: pointer; }
@@ -285,6 +287,31 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-doc-hint { flex: none; display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--dim); }
 .desktop-doc-hint span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desktop-doc-hint button { flex: none; }
+/* Markdown preview: a document column, not a chat bubble. The page keeps a
+   reading width so long READMEs wrap instead of running edge to edge, and the
+   headings carry the GitHub-style rules that make a document scannable. */
+.desktop-markdown-doc { flex: 1; min-height: 100px; overflow: auto; background: var(--bg); }
+.desktop-markdown-page { max-width: 860px; margin: 0 auto; padding: 22px 26px 48px; color: var(--fg); font-size: 13.5px; line-height: 1.75; }
+.desktop-markdown-doc .md h1, .desktop-markdown-doc .md h2 { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.desktop-markdown-doc .md h1 { font-size: 24px; margin: 6px 0 12px; }
+.desktop-markdown-doc .md h2 { font-size: 19px; margin: 24px 0 8px; }
+.desktop-markdown-doc .md h3 { font-size: 16px; margin: 20px 0 6px; }
+.desktop-markdown-doc .md h4 { font-size: 14px; margin: 16px 0 4px; }
+.desktop-markdown-doc .md p { margin: 10px 0; }
+.desktop-markdown-doc .md ul, .desktop-markdown-doc .md ol { margin: 8px 0; padding-left: 24px; }
+.desktop-markdown-doc .md li { margin: 4px 0; }
+.desktop-markdown-doc .md a { color: var(--blue); text-decoration: none; }
+.desktop-markdown-doc .md a:hover { text-decoration: underline; }
+.desktop-markdown-doc .md blockquote { margin: 10px 0; padding: 4px 14px; border-left: 3px solid var(--line); background: var(--panel); border-radius: 0 6px 6px 0; }
+.desktop-markdown-doc .md hr { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
+.desktop-markdown-doc .md pre { margin: 10px 0; padding: 12px 14px; }
+.desktop-markdown-doc .md code.inline { font-size: 12.5px; }
+.desktop-markdown-doc .md-table { margin: 12px 0; }
+.desktop-markdown-doc .md-table table { font-size: 13px; }
+.desktop-markdown-empty { margin: 40px auto; max-width: 420px; color: var(--dim); text-align: center; }
+/* The toggle shows the mode it switches to, so the active face stays lit while
+   the document is rendered — same affordance as VS Code's preview button. */
+.desktop-preview-toggle.on { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 55%, transparent); background: color-mix(in srgb, var(--blue) 14%, transparent); }
 .desktop-sheet { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .desktop-sheet-tabs { flex: none; display: flex; gap: 6px; overflow-x: auto; }
 .desktop-sheet-tabs button { flex: none; font-size: 11px; padding: 3px 10px; border-radius: 999px; background: transparent; color: var(--dim); border: 1px solid var(--line); }

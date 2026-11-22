@@ -62,3 +62,11 @@ it("leaves headings, lists and tables untouched", () => {
   expect(out).toContain("<table>");
   expect(out).not.toContain("md-lead");
 });
+
+it("renders image syntax as a labelled link, not stray brackets", () => {
+  const out = html("![luban](assets/luban.png) 与 ![bee](https://example.com/b.png)");
+  expect(out).toContain('data-file-path="assets/luban.png"');
+  expect(out).toContain("🖼 luban");
+  expect(out).toContain('href="https://example.com/b.png"');
+  expect(out).not.toContain("![");
+});

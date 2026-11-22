@@ -838,6 +838,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const historyRaw = record(raw.history);
   const usageStatsRaw = record(raw.usage_stats ?? raw.usageStats);
   const updatesRaw = record(raw.updates);
+  const pluginsRaw = record(raw.plugins);
   const codeIntelRaw = record(raw.code_intelligence ?? raw.codeIntel);
   const remoteRaw = record(raw.remote);
   return {
@@ -937,6 +938,9 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
         && updatesRaw.check !== false && updatesRaw.check !== "false" && updatesRaw.check !== 0,
       url: text(updatesRaw.url, process.env.LUBAN_UPDATES_URL, ""),
       skippedVersion: text(updatesRaw.skipped_version ?? updatesRaw.skippedVersion, ""),
+    },
+    plugins: {
+      registry: text(pluginsRaw.registry, process.env.LUBAN_PLUGIN_REGISTRY, ""),
     },
     mesh: {
       enabled: options.mesh ?? true,

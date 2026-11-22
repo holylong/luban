@@ -5,6 +5,8 @@ import { startFileSync } from "./desktop-file-sync";
 import { DesktopMediaView } from "./desktop-media-view";
 import { documentPreviewKind, mediaKind, type DocumentPreviewKind, type MediaKind } from "./desktop-media";
 import { DesktopDocumentView } from "./desktop-document-view";
+import { MarkdownDocument } from "./desktop-markdown-view";
+import { isMarkdownPath, isPreviewShortcut, previewAction } from "./desktop-markdown";
 import type { DocumentPreview } from "./desktop-preview";
 import type { WorkbenchStore } from "./store";
 
@@ -22,6 +24,9 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   const [preview, setPreview] = useState<{ path: string; kind: MediaKind } | null>(null);
   // Slide decks and draw.io diagrams are parsed in the main process.
   const [parsed, setParsed] = useState<{ path: string; kind: DocumentPreviewKind; model?: DocumentPreview; error?: string } | null>(null);
+  // Markdown buffers can be read as rendered documents. The flag resets per
+  // tab: coming back to a .ts file must never show a stale preview.
+  const [previewing, setPreviewing] = useState(false);
   const [position, setPosition] = useState({ line: 1, column: 1 });
   const area = useRef<HTMLTextAreaElement>(null);
   const gutter = useRef<HTMLPreElement>(null);
@@ -37,6 +42,9 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
     return startFileSync({ readFile: path => bridge.readFile(path), documents: () => documentsRef.current,
       saving: () => savingRef.current, update: setDocuments, target: window });
   }, [bridge]);
+  const markdown = isMarkdownPath(active);
+  const toggle = previewAction(active, previewing);
+  useEffect(() => { setPreviewing(false); }, [active]);
   const language = editorLanguage(active);
   const highlight = document ? highlightable(document.content) : false;
   const dirty = documents.some(item => item.content !== item.saved);
@@ -99,6 +107,7 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
       if (event.key.toLowerCase() === "s") { event.preventDefault(); void save(); }
       if (event.key.toLowerCase() === "p") { event.preventDefault(); showQuick(); }
       if (event.key.toLowerCase() === "w" && document) { event.preventDefault(); close(document); }
+      if (isPreviewShortcut(event) && markdown) { event.preventDefault(); setPreviewing(value => !value); }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -119,15 +128,16 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
   const matches = quickMatches(files, query);
 
   return <>
-    <div className="desktop-editor-head"><span className="desktop-editor-title">{(preview?.path ?? parsed?.path ?? active) || "代码工作台"}</span><button onClick={showQuick} disabled={!bridge}>快速打开 ⌘/Ctrl P</button><button onClick={() => void save()} disabled={!document || saving || Boolean(diskIssue) || document.saved === document.content}>{saving ? "保存中…" : "保存"}</button></div>
-    <div className="desktop-document-tabs" role="tablist" aria-label="打开的文件">{documents.map(item => <div key={item.path} className={active === item.path ? "active" : ""}><button role="tab" aria-selected={active === item.path} title={item.path} onClick={() => { setActive(item.path); setPreview(null); setParsed(null); }}>{item.content !== item.saved ? "● " : ""}{item.path.split("/").at(-1)}</button><button aria-label={`关闭 ${item.path}`} onClick={() => close(item)}>×</button></div>)}</div>
+    <div className="desktop-editor-head"><span className="desktop-editor-title">{(preview?.path ?? parsed?.path ?? active) || "代码工作台"}</span><button onClick={showQuick} disabled={!bridge}>快速打开 ⌘/Ctrl P</button><button onClick={() => void save()} disabled={!document || saving || Boolean(diskIssue) || document.saved === document.content}>{saving ? "保存中…" : "保存"}</button>{toggle && <button className={previewing ? "desktop-preview-toggle on" : "desktop-preview-toggle"} aria-pressed={previewing} title={toggle.title} onClick={() => setPreviewing(value => !value)}>{toggle.label}</button>}</div>
+    <div className="desktop-document-tabs" role="tablist" aria-label="打开的文件">{documents.map(item => <div key={item.path} className={active === item.path ? "active" : ""}><button role="tab" aria-selected={active === item.path} title={item.path} onClick={() => { setActive(item.path); setPreview(null); setParsed(null); setPreviewing(false); }}>{item.content !== item.saved ? "● " : ""}{item.path.split("/").at(-1)}</button><button aria-label={`关闭 ${item.path}`} onClick={() => close(item)}>×</button></div>)}</div>
     {(error || diskIssue) && <div className="desktop-error" role="alert">{diskIssue || error}{document && <button onClick={async () => {
       if (!window.confirm("重新读取磁盘版本会放弃当前文件未保存内容，继续？")) return;
       try { const file = await bridge!.readFile(active); setDocuments(current => current.map(item => item.path === file.path ? { ...file, saved: file.content } : item)); setError(""); } catch (cause) { setError(desktopErrorText(cause, active)); }
     }}>重新读取磁盘</button>}</div>}
     {preview ? <DesktopMediaView key={preview.path} path={preview.path} kind={preview.kind} onClose={() => setPreview(null)} />
       : parsed ? <DesktopDocumentView key={parsed.path} path={parsed.path} kind={parsed.kind} model={parsed.model} error={parsed.error} onClose={() => setParsed(null)} />
-        : document ? <>
+        : document && previewing && markdown ? <MarkdownDocument key={`preview ${active}`} path={active} content={document.content} />
+          : document ? <>
       <div className="desktop-code-editor" key={active}><pre className="desktop-line-numbers" ref={gutter} aria-hidden="true">{document.content.split("\n").map((_, index) => index + 1).join("\n")}</pre><div className="desktop-code-surface">
         {highlight && <pre className="desktop-code-highlight" ref={layer} aria-hidden="true"><HighlightedCode content={document.content} language={language} /></pre>}
         <textarea ref={area} className={highlight ? "highlighted" : undefined} aria-label={`编辑 ${active}`} value={document.content} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onChange={event => change(event.target.value)} onSelect={locate} onScroll={event => {
@@ -143,7 +153,7 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
           change(input.value); locate();
         }
       }} /></div></div>
-      <div className="desktop-editor-info"><span>Ln {position.line}, Col {position.column}</span><span>UTF-8 · {active.split(".").at(-1)} · {document.content === document.saved ? "已保存" : "未保存"}</span><button onClick={() => { void store.submit(`请检查文件 ${active} 的代码，先解释问题和建议，不要修改文件。${document.content !== document.saved ? "注意：编辑器中存在尚未保存的更改，请先提醒我保存。" : ""}`); }}>让助手检查文件</button></div>
+      <div className="desktop-editor-info">{previewing && markdown ? <span>预览 · 未保存的更改也会显示</span> : <span>Ln {position.line}, Col {position.column}</span>}<span>UTF-8 · {active.split(".").at(-1)} · {document.content === document.saved ? "已保存" : "未保存"}</span><button onClick={() => { void store.submit(`请检查文件 ${active} 的代码，先解释问题和建议，不要修改文件。${document.content !== document.saved ? "注意：编辑器中存在尚未保存的更改，请先提醒我保存。" : ""}`); }}>让助手检查文件</button></div>
     </> : <div className="desktop-welcome"><span className="desktop-mark">L</span><h1>luban 工作台</h1><p>左侧浏览文件，中间编辑代码，右侧与助手协作。</p><button onClick={showQuick} disabled={!bridge}>打开文件 · ⌘/Ctrl P</button><p>⌘/Ctrl S 保存 · ⌘/Ctrl K 新任务 · ⌘/Ctrl ` 控制台</p>{!bridge && <p>代码编辑和命令执行仅在 Electron 桌面客户端可用。</p>}</div>}
     {quick && <div className="desktop-quick-backdrop" onClick={() => setQuick(false)}><section className="desktop-quick" role="dialog" aria-label="快速打开文件" onClick={event => event.stopPropagation()}><input autoFocus aria-label="搜索项目文件" placeholder="输入文件名或路径…（最多索引 5000 个文件）" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") setQuick(false); if (event.key === "Enter" && matches[0]) { void open(matches[0]); setQuick(false); } }} /><div>{matches.map(path => <button key={path} onClick={() => { void open(path); setQuick(false); }}>{path}</button>)}{!matches.length && <p>没有匹配文件</p>}</div></section></div>}
   </>;

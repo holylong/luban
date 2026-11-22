@@ -112,4 +112,12 @@ export const api = {
     post<{ ok: boolean; settings: import("./desktop-update").UpdateSettings }>("/api/update/settings", input),
   installUpdate: () =>
     post<{ ok: boolean; version: string; target?: string; restart?: string }>("/api/update/install", {}),
+  // Skill-pack storefront. Search runs on the server so the catalog stays one
+  // cached request; install/uninstall return the ledger entry the panel shows.
+  plugins: (q = "", refresh = false) =>
+    request<import("./desktop-plugins").PluginPayload>(`/api/plugins${query({ q, refresh: refresh ? 1 : undefined })}`),
+  installPlugin: (id: string) =>
+    post<{ ok: boolean; installed: import("./desktop-plugins").InstalledPluginView }>("/api/plugins/install", { id }),
+  uninstallPlugin: (id: string) =>
+    post<{ ok: boolean; skills: string[] }>("/api/plugins/uninstall", { id }),
 };

@@ -1,3 +1,23 @@
+## 2.9.6 — 2026-11-23
+
+- 桌面版编辑器打开 `.md` 终于能看了：标题栏多一个「预览 / 编辑」按钮，只在这七种后缀出现（`md` / `markdown` / `mdx` / `mdown` / `mkd` / `mdwn`），`⌘/Ctrl+Shift+V` 切换，和 VS Code 的 Markdown 预览同一个键位；裸 `⌘V` 仍然只是粘贴。按钮显示的是「切过去的那个模式」，预览时泛蓝高亮。
+- 预览读的是编辑缓冲区而不是磁盘文件：没保存的改动边打边渲染，切标签会重置回编辑态，不会在 `.ts` 标签上留下一份过期的 HTML。
+- README 里那些 GitHub 仍接受的 HTML（居中 `<div>`、`<sub>` 说明、`<img>` 图标、表格里的 `<br>`）不再原样显示成标签：预览前先做一遍归一化——`<img>`/`<a>` 转成 markdown、注释与 `<script>`/`<style>` 整块丢掉、其余标签剥掉留文字，`<br>` 在表格里变成空格以免把一行拆断。任务列表的 `- [x]` / `- [ ]` 渲染成 ☑ / ☐。
+- 文档版式按阅读排，不再套聊天气泡：860px 居中栏、h1/h2 带分隔线、代码块沿用同一个 tokenizer 上色、表格横向滚动、引用块留左侧色条、链接用蓝色并可下划线。空文件显示提示文案，而不是一片空白。
+- `![alt](path)` 现在渲染成带图标的链接（`🖼 alt`）：web 地址新开窗口，项目内路径点开就是文件——预览 README 时不会再留一对多余的方括号。这条对聊天里的 markdown 同样生效；渲染依旧是纯 React 元素，没有 `dangerouslySetInnerHTML`。
+- 新增 `desktop-markdown.ts`（后缀判定 `isMarkdownPath`、按钮文案 `previewAction`、快捷键 `isPreviewShortcut`）与 `desktop-markdown-view.tsx`；`desktop-markdown.test.tsx` 7 个用例覆盖后缀、按钮状态、快捷键（明确拒绝裸 `⌘V`）、渲染、HTML 归一化、空文件与 CSS 版式，`markdown.test.tsx` 补了图片语法用例。
+- 这一版同时带上上一轮没有单独发版的桌面插件商店（2.9.5 的改动一起进这一版）：可搜索的插件列表、安装/更新/卸载后技能直接落到 `~/.luban/skills/` 并被 `list_skills` 立刻看到、目录五分钟缓存、装完不执行任何插件代码。
+- 修的是「只能读源码」这件事本身：以前要看渲染效果得切到浏览器，现在同一个面板里 `⌘⇧V` 就够；检查和保存按钮在预览态照旧可用。
+
+## 2.9.5 — 2026-11-23
+
+- 桌面版新增**插件商店**:状态栏「插件」按钮打开一个可搜索的列表,输入即过滤(搜索在服务端做,目录 5 分钟缓存,敲键盘不重复拉取),每行一个技能包,按钮是安装 / 更新 / 卸载。插件就是一组 `SKILL.md`,装进 `~/.luban/skills/` 后 `list_skills` 立刻能看到,不用重启,也不执行任何代码。
+- 新增 `src/core/plugins.ts`:目录读取(只走 https,回环地址例外)、按 `files[].sha256` 与字节数校验、先写 `<home>/.luban-plugin-<uuid>/` 再原子移动进 `skills/`(任何一步失败都不留半个技能)、`<home>/plugins.json` 记账(插件 id / 版本 / 安装时间 / skill 目录 / 每个文件哈希)。卸载只删账本里的目录,手写技能不受影响。
+- `src/web/server.ts` 增加 `/api/plugins`(带 `q` 搜索与 `refresh=1`)、`/api/plugins/install`、`/api/plugins/uninstall`。目录读不到时仍返回 200 与已安装清单,面板照旧能卸载,并说明是哪个 URL 没应答——离线不是错误状态。
+- 目录地址可换:`config.json` 的 `plugins.registry` 或环境变量 `LUBAN_PLUGIN_REGISTRY`,面板会显示正在用的地址,方便内网镜像。空的 `plugins.registry` 走内置默认目录。
+- 新增仓库 `holylong/luban-plugins` 存 `plugins.json` 与插件源码:三个示例插件(中文提交信息、SQL 与索引审阅、更新日志撰写),`scripts/build-index.mjs` 从 `plugins/<id>/` 重新生成目录并重算全部 sha256,CI 跑 `--check`,目录与内容不一致就拒绝合并。`docs/plugins.md` 写了格式、发布流程和安全边界。
+- 校验是认真做的:`src/core/plugins.test.ts` 11 个用例覆盖搜索(名称/描述/标签/大小写/空查询)、安装落盘与账本、重新安装覆盖旧版本、升级判定、哈希不符拒绝且不落盘、`../` 路径逃逸与超大文件拒绝、卸载只删自己的技能、目录重复 id 报错;`src/web/client/desktop-plugins.test.tsx` 8 个用例覆盖列表文案、已安装/可更新徽标、离线时保留卸载、空搜索结果、按钮忙碌态。另用本地 HTTP 目录跑了真实安装链路:3 个插件装好、搜索「中文」命中 1 个、卸载后目录消失、手改一个字节后安装被 sha256 拦下且 `skills/` 未创建。
+
 ## 2.9.4 — 2026-11-23
 
 - 修掉打包版桌面「检查更新 / 升级」必崩的问题：`apps/desktop/main.cjs` 用 `__dirname/../../dist/core` 去动态 import `update.js`。开发检出里这正好是 `dist/core`，但在 `.app` 里 Electron 入口在 `Contents/Resources/app/desktop`、编译产物在 `Contents/Resources/luban/dist`，两者毫无关系——于是点升级直接报 `Cannot find module '/Applications/luban.app/Contents/Resources/dist/core/update.js'`。改为 `const cliDist = dirname(cli)`（`cli` 已经是 `LUBAN_CLI` 或开发检出的 `dist/cli.js`），macOS 入口桩、Windows `.cmd`、Linux 启动脚本本来都会设置 `LUBAN_CLI`，三个平台一次修好，开发检出行为不变。

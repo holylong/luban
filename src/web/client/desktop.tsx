@@ -14,6 +14,7 @@ import { DesktopChanges, currentDesktopEdit } from "./desktop-changes";
 
 import { DesktopThemePicker } from "./desktop-theme-picker";
 import { DesktopUpdate } from "./desktop-update";
+import { DesktopPlugins } from "./desktop-plugins";
 import { clampAgent, clampConsole, clampExplorer, fitLayout, loadLayout, saveLayout, type DesktopLayout } from "./desktop-layout";
 import { PaneSplitter } from "./desktop-panes";
 import { reloadPaths, sameTree } from "./desktop-tree";
@@ -468,6 +469,7 @@ export function DesktopStatusBar({ store }: { store: WorkbenchStore }): React.Re
       <span className={`dot ${store.connected ? "online" : "offline"}`} />
       {store.connected ? "本地 Agent 已连接" : "正在连接本地 Agent"}
       <PetToggle />
+      <DesktopPlugins />
       <DesktopUpdate />
       <span>{store.project || store.node?.workspace || ""}</span>
       <span>{store.file ? `${store.file.lines ?? 0} 行 · ${store.file.language}` : ""}</span>
