@@ -170,6 +170,12 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-status .plugin-dock { margin-left: 8px; flex: none; }
 .desktop-status .plugin-button { padding: 1px 7px; }
 .desktop-status .update-button { padding: 1px 7px; }
+/* Both docks sit at the left end of the bar, so their popovers must open from
+   the dock's left edge: right-aligning a 380px list against a dock at x=141
+   threw the panel to x=-187 and the search box at x=-174, i.e. off-screen.
+   Width is clamped so a narrow window cannot push it past the viewport either. */
+.desktop-status .plugin-panel { left: 0; right: auto; width: min(380px, calc(100vw - 24px)); }
+.desktop-status .update-panel { left: 0; right: auto; width: min(320px, calc(100vw - 24px)); }
 .desktop-status span:last-child { margin-left: 12px; }
 .desktop-editor button, .desktop-console button { background: transparent; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); padding: 4px 8px; cursor: pointer; }
 .desktop-editor button:hover { color: var(--fg); background: var(--panel-2); }

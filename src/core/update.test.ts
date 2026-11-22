@@ -213,6 +213,46 @@ describe("github mirror", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("outranks a stale server manifest with the newer GitHub release", async () => {
+    // The failure that shipped 2.9.6 silently: the manifest host still answered
+    // 2.9.4 while GitHub already carried 2.9.6, so every client said "已是最新".
+    const { impl, calls } = routedFetch(
+      { ok: true, latest: { version: "2.7.18" }, artifact: null },
+      release([asset("luban-cli-2.7.19-mac-x64.zip")]),
+    );
+    const check = await checkForUpdate({ ...base, fetchImpl: impl });
+    expect(check.status).toBe("available");
+    expect(check.source).toBe("github");
+    expect(check.latest).toBe("2.7.19");
+    expect(check.artifact?.url).toContain("/v2.7.19/");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("keeps a server 'current' answer when the mirror is not ahead", async () => {
+    const { impl, calls } = routedFetch(
+      { ok: true, latest: { version: "2.7.18" }, artifact: null },
+      release([asset("luban-cli-2.7.18-mac-x64.zip")], "v2.7.18"),
+    );
+    const check = await checkForUpdate({ ...base, fetchImpl: impl });
+    expect(check.status).toBe("current");
+    expect(check.source).toBe("server");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("prefers the mirror at the same version when only it ships the file", async () => {
+    // A server that knows a version but has no build for this triple: the
+    // mirror's file is the only actionable answer, and it must not be dropped
+    // just because the version numbers are equal.
+    const { impl } = routedFetch(
+      { ok: true, latest: { version: "2.7.19" }, artifact: null },
+      release([asset("luban-cli-2.7.19-mac-x64.zip")]),
+    );
+    const check = await checkForUpdate({ ...base, fetchImpl: impl });
+    expect(check.status).toBe("available");
+    expect(check.source).toBe("github");
+    expect(check.artifact?.file).toBe("luban-cli-2.7.19-mac-x64.zip");
+  });
+
   it("reports no-build when the mirror ships nothing for this triple", async () => {
     const { impl } = routedFetch(undefined, release([asset("luban-cli-2.7.19-win-x64.zip")]));
     const check = await checkForUpdate({ ...base, fetchImpl: impl });

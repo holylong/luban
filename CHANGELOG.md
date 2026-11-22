@@ -1,3 +1,11 @@
+## 2.9.7 — 2026-11-23
+
+- 修「升级服务器清单过期就永远显示已是最新」：检查在服务器答 `current` / `no-build` 时再问一次 GitHub 的 `releases/latest`，两者取较新者；版本相同时只有 GitHub 真给出这台机器能装的包才采用它，所以服务器知道新版号却没包时也不会被更旧的资产顶掉。有新版时仍然只问服务器一次，不多发请求。
+- 2.9.6 就是这样漏掉的：GitHub Release、8 个安装包、更新日志都齐了，但升级服务器清单还停在 2.9.1，已装 2.9.4 的桌面端因此一直显示「已是最新版本 2.9.4」（那句里的版本号取的是 `state.current`，不是你装到的服务器版本）。现已用 `publish:release --github v2.9.6` 把 2.9.6 的清单补上：8 行直指 GitHub 资产地址与 sha256，不复制 978 MB 字节。
+- `.github/workflows/release.yml` 的 `notes` job 末尾新增「Announce the version on the update server」：打 tag 发版会自动跑 `publish:release --version X --github vX`，仓库缺 `LUBAN_RELEASES_TOKEN` secret 时打印一行提示并跳过，fork 不会因此失败。
+- 桌面版「插件」窗口终于看得见了：状态栏这两个按钮（插件、更新）在整条状态栏的最左边，面板却按右对齐弹出，380px 宽的列表整个跑到屏幕左边——实测面板左边在 x=-187、搜索框在 x=-174，点「插件」像没反应。现在改成从左边缘弹出，宽度按窗口夹紧，1500px 窗口里面板落在 x=141、搜索框 x=154，700px 窄窗口也整个在屏内；「更新」那个 320px 面板同样修好。回归用例读 `desktop.css` 断言这两条规则还在。
+- 回归用例：`src/core/update.test.ts` 新增 3 例（过期清单被 GitHub 覆盖、两侧都不过期时保留服务器答案、同版本只有 GitHub 有包时用它），该文件 27 例全过；`docs/release.md` 补了「清单过期不再冒充最新」与打 tag 自动发布清单两段。
+
 ## 2.9.6 — 2026-11-23
 
 - 桌面版编辑器打开 `.md` 终于能看了：标题栏多一个「预览 / 编辑」按钮，只在这七种后缀出现（`md` / `markdown` / `mdx` / `mdown` / `mkd` / `mdwn`），`⌘/Ctrl+Shift+V` 切换，和 VS Code 的 Markdown 预览同一个键位；裸 `⌘V` 仍然只是粘贴。按钮显示的是「切过去的那个模式」，预览时泛蓝高亮。

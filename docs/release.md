@@ -82,9 +82,12 @@ GitHub Release 的正文由 `scripts/release-notes.mjs` 生成：`## 更新内�
    `--dry-run` 只列出会上传的文件；`--kind cli` 只发 CLI；`LUBAN_RELEASES_URL` 可临时指向别的服务器。
 4. 自检：`LUBAN_UPDATES_URL=<服务器> node dist/cli.js update --json`，再用 `luban update install` 走一次真实下载与替换。
 
+打 tag 发版（`.github/workflows/release.yml`）在 `notes` job 末尾会自己跑第 3 步：等各平台包都传上 GitHub 后执行 `publish:release --version X --github vX`，清单里的下载地址直接指向刚传的资产，不复制字节。它靠仓库 secret `LUBAN_RELEASES_TOKEN`；没有这个 secret 的 fork 会打印一行提示并跳过，不会失败。这条链路补的是「发了 GitHub Release 却没更新升级服务器」：2.9.6 就是这么只上了 GitHub，害得已装 2.9.4 的桌面端一直显示「已是最新版本 2.9.4」。补清单：`npm run publish:release -- --version X --github vX`（先加 `--dry-run` 看行）。
+
 客户端侧：
 
 - `luban update` / `install` / `on` / `off` / `status`；TUI 启动时检查一次（`updates.check` 为真才发请求），有新版才提示，选「稍后」本次不动、「不再提醒」写 `updates.skipped_version`。
 - 桌面版：视图 → 检查更新（主进程下载、替换 `.app` 并自动重启），底栏「更新」按钮会自己打开面板并提供升级 / 稍后 / 不再提醒与「启动时检查更新」开关。
 - 关掉检测：`luban update off`、桌面面板里的勾选框，或整机 `LUBAN_NO_UPDATE_CHECK=1`。
 - 自建服务器：`updates.url` 或 `LUBAN_UPDATES_URL` 指向任意实现了上表接口的地址。
+- 清单过期不再冒充最新：升级服务器答「已是最新」时（`current` / `no-build`），检查还会问一次 GitHub 的 `releases/latest`，两者取较新者；版本相同则只有 GitHub 真给出这台机器能装的包时才用它。代价是「没有新版」时多一次请求，有新版时仍然只问服务器一次。

@@ -159,13 +159,48 @@ export function startupCheckAllowed(env: NodeJS.ProcessEnv = process.env): boole
  */
 export async function checkForUpdate(options: CheckOptions): Promise<UpdateCheck> {
   const primary = await checkReleaseServer(options);
-  if (primary.status !== "unreachable") return { ...primary, source: "server" };
-  // The release server is a Cloudflare quick tunnel, and those hostnames rotate
-  // (and are blocked outright on some networks). Every release is also published
-  // to GitHub, so a dead manifest host must not turn every upgrade into "手动下".
+  if (primary.status === "available" || primary.status === "skipped") {
+    // The server already offers something to install; a second request could
+    // only talk the user out of a working answer, so it is not made.
+    return { ...primary, source: "server" };
+  }
+  if (primary.status === "unreachable") {
+    // The release server is a Cloudflare quick tunnel, and those hostnames rotate
+    // (and are blocked outright on some networks). Every release is also published
+    // to GitHub, so a dead manifest host must not turn every upgrade into "手动下".
+    const mirror = await checkGithubReleases(options);
+    if (!mirror) return primary;
+    return { ...mirror, source: "github", reason: mirror.reason ?? primary.reason };
+  }
+  // A live but stale manifest is the other failure mode, and the quieter one: the
+  // release server is only updated by `publish:release`, so a release that shipped
+  // through the tag workflow alone leaves this host answering an older version
+  // while GitHub already carries the new one. "已是最新" then becomes a claim no
+  // client can act on — a 2.9.4 desktop said "已是最新版本 2.9.4" for two days while
+  // 2.9.6 sat on GitHub — so ask the mirror too and keep whichever is newer.
   const mirror = await checkGithubReleases(options);
-  if (!mirror) return primary;
-  return { ...mirror, source: "github", reason: mirror.reason ?? primary.reason };
+  if (mirror && preferMirror(mirror, primary)) return { ...mirror, source: "github" };
+  return { ...primary, source: "server" };
+}
+
+/**
+ * Should the mirror's answer replace the release server's?
+ *
+ * A newer version wins. At the same version the mirror only wins when it really
+ * ships a file the manifest lacks, so a server that merely knows a newer number
+ * keeps answering `no-build` instead of being overwritten by an older artifact.
+ */
+function preferMirror(mirror: UpdateCheck, primary: UpdateCheck): boolean {
+  const server = newestVersion(primary);
+  const github = newestVersion(mirror);
+  if (isNewer(github, server)) return true;
+  const installable = mirror.status === "available" || mirror.status === "skipped";
+  return compareVersions(github, server) === 0 && installable && !primary.artifact;
+}
+
+/** The newest version a check mentions: the installable artifact wins over the catalog. */
+function newestVersion(check: UpdateCheck): string {
+  return check.artifact?.version ?? check.latest ?? "";
 }
 
 async function checkReleaseServer(options: CheckOptions): Promise<UpdateCheck> {

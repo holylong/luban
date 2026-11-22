@@ -1,5 +1,6 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { DesktopStatusBar } from "./desktop";
 import { PluginPanel, pluginBadge, pluginHeadline } from "./desktop-plugins";
@@ -95,5 +96,19 @@ describe("plugin panel copy", () => {
     expect(html).toContain("plugin-dock");
     expect(html).toContain(">插件<");
     expect(html).toContain("update-dock");
+  });
+
+  // The status bar docks sit at the left end of the bar, so a right-aligned
+  // popover puts most of the list — and the search box — off-screen to the left.
+  it("anchors the status-bar popovers to the dock's left edge", () => {
+    const css = readFileSync(new URL("./desktop.css", import.meta.url), "utf8");
+    const rule = (name: string): string => new RegExp(`\\.desktop-status \\.${name} \\{[^}]*\\}`).exec(css)?.[0] ?? "";
+    for (const name of ["plugin-panel", "update-panel"]) {
+      const block = rule(name);
+      expect(block, `${name} needs an explicit status-bar rule`).not.toBe("");
+      expect(block).toContain("left: 0");
+      expect(block).toContain("right: auto");
+      expect(block).toMatch(/width: min\(/);
+    }
   });
 });

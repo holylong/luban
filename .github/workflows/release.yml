@@ -300,3 +300,18 @@ jobs:
           # pass replaces them with 更新内容 + every platform, from one source.
           node scripts/release-notes.mjs --version "$version" --platform all --out notes.md
           gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+      - name: Announce the version on the update server
+        # `luban update` and the desktop 检查更新 ask this host, not GitHub, so a
+        # tag release that skipped the manifest left every client on the previous
+        # version while the new one sat on GitHub (2.9.6 shipped, the server still
+        # answered 2.9.1). `--github` copies nothing: the rows point at the assets
+        # the packaging jobs just uploaded. No token → forks skip instead of fail.
+        env:
+          LUBAN_RELEASES_TOKEN: ${{ secrets.LUBAN_RELEASES_TOKEN }}
+        run: |
+          if [ -z "$LUBAN_RELEASES_TOKEN" ]; then
+            echo "no LUBAN_RELEASES_TOKEN secret; update server left unchanged"
+            exit 0
+          fi
+          version=$(node -p "require('./package.json').version")
+          npm run publish:release -- --version "$version" --github "v$version"
