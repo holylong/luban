@@ -12,16 +12,22 @@ export function supportedReasoningEfforts(model: ModelRef): NonNullable<ModelRef
 }
 
 /** Recovery must change what the provider actually receives. Unknown models
- * may ignore thinking options, so only a real budget increase helps those. */
+ * may ignore thinking options, so a real budget increase is the only lever
+ * left for them; `outputLimit` is the budget the caller wants this retry to
+ * use, already clamped to the client's hard ceiling. */
 export function reasoningRecoveryOptions(config: LubanConfig, current: ModelRequestOptions | undefined,
   outputLimit: number): ModelRequestOptions | undefined {
   if (config.model.api === "codex") return undefined;
-  const maxTokens = Math.min(config.maxTokens, outputLimit);
+  const maxTokens = outputLimit;
   const previousMax = Math.min(current?.maxTokens ?? config.maxTokens, maxTokens);
+  // A larger budget takes longer to fill, so the timeout grows with it instead
+  // of cancelling the very reply the extra room was meant to allow.
+  const grown = Math.max(1, maxTokens / Math.max(previousMax, 1));
+  const timeoutMs = Math.round(config.timeoutMs * Math.min(4, grown));
   const next: ModelRequestOptions = {
     ...current, maxTokens, enableThinking: false, reasoningEffort: "low",
-    timeoutMs: config.timeoutMs,
-    thinkingTimeoutMs: config.thinkingTimeoutMs ?? Math.max(config.timeoutMs, 600_000),
+    timeoutMs,
+    thinkingTimeoutMs: config.thinkingTimeoutMs ?? Math.max(timeoutMs, 600_000),
     maxRetries: config.maxRetries ?? 3,
   };
   const previousFields = modelThinkingFields(config, current, previousMax);
@@ -37,7 +43,10 @@ export function modelThinkingFields(config: LubanConfig, options: ModelRequestOp
   let control: ModelRef["thinkingControl"] = model.thinkingControl;
   if (!control) {
     if (/qwen/iu.test(model.id)) control = "qwen";
-    else if (/deepseek-(?:v[34]|chat|reasoner)/iu.test(model.model)) control = "thinking";
+    // deepseek-flash / deepseek-v4.1-flash carry thinking too, and those are the
+    // aliases people actually run: without this match they reasoned at full
+    // length and could not be turned down at all.
+    else if (/deepseek/iu.test(model.model) && !/deepseek-(?:chat|coder)/iu.test(model.model)) control = "thinking";
     else if (model.api === "anthropic" && /claude/iu.test(model.model)) {
       control = /(?:opus|sonnet)[-.]4[-.]?[6-9]|claude[-.]?[5-9]/iu.test(model.model) ? "adaptive" : "budget";
     } else if (/^(?:gpt-[56]|o[134])(?:[-.]|$)/iu.test(model.model)) control = "reasoning-effort";

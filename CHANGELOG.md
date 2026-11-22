@@ -1,3 +1,94 @@
+## 2.8.20 — 2026-11-23
+
+- `thin` 的上界按参考画面校准到 0.0215（codex 0.0216–0.0220、dsh 0.0204–0.0208，两个视口实测），让「无告警」真的等于「和参考画面同级」，而不是连参考画面自己都会被判 `thin`。
+- 效果（同一 `deepseek-flash`、同一提示词）：luban19 1252 行 / 42.4KB / 函数 50 / 道具 18，边缘密度 0.0235（1440×900）、0.0233（1280×800）；codex 2066 行 / 函数 46 / 道具 19 / 0.0220，dsh 2446 行 / 函数 68 / 道具 21 / 0.0208；上一轮 luban18 只有 925 行 / 函数 25 / 道具 15 / 0.0168。运行中它自己做了 A/B（`test-noshadow`/`test-nosun`）并逐轮把边缘密度从 0.0194 推到 0.0232。
+- 仍承认的差距：字节数 42KB 对 76KB/89KB（codex/dsh 每个道具写得更啰嗦），饱和度 0.38 对 codex 的 0.64。
+
+## 2.8.19 — 2026-11-22
+
+- `pixels` 增加分层判定：`sparse`（<0.020，明显只有几块大平面）与新的 `thin`（0.020–0.024，能读但不细腻，0.021–0.022 才是参考画面的水平），并把「一直加道具但数字不动」的诊断写进告警：换构图——拉近相机、加背景层、缩小体素、给每个表面加细节。
+- 系统提示加规则 2c：检查仍在抱怨时不许收工；连续两轮数字几乎不动说明问题在构图而非数量，换构图再测，结束时报告最终数值。规则 2b 保留。
+- 起因：同一模型下 luban18 连渲染 12 次，边缘密度 0.0105→0.0173 就停在 `sparse` 上收工，而 codex/dsh 是 0.0218/0.0208。数据说明光靠「多加道具」这条指令会平台化，必须换构图和体素精度。
+
+## 2.8.18 — 2026-11-22
+
+- 系统提示新增规则 2b：交付物是「生成出来的东西」（页面、3D 场景、UI、文档、数据集）时，深度本身就是交付物——第一遍就写完整版本，检查通过只是下限不是终点，只有用户要求更少时才做减法。
+- `render_html` 的 `sparse` 阈值 0.018 → 0.020，正好卡在参考画面前面（codex 0.0219、dsh 0.0208 通过，luban 0.0147/0.0182 报警），告警文案补上「达标只是下限，要按场景本身是否完整来判断是否收工」。
+- 排查结论（同一个 deepseek-flash 直连 API 实测）：单次响应最大 token 预算 128000 会被接受，模型自己写到 8866 token / 29.7KB 就 `finish=stop`；`--thinking off` 会把输出压到 14.5KB/423 行、用时 67s。所以体积下滑不是「没开思考」或「加了输出上限」，而是 2.8.14 起我用 render_html 自检把「一次写完整」的驱动换成了「通过检查就停」——检查项又很容易满足。这一版把停止条件改回内容本身。
+
+## 2.8.17 — 2026-11-22
+
+- `render_html` 的 `pixels` 增加 `edgeDensity`（480×300 原生采样下的邻域对比度）与新告警 `sparse`：画面只有「几块大平面」时直接点名要补什么（栏杆、石块、鸟居、石灯、竹子、雕像、飞鸟、小船），并提醒打散大平面、拉开物体高差。
+- 阈值来自实测而非拍脑袋：luban 页面 0.014–0.015、codex 0.022、dsh 0.021，取中间 0.018。同时确认「亮度+饱和度」不足以衡量丰富度——三块大白板也能通过，这正是旧摘要对贫瘠画面报「无警告」的原因。
+- 起因：用户指出新版产物虽然更快，但 HTML 从 2065 行量级掉到 685 行、元素明显变少。核查结果：函数数 22 对 codex 46 / dsh 65，缺 koi、鸟居、瓦片、栏杆、竹子等道具，边缘密度低 45%。测试补了「几块大平面要被判 sparse」和「120 个小方块不算 sparse」。
+
+## 2.8.16 — 2026-11-22
+
+- `render_html` 的 `pixels` 升级为「能代替眼睛」的摘要：调色板（5 色 + 占比）、平均饱和度、纯白/纯黑像素占比、3×3 区域亮度与主色，并给出人话 `warnings`（`blank`/`washed-out`/`clipped`/`desaturated`/`flat`/`low-detail`）；统计改用 96×54 采样，ASCII 图仍是 48×16。
+- 新增 `render_html.probe`：在页面内求值一段 JS 并返回 JSON，用来核对场景事实（`window.scene.children.length`、`instancedMesh.count`）而不是猜自己写的代码。
+- 起因是横向对比：codex 的天空 `#171022`（亮度 20）、luban 是 `#dfeaf3`（231）配 `#e4eef5` 的雾，画面平均亮度 182–194 对 104，饱和度 0.15–0.20 对 0.64；旧摘要只说「不空白」，模型没有可依据的证据。现在同样的四张图跑一遍，luban 两张得到 `washed-out`，codex/dsh 干净——告警和人的判断一致。
+
+## 2.8.15 — 2026-11-22
+
+- `render_html` 增加 `pixels` 文字摘要：平均亮度、distinct 颜色数、最大色块占比、`blank` 标记和 48×16 的 ASCII 明暗图。原因是无视觉模型拿到截图会想尽办法「看」它——三次基线里它试过 `chafa`/`img2txt`/`ollama`，还把 base64 贴给视觉接口，两次 41 秒的 bash 全白费。摘要在页面内用 2D canvas 对截图降采样算出（WebGL 画布直接回读常是空白，截图不会），不需要图像库；`blank` 能一眼看出「什么都没画」和「画了但一片死白」。
+
+## 2.8.14 — 2026-11-22
+
+- 新增 `render_html` 工具：一次调用把本地 HTML（或 URL）丢进无头 Chrome，返回截图、console 错误、未捕获异常、失败请求和 canvas/WebGL 状态。此前要「看看页面对不对」，模型只能用 `bash` 自己拼 Chrome + DevTools + 截图脚本——体素花园实测这一项吃掉 893s 里的 244s（115s/45s/42s/42s 四次长命令）；换成这个工具同一页面 3.4 秒返回，画布 1280×800、WebGL 可用、错误一条不少。零依赖：Node 自带 WebSocket 直连 CDP；按 `LUBAN_CHROME` → Chrome/Chromium/Edge/Brave 顺序找浏览器，找不到明确报错。截图存 `<workspace>/.luban/render/`，无视觉能力的模型会被告知「只报路径和错误，别描述像素」。
+
+## 2.8.13 — 2026-11-22
+
+- 修好思考开关对 DeepSeek 别名无效的问题：判定条件原本只认 `deepseek-v3/v4/chat/reasoner`，`deepseek-flash`、`deepseek-flash-0731` 这类实际在用的别名一个字段都发不出去，`model.thinking` 和自动思考策略对它们等于没有。现在凡 `deepseek-*`（`deepseek-chat` / `-coder` 除外）都按原生 `thinking.type` 下发，`deepseek-flash` 的 `thinking: {type:"disabled"}` 实测让同一请求从 5.9s 降到 1.1s、推理 token 664→0。
+- 无头运行结束时的摘要多一行诊断：思考 token 占输出超过 30% 时，一并给出最慢的一次调用是第几次、耗时、占模型时间多少。慢的时候不用再手动翻 40 多次调用去猜是谁拖的。
+- 顺带补上 `--planning off|auto|always`：文档一直写着这个参数，但只有 `luban acp` 有，主命令和 `--prompt` 从没接过（`loadConfig` 早就支持 `planning`），现在主命令一并接受并透传。
+- 新增一次性思考开关：`luban ... --thinking on|off|auto`（等价于临时覆盖 `model.thinking`，不写回配置），`loadConfig({ thinking })` 走 `parseThinkingOption()`，`on/off/auto` 之外的值一律按 auto 处理。用来对同一任务做 A/B，不必改配置文件。
+- 文档把「`max_tokens` 封顶 32000」这条过期说明改掉：默认与硬顶都是 128000，按模型声明与配置取小，被拒时逐级减半并记住该 `provider/model` 的实际上限。`--thinking` 与体素花园实测（44 步 454s、模型 392s、工具 60s、首轮 145s 烧掉 24.6K 推理）一并写进 `docs/reference.md`，并说明关掉思考会让模型退化成重复 bash 循环（实测 16 步后被重复调用保护中止）。
+- 测试：`model-controls.test.ts` 增加 `deepseek-flash` 可关、`deepseek-chat` 不动的断言，以及 `--thinking off/on/auto` 覆盖配置的用例。
+
+## 2.8.12 — 2026-11-22
+
+- 输出预算默认值提到最大：`model.max_tokens` 的默认从 64000 改成 128000（等于客户端硬顶 `ABSOLUTE_MAX_OUTPUT_TOKENS`），`src/core/default-config.ts` 的首启模板同步改成 128000，Anthropic 客户端的默认上限也从 32000 提到 128000。此前装了 luban 却没改过配置的人，拿到的是 64K（Anthropic 32K）预算，推理型模型把预算烧在推理上、正文 0 字，任务连挂 6 次就是这么来的——装上就是上限，不用先踩坑再去调大。
+- 上限再高也不会每轮都被拒：`noteOutputCeiling()` 记住某个 `provider/model` 实际接受的预算（减半重试成功后写入本进程的 map），`modelOutputCeiling()` 之后直接按它发送。第一轮 128K→64K→…→4K 试出来，第二轮就从 4K 开始，不会重复付同样的代价；`resetOutputCeilings()` 供测试和切换模型时清空。
+- 本机 `~/.luban/config.json` 同时修了三处：`model.max_tokens` 32768→128000（就是那次失败的根源）、`providers.deepseek.base_url` 由 `https://api.deepseek.com/chat/completions` 改成 `https://api.deepseek.com/v1`（前者能工作但依赖客户端的容错拼接）、`node.capabilities` 的 `linux` 改成 `darwin`（这台是 macOS，标成 linux 会让 mesh 把 Linux 专用的活派过来）。改前已备份为 `config.json.bak-<时间戳>`。
+- 文档：`docs/default-config.md`、`docs/reference.md` 说明默认值等于客户端上限、以及减半后记住上限的行为。
+- 测试：`config.test.ts` / `default-config.test.ts` 的默认值断言改为 128000，`openai.test.ts` 增加「减半成功后下一轮直接按 4096 发送」。
+
+## 2.8.11 — 2026-11-22
+
+- 缓存命中终于被统计：OpenAI 兼容、Responses、Anthropic 三类客户端此前只读 `prompt_tokens` / `completion_tokens`，把各家报的缓存字段全丢掉，所以会话里 `cached` 永远是空、状态栏从不显示缓存比例、横评里 luban 的「缓存 0」其实是没有统计而不是没有命中。实际用 `deepseek-flash` 直连验证：同一段 6k token 前缀第二次调用返回 `prompt_cache_hit_tokens: 5888`（`prompt_tokens_details.cached_tokens` 同值）。
+- 新增 `usageDetails()`（`src/core/openai.ts`）统一解析四种写法：`prompt_cache_hit_tokens`（DeepSeek）、`prompt_tokens_details.cached_tokens`（OpenAI / DeepSeek）、`input_tokens_details.cached_tokens`（Responses）、`cache_read_input_tokens`（Anthropic），顺带解析 `completion_tokens_details.reasoning_tokens` / `output_tokens_details.reasoning_tokens`。流式路径按「取较大值」合并迟到的 usage 分片，中断保留内容时的 usage 也带上这两个字段。
+- 结果流向：会话 `performance.requests[].usage.cached/reasoning`、TUI 状态栏的 `cache NN%`、`/usage` 的「缓存」一行、`npm run bench` 的 token 统计都已生效；匿名用量账本（`usage-stats.json`）结构不变，不为此新增上传字段。
+- 实测：修完跑一个 4 步小任务，会话里逐条记录为 `cached 1024 / 7808 / 7936 / 1024`，`reasoning 123` —— 修复前这些字段一个都不存在。
+- 测试：`openai.test.ts` 加 2 例（四种方言的 `usageDetails` 解析、流式 usage 分片带出 `cached` + `reasoning`）。
+
+## 2.8.10 — 2026-11-22
+
+- 命令开销从「每次 3.6 秒」降到「首次之后 5 毫秒」：luban 原来每条 bash 命令都执行 `/bin/bash -lc`，让登录 shell 重新 source 一遍用户 profile（本机 `~/.bash_profile` 跑一次 3.58s，而 `/bin/zsh -lc` 只要 0.03s）。现在工具创建时在后台抓取一次登录环境（`command env -0`，2.4s，正好和第一轮模型调用重叠），之后用 `-c` 执行并把抓到的 PATH/nvm/brew shellenv 合并进进程环境；抓不到就继续用 `-lc`，行为不变。实测 `createTools` 后连跑 6 条命令：`{ first: 2361, avgCached: 5 }` 毫秒。同一个任务 88 条命令因此省下约 5 分钟。
+- `max_tokens` 不再对所有 provider 一刀切：模型能力里新增 `capabilities.max_output_tokens`，OpenAI / Responses / Anthropic 客户端与任务输出预算都按「配置值、模型上限、客户端硬顶」三者取小；Anthropic 仍默认 32000，但可以显式抬高。
+- 未知 provider 的上限靠自愈：请求被 400 拒绝且报文里点名 `max_tokens`（`maximum ... tokens`、`context length` 等同义写法也算）时，luban 把预算减半重试，最多 6 次（64K→32K→16K→8K→4K），并在 TUI 里提示换了多少；之前这种情况直接把任务判死。
+- 提示文案里的「max_tokens 在 luban 中最高为 32000」改为按当前模型的实际可达预算显示，`docs/reference.md` 补上 `capabilities.max_output_tokens` 与减半重试的说明。
+- 测试：`openai.test.ts` 加 2 例（配置上限生效、400 拒绝后 64000→4096 逐次减半并成功），`config.test.ts` 加 1 例（`capabilities.max_output_tokens` 进入模型能力，未声明时保持 undefined），`tools.test.ts` 加 1 例（抓到登录环境后改用 `-c`，未抓到时仍是 `-lc`）。
+- 实跑（同一台机、同一个单文件体素场景、`deepseek/deepseek-flash`）：2.8.9 跑了 4341.4s（99 步 / 101 次调用，工具累计 3129.7s，其中 88 条 bash 共 2649.7s）；2.8.10 跑 1835.9s（47 步 / 47 次调用，工具累计 905.8s）——产物 `voxel-pagoda.html` 54990 字节，headless Chrome 复检 0 console error，canvas 1280×800。
+
+## 2.8.9 — 2026-11-22
+
+- 修「模型推理耗尽输出预算」直接把任务判死：一轮回复被输出上限截断、推理非空而正文为空时，luban 原来只尝试一次「降低推理 + 保持预算」，对不认识 thinking 控制的模型（如 `deepseek-flash`）这一步等于是空操作，于是立刻以「当前参数已无可自动调整空间」结束。现在这种情形会把**本轮输出预算按 2 倍递增**重试（至少 64000，最多两次），并按预算增幅放大请求超时（最多 4 倍），已完成的工具操作保留。
+- 写死的 32000 单轮输出上限改为 128000 硬顶（`src/core/openai.ts` 新增 `ABSOLUTE_MAX_OUTPUT_TOKENS`）：OpenAI 与 Responses 客户端按「配置 `max_tokens` 与硬顶取小」，Anthropic 仍用自己那套 32000 上限。之前配置默认 64000、用户配 32768，实际一律被夹到 32000——调大 `max_tokens` 完全没有效果。
+- 预算不能无限长：初始与递增后的输出预算都不超过上下文窗口的一半（`contextWindow / 2`），否则压缩后的输入预算会被输出预留吃成负数，任务改报 `Context budget exceeded`。窗口 128K 的模型因此最多到 64000，262144 的窗口能走到 128000。
+- 测试：`model-controls.test.ts` 加 2 例（按预算增幅放大超时、预算不变时不重试），`agent-recovery.test.ts` 加 1 例（推理吃满预算后 32K→64K→128K 依次重试，仍截断时报出可达预算）。红绿证明——把递增改回原样后这 1 例立即变红。
+- 实跑验证（`deepseek/deepseek-flash`，同一个单文件 HTML 体素场景任务）：修复前连续 6 次都在第 4 分钟以「推理 9.9 万字 / 正文 0 字」中止；修复后一次跑通——72.4 分钟、99 步 / 101 次模型调用、输入 12,880,276 / 输出 228,540 token、产物 69,224 字节，产物经 headless Chrome 复检 0 console error。其中第 1 次回复仍卡在 32,768，抬到 64,000 后第 3 次一次写出 50,781 token 的正文——旧上限下这两次都不可能发生。
+- 回归：`agent.test.ts` 里 4 个 starvation 用例按新契约更新（预算已到窗口上限时不重放、starve 后请求体是 64,000、原生 thinking 关闭与预算翻倍同时上线），修复后 `src/core` 单测仅剩 6 个与本次无关的历史失败（`cli-entry` 3、`agent-compaction` 3，在 HEAD 上同样失败）。
+
+## 2.8.8 — 2026-11-21
+
+- 新增真实模型评测台 `npm run bench`（`src/evals/bench.ts` + `src/evals/bench-cli.ts`）：8 个场景覆盖五个方面——正确性（`bugfix-tested` / `rename-cross-file` / `fix-failing-spec` / `feature-cli`）、验证纪律、安全（`ask-readonly` 只读拒写、`injection-resist` 抵抗文件内注入）、诚实性（`honest-blocked`：连不上的目标不许假装跑通）、失败恢复（`recovery`：ENOENT 修复后产物要真的生成）。与已有的 `npm run eval` 分工明确：那个用脚本回放验证工具接线（0 成本、进 CI），这个用真实模型测"活能不能干完、干对、说真话"。
+- 打分全部来自外部 ground truth，没有一项由模型自评：受保护文件是否字节不变、该出现/不该出现的产物、**harness 自己执行命令的退出码与输出**（agent 说什么都不算）、以及 transcript（`update_plan` 是否早于第一次改文件、是否记录过 `passed` 的 `record_verification`、是否给一个不可能通过的命令记了 passed）。单场景得分 = 通过项/总项，另出五方面分项、discipline 与 efficiency（每任务 model calls / 工具调用 / 步数 / 秒 / token，token 取自 `RunMetrics.requests`）。
+- CLI 支持 `--model`、`--only`、`--repeat`、`--max-steps`、`--timeout`、`--out`、`--list`；报告写 `bench-runs/<时间戳>/report.md` 与 `report.json`（已加入 `.gitignore`），退出码仅在全部场景满分时为 0。评测运行时强制隔离：清空 MCP/LSP 服务器、关闭工作区外访问、关闭电脑操控，避免评测台启动用户自己的服务或动到桌面。
+- 新增 `docs/agent-eval.md`：三层评测（确定性 harness 测试 / 真实模型评测台 / 公开 benchmark）、公开 benchmark 对照（结论是 SWE-bench-Lite/Verified 与 Terminal-Bench 适合对外比较，GAIA/OSWorld/MLE-bench 与 luban 形态不匹配）、打分口径、读表方式、局限，以及用 `luban -p` 接 SWE-bench/Terminal-Bench 的适配方法；`docs/reference.md` 的开发验证与项目结构补上 `npm run bench` 与 `evals/` 的说明。
+- 单测 9 例（`src/evals/bench.test.ts`）：场景 id 唯一且覆盖各方面、每个场景都必须有至少一条不依赖模型措辞的客观检查、honesty 场景必须锁定 `run.mjs` 并禁止假 pass、计划晚于首次编辑要判红、声称通过的命令必须被抓出来、harness 命令失败要带退出码、分项与效率聚合、报告表要列出失败项。
+- 实跑（`deepseek/deepseek-flash`，单次）：总分 0.98，full-pass 7/8，验证 3/3；唯一红项是 `feature-cli` 的 plan-before-edit——它写对了 `list.mjs`（退出码 0/2 与输出全对）却一次 `update_plan` 都没调用。效率 5.6 次模型调用 / 6.3 次工具调用 / 13.6 秒每任务。结果表写进 `docs/agent-eval.md`。
+- 验证：`npx vitest run src/evals/bench.test.ts` 9 例全绿；`npm run typecheck` 通过；`npm run bench` 在真实模型上跑完 8 个场景并产出 `report.md`（`bench-runs/first-run/`）。
+
 ## 2.8.7 — 2026-11-21
 
 - 修 `luban daemon start` 在正常安装下直接失败：`Error: 常驻服务需要编译后的 CLI（dist/cli.js）：先 npm run build`。原因不是没编译，而是 `daemonEntry()` 直接拿 `process.argv[1]` 判断「是不是编译后的 CLI」——npm 把可执行文件装成符号链接（`bin/luban` → `../lib/node_modules/luban/dist/cli.js`），Node 保留的是 `…/bin/luban` 这个别名，没有 `.js` 后缀，于是明明装着 dist/cli.js 也被判成开发入口。现在先 `realpath` 解析启动器再看扩展名，脱离的子进程拿到的就是真实的 `dist/cli.js`。

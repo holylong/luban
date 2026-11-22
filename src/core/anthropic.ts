@@ -1,7 +1,7 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
 import { interactionFetch } from "./interaction-log.js";
-import { finalizeCompletion, MAX_OUTPUT_TOKENS } from "./openai.js";
+import { finalizeCompletion, MAX_OUTPUT_TOKENS, usageDetails } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
 import { modelThinkingFields } from "./model-controls.js";
 
@@ -89,7 +89,11 @@ export class AnthropicClient {
     });
     const retries = options?.maxRetries ?? this.config.maxRetries ?? 3;
     const timeoutMs = options?.timeoutMs ?? this.config.timeoutMs;
-    const maxTokens = Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS);
+    // Claude models differ here too; an explicit provider limit wins over the
+    // conservative default this client used for every Anthropic model.
+    const declared = this.config.model.capabilities?.maxOutputTokens;
+    const maxTokens = Math.min(options?.maxTokens ?? this.config.maxTokens,
+      declared && declared > 0 ? Math.min(MAX_OUTPUT_TOKENS * 4, Math.floor(declared)) : MAX_OUTPUT_TOKENS);
     const thinkingFields = modelThinkingFields(this.config, options, maxTokens);
     const thinkingType = (thinkingFields.thinking as { type?: string } | undefined)?.type;
     for (let attempt = 0; ; attempt += 1) {
@@ -147,8 +151,7 @@ export class AnthropicClient {
         if (reasoning) onDelta?.(reasoning, "reasoning");
         if (recovered.content) onDelta?.(recovered.content, "content");
         const usage = data.usage && typeof data.usage === "object" ? data.usage as JsonObject : {};
-        return finalizeCompletion(check, recovered.content, reasoning, calls,
-          { input: Number(usage.input_tokens || 0), output: Number(usage.output_tokens || 0) });
+        return finalizeCompletion(check, recovered.content, reasoning, calls, usageDetails(usage));
       } finally {
         clearTimeout(timer);
         signal.removeEventListener("abort", abort);
@@ -165,8 +168,7 @@ export class AnthropicClient {
     let finishReason: unknown;
     let content = "";
     let reasoning = "";
-    let input = 0;
-    let output = 0;
+    let usage: { input: number; output: number; cached?: number; reasoning?: number } = { input: 0, output: 0 };
     const idleTimeout = idleOverrideMs ?? this.config.thinkingTimeoutMs ?? Math.max(this.config.timeoutMs, 600_000);
     const idleAbort = () => {
       onNotice?.(`模型已 ${idleTimeout / 1000}s 没有任何输出，中断本次请求`);
@@ -181,9 +183,14 @@ export class AnthropicClient {
         const data = parseModelEvent(raw);
         if (data.type === "message_stop") { finished = true; break; }
         const message = data.message && typeof data.message === "object" ? data.message as JsonObject : {};
-        const usage = (data.usage && typeof data.usage === "object" ? data.usage : message.usage) as JsonObject | undefined;
-        input = Number(usage?.input_tokens ?? input);
-        output = Number(usage?.output_tokens ?? output);
+        const usageEvent = (data.usage && typeof data.usage === "object" ? data.usage : message.usage) as JsonObject | undefined;
+        if (usageEvent) {
+          const reported = usageDetails(usageEvent);
+          const cached = Math.max(reported.cached ?? 0, usage.cached ?? 0);
+          const reasoningTokens = Math.max(reported.reasoning ?? 0, usage.reasoning ?? 0);
+          usage = { input: reported.input || usage.input, output: reported.output || usage.output,
+            ...(cached > 0 ? { cached } : {}), ...(reasoningTokens > 0 ? { reasoning: reasoningTokens } : {}) };
+        }
         const index = Number(data.index ?? 0);
         const block = data.content_block && typeof data.content_block === "object" ? data.content_block as JsonObject : {};
         if (block.type === "tool_use") {
@@ -214,7 +221,7 @@ export class AnthropicClient {
       if (declared && !(this.config.model.provider === "opencode-go" && recoverableGoStreamError(failure))) throw failure;
       if (content || reasoning || toolSlots.size) {
         onNotice?.("模型连接在输出中途中断，已保留已收到的内容并继续");
-        return { content, reasoning, toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };
+        return { content, reasoning, toolCalls: [], usage, truncated: true, streamEnded: true };
       }
       throw failure ?? new Error("model stream ended before message_stop; partial response was not accepted");
     }
@@ -223,6 +230,6 @@ export class AnthropicClient {
     const calls = [...toolSlots.entries()].sort(([a], [b]) => a - b).map(([, call]) => call);
     const allCalls = [...calls, ...recovered.toolCalls];
     const check = validateCompletion(recovered.content, allCalls, finishReason);
-    return finalizeCompletion(check, recovered.content, reasoning, allCalls, { input, output });
+    return finalizeCompletion(check, recovered.content, reasoning, allCalls, usage);
   }
 }

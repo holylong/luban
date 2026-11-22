@@ -22,7 +22,7 @@ export const STARTER_CONFIG = {
   },
   model: {
     active: "opencode-zen/deepseek-v4.1-flash-free",
-    max_tokens: 64000,
+    max_tokens: 128000,
     temperature: 0.2,
     top_p: 1,
     top_k: 0,

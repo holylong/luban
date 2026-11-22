@@ -18,6 +18,7 @@ import { rememberFact } from "./memory.js";
 import { updateCreatorIdentity } from "./creator-identity.js";
 import { createKevTool } from "./kev.js";
 import { editPreview } from "./edit-preview.js";
+import { defaultScreenshotPath, renderHtml } from "./render-html.js";
 import type { MeshRuntime } from "./mesh/runtime.js";
 import type { LubanConfig, ToolDefinition } from "./types.js";
 import { guardTool } from "./tool-validation.js";
@@ -91,11 +92,73 @@ export function ptyShellArgs(command: string): { executable: string; args: strin
   return { executable: script, args: ["-qec", command, "/dev/null"] };
 }
 
-function shellCommandArgs(windows: boolean, command: string): string[] {
-  if (!windows) return ["-lc", `set -o pipefail\n${command}`];
+export function shellCommandArgs(windows: boolean, command: string, loginEnv?: NodeJS.ProcessEnv): string[] {
+  // A cached login environment already carries the profile's PATH, so the
+  // command no longer needs a login shell that re-sources the profile.
+  if (!windows) return [loginEnv ? "-c" : "-lc", `set -o pipefail\n${command}`];
   // chcp switches the child cmd to UTF-8 so built-ins (ver, dir, …) do not
   // emit code-page bytes; >nul keeps it silent and & preserves exit codes.
   return ["/d", "/s", "/c", `chcp 65001>nul & ${command}`];
+}
+
+/** Variables the shell rewrites on its own; carrying them over would be noise. */
+const VOLATILE_SHELL_VARS = new Set(["_", "SHLVL", "PWD", "OLDPWD"]);
+
+let cachedLoginEnv: NodeJS.ProcessEnv | undefined;
+let warmingLoginEnv: Promise<void> | undefined;
+
+/** The environment captured from the user's login shell, once it is ready. */
+export function loginEnvironment(): NodeJS.ProcessEnv | undefined {
+  return cachedLoginEnv;
+}
+
+/** Process environment plus whatever the login profile added to it. */
+function shellEnv(): NodeJS.ProcessEnv {
+  return cachedLoginEnv ? { ...process.env, ...cachedLoginEnv } : process.env;
+}
+
+/**
+ * A login shell is how PATH, nvm shims and brew shellenv reach a command, but
+ * re-sourcing the user's profile costs seconds per call (3.6 s on a macOS bash
+ * profile, 88 calls per task). Capture it once in the background at startup
+ * and reuse it, so commands keep the same PATH without paying every time.
+ */
+export function warmLoginEnvironment(): Promise<void> {
+  if (process.platform === "win32") return Promise.resolve();
+  if (warmingLoginEnv) return warmingLoginEnv;
+  if (cachedLoginEnv) return Promise.resolve();
+  warmingLoginEnv = new Promise<void>((resolveWarm) => {
+    const child = spawn("/bin/bash", ["-lc", "command env -0"], { env: process.env, windowsHide: true });
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    const done = (environment?: NodeJS.ProcessEnv) => {
+      if (settled) return;
+      settled = true;
+      if (environment) cachedLoginEnv = environment;
+      resolveWarm();
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (bytes >= 1_000_000) return;
+      chunks.push(chunk);
+      bytes += chunk.length;
+    });
+    child.on("error", () => done());
+    child.on("close", (code) => {
+      if (code !== 0) return done();
+      const environment: NodeJS.ProcessEnv = {};
+      for (const entry of Buffer.concat(chunks).toString("utf8").split("\0")) {
+        const at = entry.indexOf("=");
+        if (at <= 0) continue;
+        const key = entry.slice(0, at);
+        if (!VOLATILE_SHELL_VARS.has(key)) environment[key] = entry.slice(at + 1);
+      }
+      done(environment);
+    });
+    const timer = setTimeout(() => { child.kill(); done(); }, 15_000);
+    timer.unref();
+  }).catch(() => undefined);
+  return warmingLoginEnv;
 }
 
 interface CapturedOutput {
@@ -155,9 +218,9 @@ class BackgroundTasks {
     if ([...this.tasks.values()].filter((task) => task.status === "running" || task.status === "stopping").length >= 16) throw new Error("background task limit reached (16)");
     const windows = process.platform === "win32";
     const rawExecutable = windows ? (process.env.ComSpec || "cmd.exe") : "/bin/bash";
-    const rawArgs = shellCommandArgs(windows, command);
+    const rawArgs = shellCommandArgs(windows, command, cachedLoginEnv);
     const wrapped = config ? wrapWithBackend(rawExecutable, rawArgs, workspace, config.sandbox ?? defaultSandboxSettings()) : { executable: rawExecutable, args: rawArgs };
-    const child = spawn(wrapped.executable, wrapped.args, { cwd: workspace, env: process.env, windowsHide: true, detached: !windows });
+    const child = spawn(wrapped.executable, wrapped.args, { cwd: workspace, env: shellEnv(), windowsHide: true, detached: !windows });
     const task: BackgroundTask = {
       id: randomUUID(), command, status: "running", output: { chunks: [], bytes: 0 }, startedAt: new Date().toISOString(), child,
     };
@@ -290,7 +353,7 @@ async function runShell(workspace: string, command: string, signal: AbortSignal,
     if (!ptyPrefix) throw new Error("pty mode needs the script(1) utility, which was not found on PATH");
   }
   const rawExecutable = windows ? (process.env.ComSpec || "cmd.exe") : "/bin/bash";
-  const rawArgs = shellCommandArgs(windows, command);
+  const rawArgs = shellCommandArgs(windows, command, cachedLoginEnv);
   const wrapped = ptyPrefix ?? (config ? wrapWithBackend(rawExecutable, rawArgs, workspace, config.sandbox ?? defaultSandboxSettings()) : { executable: rawExecutable, args: rawArgs });
   return await new Promise<string>((resolvePromise, reject) => {
     const stdout: CapturedOutput = { chunks: [], bytes: 0 };
@@ -301,7 +364,7 @@ async function runShell(workspace: string, command: string, signal: AbortSignal,
     const startedAt = new Date().toISOString();
     const child = spawn(wrapped.executable, wrapped.args, {
       cwd: workspace,
-      env: process.env,
+      env: shellEnv(),
       windowsHide: true,
       detached: !windows,
     });
@@ -431,6 +494,9 @@ async function discoverSkills(config: LubanConfig): Promise<Map<string, string>>
 
 export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string, ToolDefinition> {
   const workspace = config.workspace;
+  // Capture the login profile now, while the first model turn runs, so the
+  // first command is not the one paying for it or for every command after it.
+  warmLoginEnvironment();
   // File tools share the shell's stance on outside paths: jailed by default,
   // widened only when the user opts into `sandbox.allowOutsideWorkspace`.
   const resolvePath = pathResolver(workspace, config.sandbox?.allowOutsideWorkspace === true);
@@ -943,6 +1009,40 @@ export function createTools(config: LubanConfig, mesh?: MeshRuntime): Map<string
           model: config.model.id,
           note,
         }, null, 2);
+      },
+    },
+    {
+      name: "render_html",
+      description: "Render a local HTML file (or http(s) URL) in headless Chrome: one call returns the screenshot path, console errors, uncaught exceptions, failed requests, canvas/WebGL state, and a `pixels` summary — palette, mean luminance/saturation, clipping, edge density (how much structure the frame has), a 3x3 region map, a coarse ASCII luminance map and plain-language `warnings` (blank, washed-out, clipped, flat, sparse) that say what to change — so a model without vision can judge the picture instead of guessing. Optional `probe` evaluates a JS expression in the page and returns its JSON value (e.g. count instanced meshes, read scene.children.length). Use this instead of assembling Chrome and a DevTools script through bash to check that a page works.",
+      risk: "execute",
+      parameters: schema({
+        path: { type: "string", description: "Workspace-relative HTML file, or an http(s) URL" },
+        width: { type: "integer", minimum: 200, maximum: 3840, description: "Viewport width in CSS pixels (default 1280)" },
+        height: { type: "integer", minimum: 200, maximum: 2160, description: "Viewport height in CSS pixels (default 800)" },
+        wait_ms: { type: "integer", minimum: 0, maximum: 60000, description: "Extra settle time after load, for WebGL or animation (default 1500)" },
+        probe: { type: "string", description: "JS expression to evaluate in the page after it settles; returns its JSON value (e.g. \"(window.scene ? window.scene.children.length : 0)\")" },
+      }, ["path"]),
+      async execute(args, signal) {
+        const raw = stringArg(args, "path");
+        const isUrl = /^https?:\/\//iu.test(raw);
+        const target = isUrl ? raw : await resolvePath(raw);
+        const result = await renderHtml({
+          target,
+          width: numberArg(args, "width", 1280),
+          height: numberArg(args, "height", 800),
+          settleMs: numberArg(args, "wait_ms", 1500),
+          screenshotPath: defaultScreenshotPath(target, workspace),
+          ...(typeof args.probe === "string" && args.probe.trim() ? { probe: args.probe } : {}),
+          signal,
+        });
+        const shot = relative(workspace, result.screenshot);
+        const vision = config.model.capabilities?.vision === true;
+        const hint = isInside(workspace, result.screenshot)
+          ? vision
+            ? `Call attach_image with "${shot}" to see the render as an image.`
+            : `Model ${config.model.id} does not declare vision support. Judge the frame from pixels (palette, regions, warnings, ascii) and check scene facts with probe; do not try to see the PNG (chafa/img2txt/ollama or posting base64 to a vision endpoint) — that burns minutes and fails.`
+          : `The screenshot is outside the workspace (${result.screenshot}); copy it in before attach_image.`;
+        return JSON.stringify({ ...result, screenshot: shot, hint }, null, 2);
       },
     },
     {

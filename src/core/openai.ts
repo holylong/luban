@@ -9,11 +9,50 @@ import { randomUUID } from "node:crypto";
 import { goRequestHeaders, modelRetryDelay, recoverableGoStreamError } from "./opencode-go.js";
 
 /**
- * Ceiling for one response's output, matching OpenCode's default. A larger cap
- * lets a reasoning model think longer and makes a gateway reserve more KV cache
- * for the request, both of which slow every turn down.
+ * Ceiling for one response's output. It matches ABSOLUTE_MAX_OUTPUT_TOKENS so a
+ * model that can answer with a long file is not cut short by the client; the
+ * provider still decides, and a rejection is halved automatically below.
  */
-export const MAX_OUTPUT_TOKENS = 32_000;
+export const MAX_OUTPUT_TOKENS = 128_000;
+
+/**
+ * Hard ceiling this client is willing to send. Providers enforce different
+ * limits, but every supported one accepts 128K; above that a request is
+ * rejected outright instead of merely costing more, so it stays fixed.
+ */
+export const ABSOLUTE_MAX_OUTPUT_TOKENS = 128_000;
+
+/**
+ * Ceiling for one response on this model: the client ceiling, lowered to the
+ * provider limit when the config declares one (`capabilities.max_output_tokens`).
+ */
+export function modelOutputCeiling(config: LubanConfig): number {
+  const declared = config.model.capabilities?.maxOutputTokens;
+  const preferred = declared && declared > 0 ? Math.floor(declared) : ABSOLUTE_MAX_OUTPUT_TOKENS;
+  // Providers that rejected a budget in this process taught us their real
+  // limit; honoring it means the next turn does not pay for the same rejection.
+  const learned = learnedOutputCeilings.get(modelKey(config));
+  return Math.min(ABSOLUTE_MAX_OUTPUT_TOKENS, preferred, learned ?? ABSOLUTE_MAX_OUTPUT_TOKENS);
+}
+
+/** Biggest budget each model has accepted since this process started. */
+const learnedOutputCeilings = new Map<string, number>();
+
+function modelKey(config: LubanConfig): string {
+  return `${config.model.provider ?? ""}/${config.model.model ?? config.model.id ?? ""}`.toLowerCase();
+}
+
+/** Record a provider-accepted budget so later turns start under it. */
+export function noteOutputCeiling(config: LubanConfig, tokens: number): void {
+  const value = Math.floor(tokens);
+  if (!Number.isFinite(value) || value <= 0) return;
+  learnedOutputCeilings.set(modelKey(config), value);
+}
+
+/** Forget learned limits (tests and model switches within one process). */
+export function resetOutputCeilings(): void {
+  learnedOutputCeilings.clear();
+}
 
 export interface CompletionResult {
   content: string;
@@ -36,6 +75,31 @@ export interface CompletionResult {
 }
 
 /** Apply a validation verdict to one completion. */
+function usageTokens(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+}
+
+/**
+ * Read one provider's usage object into luban's shape. Prompt caching is
+ * reported under four different names across OpenAI, DeepSeek, Responses and
+ * Anthropic dialects, so accept them all instead of losing the hit count.
+ */
+export function usageDetails(usage: Record<string, unknown> | undefined): { input: number; output: number; cached?: number; reasoning?: number } {
+  const source = usage && typeof usage === "object" ? usage : {};
+  const details = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const prompt = details(source.prompt_tokens_details ?? source.input_tokens_details);
+  const completion = details(source.completion_tokens_details ?? source.output_tokens_details);
+  const cached = usageTokens(prompt.cached_tokens ?? source.prompt_cache_hit_tokens ?? source.cache_read_input_tokens ?? source.cached_tokens);
+  const reasoning = usageTokens(completion.reasoning_tokens ?? source.reasoning_tokens);
+  return {
+    input: usageTokens(source.prompt_tokens ?? source.input_tokens),
+    output: usageTokens(source.completion_tokens ?? source.output_tokens),
+    ...(cached > 0 ? { cached } : {}),
+    ...(reasoning > 0 ? { reasoning } : {}),
+  };
+}
+
 export function finalizeCompletion(
   check: CompletionCheck,
   content: string,
@@ -219,19 +283,24 @@ export class OpenAiClient {
     onNotice?: NoticeHandler,
     options?: ModelRequestOptions,
   ): Promise<CompletionResult> {
-    const thinkingFields = modelThinkingFields(this.config, options, Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS));
-    const body = JSON.stringify({
+    const ceiling = modelOutputCeiling(this.config);
+    // A provider may still reject a budget its /models never advertised; the
+    // request shrinks and retries once the error names max_tokens.
+    let maxTokens = Math.min(options?.maxTokens ?? this.config.maxTokens, ceiling);
+    const body = async () => JSON.stringify({
       model: this.config.model.model,
       messages: await openAiWireMessages(messages, this.config.workspace, this.config.model),
-      max_tokens: Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS),
+      max_tokens: maxTokens,
       ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
       stream: true,
       // OpenAI-compatible servers (e.g. vLLM) omit usage from the stream
       // unless explicitly requested; the TUI token counters depend on it.
       stream_options: { include_usage: true },
-      ...thinkingFields,
+      ...modelThinkingFields(this.config, options, maxTokens),
       ...(tools.length ? { tools, tool_choice: "auto" } : {}),
     });
+    let payload = await body();
+    let budgetRejections = 0;
     const retries = options?.maxRetries ?? this.config.maxRetries ?? 3;
     for (let attempt = 0; ; attempt += 1) {
       signal.throwIfAborted();
@@ -251,11 +320,23 @@ export class OpenAiClient {
             ...(this.config.model.apiKey ? { authorization: `Bearer ${this.config.model.apiKey}` } : {}),
             ...goRequestHeaders(this.config.model, options?.conversationId ?? this.sessionId),
           },
-          body,
+          body: payload,
           signal: controller.signal,
         });
         if (!response.ok) {
           const responseBody = await response.text();
+          // Providers cap output per model, and the limits are not discoverable
+          // for most of them. When the error names that limit, ask for less
+          // instead of failing a task the model could finish in two replies.
+          if (response.status === 400 && budgetRejections < 6 && maxTokens > 4_096
+            && /max[_ ]?(?:output|completion)?[_ ]?tokens|maximum.{0,20}tokens|too many tokens|context length/iu.test(responseBody)) {
+            budgetRejections += 1;
+            maxTokens = Math.max(4_096, Math.floor(maxTokens / 2));
+            noteOutputCeiling(this.config, maxTokens);
+            payload = await body();
+            onNotice?.(`模型拒绝 ${maxTokens * 2} 的输出预算，改用 ${maxTokens} token 重试（provider 上限未知）`);
+            continue;
+          }
           const error = new Error(`model HTTP ${response.status}: ${responseBody.slice(0, 4000)}`);
           if (!retryableBody(response.status, responseBody) || attempt >= retries) throw error;
           backoff = modelRetryDelay(response, attempt, this.config.model.provider);
@@ -302,8 +383,7 @@ export class OpenAiClient {
     if (reasoning) onDelta?.(reasoning, "reasoning");
     if (recovered.content) onDelta?.(recovered.content, "content");
     const usage = data.usage && typeof data.usage === "object" ? data.usage as Record<string, unknown> : {};
-    return finalizeCompletion(check, recovered.content, reasoning, calls,
-      { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0) });
+    return finalizeCompletion(check, recovered.content, reasoning, calls, usageDetails(usage));
   }
 
   private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, idleOverrideMs?: number, signal?: AbortSignal, known = new Set<string>()): Promise<CompletionResult> {
@@ -312,8 +392,7 @@ export class OpenAiClient {
     let finishReason: unknown;
     let content = "";
     let reasoning = "";
-    let input = 0;
-    let output = 0;
+    let usage: { input: number; output: number; cached?: number; reasoning?: number } = { input: 0, output: 0 };
 
     const idleTimeout = idleOverrideMs ?? this.config.thinkingTimeoutMs ?? Math.max(this.config.timeoutMs, 600_000);
     // Announce the stall before aborting: a 10-minute silence is indistinguishable
@@ -330,9 +409,15 @@ export class OpenAiClient {
         timer = setTimeout(idleAbort, idleTimeout);
         if (raw.trim() === "[DONE]") { finished = true; break; }
         const data = parseModelEvent(raw);
-        const usage = data.usage && typeof data.usage === "object" ? data.usage as Record<string, unknown> : {};
-        input = Number(usage.prompt_tokens || input);
-        output = Number(usage.completion_tokens || output);
+        if (data.usage && typeof data.usage === "object") {
+          // Late chunks repeat the same totals; keep the largest so a partial
+          // prefetch chunk cannot shrink the counters already reported.
+          const reported = usageDetails(data.usage as Record<string, unknown>);
+          const cached = Math.max(reported.cached ?? 0, usage.cached ?? 0);
+          const reasoningTokens = Math.max(reported.reasoning ?? 0, usage.reasoning ?? 0);
+          usage = { input: reported.input || usage.input, output: reported.output || usage.output,
+            ...(cached > 0 ? { cached } : {}), ...(reasoningTokens > 0 ? { reasoning: reasoningTokens } : {}) };
+        }
         const choices = Array.isArray(data.choices) ? data.choices : [];
         const choice = (choices[0] ?? {}) as Record<string, unknown>;
         if (choice.finish_reason != null) { finishReason = choice.finish_reason; finished = true; }
@@ -368,13 +453,13 @@ export class OpenAiClient {
         onNotice?.(failure
           ? `模型连接在输出中途中断（${describeModelError(failure)}），已保留已收到的内容并继续`
           : "模型连接在输出中途中断，已保留已收到的内容并继续");
-        return { content, reasoning, toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };
+        return { content, reasoning, toolCalls: [], usage, truncated: true, streamEnded: true };
       }
       throw failure ?? new Error("model stream ended before completion; partial response was not accepted");
     }
     const recovered = recoverTextToolCalls(content);
     const allCalls = [...calls, ...recovered.toolCalls];
     const check = validateCompletion(recovered.content, allCalls, finishReason);
-    return finalizeCompletion(check, recovered.content, reasoning, allCalls, { input, output });
+    return finalizeCompletion(check, recovered.content, reasoning, allCalls, usage);
   }
 }

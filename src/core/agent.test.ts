@@ -68,7 +68,10 @@ describe("AgentRunner", () => {
         });
       expect(prompts).toBe(2);
     } finally { runner.close(); }
-  });
+    // Four variants, each spawning a real shell twice: under a parallel vitest
+    // run this legitimately needs more than the 5s default and used to fail
+    // with a bare "once 5011ms" timeout rather than a real assertion.
+  }, 20_000);
 
   it.each(["json", "sse"])("replays DeepSeek reasoning and tool results across successive %s requests and session reload", async format => {
     const workspace = await mkdtemp(join(tmpdir(), "luban-deepseek-history-"));
@@ -639,7 +642,11 @@ rl.on("line", (line) => {
         return { content: "", reasoning: "思考".repeat(200), toolCalls: [], usage: { input: 1, output: 400 }, truncated: true };
       },
     };
-    const runner = new AgentRunner(config(workspace), client);
+    const settings = config(workspace);
+    // Already at the ceiling the window allows, so no larger budget exists.
+    settings.maxTokens = 64_000;
+    settings.contextWindow = 128_000;
+    const runner = new AgentRunner(settings, client);
     const result = await runner.run(
       [...initialMessages(workspace), { role: "user", content: "长任务" }],
       "agent", new AbortController().signal, () => undefined, async () => "once",
@@ -673,7 +680,8 @@ rl.on("line", (line) => {
         "agent", new AbortController().signal, () => undefined, async () => "once");
       expect(result.ok).toBe(true);
       expect(executions).toBe(1);
-      expect(bodies.map(body => body.max_tokens)).toEqual([8192, 8192, 32_000]);
+      // 32K starved, so the retry asks for double the configured budget.
+      expect(bodies.map(body => body.max_tokens)).toEqual([8192, 8192, 64_000]);
       expect((bodies[2]!.messages as ChatMessage[]).some(message => message.role === "tool" && message.content === "saved result")).toBe(true);
       expect(bodies[2]).not.toHaveProperty("reasoning_effort");
       expect(settings.enableThinking).toBeUndefined();
@@ -698,7 +706,8 @@ rl.on("line", (line) => {
       expect(result.ok).toBe(!persistent);
       expect(bodies).toHaveLength(2);
       expect(bodies.map(body => body.thinking)).toEqual([{ type: "enabled" }, { type: "disabled" }]);
-      expect(bodies.map(body => body.max_tokens)).toEqual([1000, 1000]);
+      // Turning thinking off and doubling the budget both reach the wire.
+      expect(bodies.map(body => body.max_tokens)).toEqual([1000, 64_000]);
       expect(settings.enableThinking).toBe(true);
     } finally { runner.close(); }
   });

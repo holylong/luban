@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { createTools } from "./tools.js";
+import { createTools, loginEnvironment, shellCommandArgs, warmLoginEnvironment } from "./tools.js";
 import { defaultSandboxSettings } from "./sandbox.js";
 import type { LubanConfig } from "./types.js";
 
@@ -107,6 +107,16 @@ describe("workspace tools", () => {
     // pipefail is enabled, so the pipeline reports the failing left-hand side.
     expect(await tools.get("bash")!.execute({ command: "false | true" }, signal)).toContain("[exit code: 1]");
   });
+
+  it.skipIf(process.platform === "win32")("reuses the login profile instead of re-sourcing it per command", async () => {
+    // One capture per process: the profile's PATH, nvm shims and shellenv are
+    // carried into a non-login shell, which is what costs seconds per call.
+    await warmLoginEnvironment();
+    const environment = loginEnvironment();
+    expect(environment?.PATH).toBeTruthy();
+    expect(shellCommandArgs(false, "true", environment)).toEqual(["-c", "set -o pipefail\ntrue"]);
+    expect(shellCommandArgs(false, "true")).toEqual(["-lc", "set -o pipefail\ntrue"]);
+  }, 30_000);
 
   it.skipIf(process.platform === "win32")("uses bash semantics regardless of the user's login shell", async () => {
     const original = process.env.SHELL;

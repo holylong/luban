@@ -7,6 +7,7 @@ import { consoleAccessToken } from "./opencode-console.js";
 import { readProviderKeys } from "./provider-auth.js";
 import { ensureStarterConfig } from "./default-config.js";
 import { DEFAULT_RELAY_URL } from "./service-defaults.js";
+import { ABSOLUTE_MAX_OUTPUT_TOKENS } from "./openai.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -623,6 +624,7 @@ function collectModels(raw: JsonObject, session = "", shared = ""): ModelRef[] {
           tools: caps.tools !== undefined ? caps.tools === true : true,
           responses: caps.responses !== undefined ? caps.responses === true : api === "responses",
           temperature: caps.temperature !== undefined ? caps.temperature === true : true,
+          ...(maxOutputCap(caps) ? { maxOutputTokens: maxOutputCap(caps) } : {}),
         },
       });
     }
@@ -660,6 +662,8 @@ export interface LoadConfigOptions {
    * points opt in; library and test callers keep their home untouched.
    */
   seedDefaults?: boolean;
+  /** on | off | auto — override the config's native thinking switch for this run. */
+  thinking?: string;
 }
 
 /**
@@ -679,6 +683,20 @@ function migrateLegacyHome(defaultHome: string): void {
     // A cross-device or permissions failure leaves the old directory intact;
     // running with a fresh home is better than refusing to start.
   }
+}
+
+/** "on" | "off" | "auto" from a flag; anything else (including "auto") stays unset. */
+function parseThinkingOption(value: string | undefined): boolean | undefined {
+  const mode = text(value, "").toLowerCase();
+  if (mode === "on" || mode === "true" || mode === "1" || mode === "always") return true;
+  if (mode === "off" || mode === "false" || mode === "0" || mode === "never") return false;
+  return undefined;
+}
+
+/** Provider-declared output limit for one response, when the config names one. */
+function maxOutputCap(caps: JsonObject): number | undefined {
+  const value = integer(caps.max_output_tokens ?? caps.max_output ?? caps.maxOutputTokens, 0);
+  return value > 0 ? value : undefined;
 }
 
 export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
@@ -806,7 +824,9 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const themeColors = Object.fromEntries(Object.entries(record(themeObject.colors ?? themeObject.palette))
     .flatMap(([key, value]) => typeof value === "string" && value.trim() ? [[key, value.trim()]] : []));
   const thinkingSetting = modelConfig.thinking ?? modelConfig.enable_thinking ?? modelConfig.enableThinking;
-  const maxTokens = Math.max(256, integer(modelConfig.max_tokens, 64_000));
+  // Default to the client ceiling: a smaller default is what made reasoning
+  // models burn the whole budget and fail the task instead of answering.
+  const maxTokens = Math.max(256, integer(modelConfig.max_tokens, ABSOLUTE_MAX_OUTPUT_TOKENS));
   const defaultContextWindow = /qwen/iu.test(`${active.provider}/${active.model}`)
     ? 262_144 : Math.max(128_000, maxTokens + 64_000);
   const sandboxRaw = record(raw.sandbox);
@@ -834,8 +854,9 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     temperature: Number(modelConfig.temperature ?? 0.2),
     timeoutMs: Number(modelConfig.timeout || 300) * 1000,
     thinkingTimeoutMs: Number(modelConfig.thinking_timeout ?? modelConfig.thinkingTimeout ?? 600) * 1000,
-    // An absent setting (or "auto") lets the runner choose per user request.
-    enableThinking: typeof thinkingSetting === "boolean" ? thinkingSetting : undefined,
+    // An absent setting (or "auto") lets the runner choose per user request; a
+    // command-line value wins over the config block.
+    enableThinking: parseThinkingOption(options.thinking) ?? (typeof thinkingSetting === "boolean" ? thinkingSetting : undefined),
     // Complex coding tasks commonly need dozens of tool rounds. Keep a generous
     // default while retaining a finite upper bound for runaway sessions.
     maxSteps: Math.max(1, Math.min(2000, integer(raw.max_steps, 200))),

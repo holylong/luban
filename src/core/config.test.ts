@@ -67,6 +67,20 @@ describe("config", () => {
     await writeFile(join(home, "config.json"), JSON.stringify({ model: { reconnect_max_delay: 9999 } }));
     expect(loadConfig({ workspace: home }).modelReconnectMaxDelayMs).toBe(300_000);
   });
+  it("carries a provider-declared output limit into the model capabilities", async () => {
+    const home = await mkdtemp(join(tmpdir(), "luban-output-cap-"));
+    process.env.LUBAN_HOME = home;
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      model: { active: "small/small-model" },
+      providers: {
+        small: { base_url: "http://127.0.0.1:9/v1", api_key: "k", models: { "small-model": { name: "small-model", capabilities: { max_output_tokens: 8_192 } } } },
+        plain: { base_url: "http://127.0.0.1:9/v1", api_key: "k", models: { "plain-model": { name: "plain-model" } } },
+      },
+    }));
+    expect(loadConfig({ workspace: home }).model.capabilities.maxOutputTokens).toBe(8_192);
+    expect(loadConfig({ workspace: home, model: "plain/plain-model" }).model.capabilities.maxOutputTokens).toBeUndefined();
+  });
+
   it("selects a named Codex CLI model without falling back to default", async () => {
     const home = await mkdtemp(join(tmpdir(), "luban-codex-model-"));
     process.env.LUBAN_HOME = home;
@@ -173,7 +187,7 @@ describe("config", () => {
     const workspace = join(home, "project");
     await mkdir(workspace);
     process.env.LUBAN_HOME = home;
-    expect(loadConfig({ workspace }).maxTokens).toBe(64_000);
+    expect(loadConfig({ workspace }).maxTokens).toBe(128_000);
   });
 
   it("strips JSON comments without damaging URLs", () => {

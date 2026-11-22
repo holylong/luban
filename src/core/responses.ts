@@ -1,7 +1,7 @@
 import type { ChatMessage, LubanConfig, ToolCall } from "./types.js";
 import { resolveImageParts } from "./vision.js";
 import { interactionFetch } from "./interaction-log.js";
-import { finalizeCompletion, MAX_OUTPUT_TOKENS } from "./openai.js";
+import { finalizeCompletion, modelOutputCeiling, usageDetails } from "./openai.js";
 import type { CompletionResult, DeltaHandler, NoticeHandler, ModelRequestOptions } from "./openai.js";
 import { modelThinkingFields } from "./model-controls.js";
 import { parseModelEvent, sseData } from "./sse.js";
@@ -206,8 +206,8 @@ export class ResponsesClient {
       model: this.config.model.model,
       ...(converted.instructions ? { instructions: converted.instructions } : {}),
       input: converted.input,
-      max_output_tokens: Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS),
-      ...modelThinkingFields(this.config, options, Math.min(options?.maxTokens ?? this.config.maxTokens, MAX_OUTPUT_TOKENS)),
+      max_output_tokens: Math.min(options?.maxTokens ?? this.config.maxTokens, modelOutputCeiling(this.config)),
+      ...modelThinkingFields(this.config, options, Math.min(options?.maxTokens ?? this.config.maxTokens, modelOutputCeiling(this.config))),
       ...(this.config.model.capabilities?.temperature === false ? {} : { temperature: this.config.temperature }),
       stream: true,
       store: false,
@@ -289,15 +289,14 @@ export class ResponsesClient {
     const usage = data.usage && typeof data.usage === "object" ? data.usage as JsonObject : {};
     const recovered = recoverTextToolCalls(content);
     return finalizeCompletion({ truncated }, recovered.content, "", [...toolCalls, ...recovered.toolCalls],
-      { input: Number(usage.input_tokens || 0), output: Number(usage.output_tokens || 0) });
+      usageDetails(usage));
   }
 
   private async consumeStream(stream: ReadableStream<Uint8Array>, onDelta: DeltaHandler | undefined, controller: AbortController, onNotice?: NoticeHandler, signal?: AbortSignal, idleOverrideMs?: number): Promise<CompletionResult> {
     let content = "";
     const argBuffers = new Map<string, { name: string; arguments: string; order: number }>();
     let order = 0;
-    let input = 0;
-    let output = 0;
+    let usage: { input: number; output: number; cached?: number; reasoning?: number } = { input: 0, output: 0 };
     let finished = false;
     let incomplete = false;
 
@@ -317,9 +316,11 @@ export class ResponsesClient {
         if (type === "response.completed" || type === "response.complete") {
           const response = data.response as JsonObject | undefined;
           if (response) {
-            const usage = response.usage as JsonObject | undefined;
-            input = Number(usage?.input_tokens ?? input);
-            output = Number(usage?.output_tokens ?? output);
+            const reported = usageDetails(response.usage as JsonObject | undefined);
+            const cached = Math.max(reported.cached ?? 0, usage.cached ?? 0);
+            const reasoningTokens = Math.max(reported.reasoning ?? 0, usage.reasoning ?? 0);
+            usage = { input: reported.input || usage.input, output: reported.output || usage.output,
+              ...(cached > 0 ? { cached } : {}), ...(reasoningTokens > 0 ? { reasoning: reasoningTokens } : {}) };
             if (Array.isArray(response.output) && (response.output as unknown[]).length) {
               const parsed = outputItemsToResult(response.output, undefined);
               // Deltas already streamed; only adopt tool calls + missing text here.
@@ -388,7 +389,7 @@ export class ResponsesClient {
       if (declared && !(this.config.model.provider === "opencode-go" && recoverableGoStreamError(failure))) throw failure;
       if (content || argBuffers.size) {
         onNotice?.("模型连接在输出中途中断，已保留已收到的内容并继续");
-        return { content, reasoning: "", toolCalls: [], usage: { input, output }, truncated: true, streamEnded: true };
+        return { content, reasoning: "", toolCalls: [], usage, truncated: true, streamEnded: true };
       }
       throw failure ?? new Error("model stream ended before response.completed; partial response was not accepted");
     }
@@ -400,6 +401,6 @@ export class ResponsesClient {
     const allCalls = [...toolCalls, ...recovered.toolCalls];
     const check = { truncated: incomplete };
     if (!incomplete && !recovered.content.trim() && !allCalls.length) throw new Error("model returned an empty response");
-    return finalizeCompletion(check, recovered.content, "", allCalls, { input, output });
+    return finalizeCompletion(check, recovered.content, "", allCalls, usage);
   }
 }

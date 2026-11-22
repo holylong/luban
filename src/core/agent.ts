@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { arch, release, type } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { OpenAiClient, MAX_OUTPUT_TOKENS, type ModelRequestOptions } from "./openai.js";
+import { OpenAiClient, ABSOLUTE_MAX_OUTPUT_TOKENS, modelOutputCeiling, type ModelRequestOptions } from "./openai.js";
 import { modelClientFor, type ModelClient } from "./model-client.js";
 import { isZenFreeModel } from "./opencode-zen.js";
 import { modelRetryDelay, recoverableGoStreamError, waitForModelRetry } from "./opencode-go.js";
@@ -117,6 +117,8 @@ Work rules:
 1. Inspect relevant files before editing. Use code_intelligence to resolve definitions/references when needed. File edit tools include TypeScript/JavaScript and configured LSP diagnostics in their results; do not call diagnostics again unless unavailable or another change requires it. Use the project's checks for broader verification. Follow AGENTS.md or CLAUDE.md instructions when present.
 2. Use tools to perform requested work; do not merely describe what you would do. When independent files or inspections are ready, issue their tool calls together in one response; the runtime executes writes in order. Do not wait for one independent write before starting the next. After a check passes, run another check only for a concrete uncovered requirement or a change made since that check.
 2a. Use read_files to inspect independent files in one response. Independent bash inspections/checks may set independent: true to run together; keep commands with shared writes or ordering dependencies sequential.
+2b. When the deliverable is a generated artifact — a page, a 3D scene, a UI, a document, a dataset — its depth is the deliverable. Write the complete version in the first pass (all the sections, props and detail the request implies), and treat a passing check as a floor, not a finish line: a clean render of a thin artifact is still a thin artifact. Only refactor downward when the user asked for less.
+2c. Do not stop while a quality check still complains. If the number barely moves for two rounds, the problem is composition, not quantity: change the camera, add background layers, shrink the voxel/unit size, and put detail on every surface — then re-measure. Report the final measurement when you finish.
 3. Keep changes scoped. Never commit, publish, or contact people unless explicitly requested.
 3a. When the user explicitly asks to commit and push code to the configured Git remote, call git_publish directly with a concise commit message. It checks the repository, commits changes if needed, and pushes in one tool call. Do not create a plan or split this routine request into separate status/add/commit/push calls. If the user asked for additional code changes or checks, complete those first.`;
 
@@ -609,7 +611,15 @@ export class AgentRunner {
     const runStartedAt = Date.now();
     let modelCalls = 0;
     let reasoningRecovery: ModelRequestOptions | undefined;
+    // Rounds spent re-requesting with a larger output budget after a reasoning
+    // model burned the whole budget without writing any prose.
+    let reasoningRecoveries = 0;
     let lastMainOptions: ModelRequestOptions | undefined;
+    /** Output budget this run asks for; grows when reasoning starves a reply.
+     * Half the context window stays reserved for the prompt, so a budget can
+     * never grow until compaction has no room for the conversation. */
+    const windowCeiling = Math.max(16_000, Math.floor((this.config.contextWindow ?? 128_000) / 2));
+    let outputBudget = Math.min(this.config.maxTokens, modelOutputCeiling(this.config), windowCeiling);
     const reconnect = mode !== "ask" && this.config.modelReconnect !== false && this.config.maxRetries !== 0;
     let connectionFailures = 0;
     const waitForConnection = async (error: unknown, callSignal: AbortSignal) => {
@@ -734,9 +744,8 @@ export class AgentRunner {
       // Codex CLI owns its output budget; luban never sends max_tokens to it.
       // Use contextReserve for Codex instead of reserving an unsent 64K budget,
       // which causes premature summaries and fresh threads with full history.
-      // Network clients cap their actual output at MAX_OUTPUT_TOKENS.
-      const outputReserve = this.config.model.api === "codex"
-        ? 0 : Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS);
+      // Network clients cap their actual output at ABSOLUTE_MAX_OUTPUT_TOKENS.
+      const outputReserve = this.config.model.api === "codex" ? 0 : outputBudget;
       const inputBudget = (this.config.contextWindow ?? 128_000)
         - Math.max(this.config.contextReserve ?? 16_384, outputReserve) - schemaTokens;
       const compacted = compactForRequest(messages, inputBudget, this.config.maxHistoryMessages ?? 80);
@@ -828,17 +837,24 @@ export class AgentRunner {
         const dropped = completion.streamEnded === true;
         if (!reconnectingStream) truncationContinues += 1;
         const starvedByReasoning = !dropped && !partial && reasoningChars > 0;
-        if (starvedByReasoning && !reasoningRecovery) {
-          const recovery = reasoningRecoveryOptions(this.config, lastMainOptions, Math.min(this.config.maxTokens, MAX_OUTPUT_TOKENS));
+        if (starvedByReasoning) {
+          // Raising the budget is the only lever for a model that ignores
+          // thinking controls: it may need more room than max_tokens allows
+          // before it writes a single word of prose.
+          const grown = Math.min(modelOutputCeiling(this.config), windowCeiling, Math.max(outputBudget * 2, 64_000));
+          const recovery = grown > outputBudget && reasoningRecoveries < 2
+            ? reasoningRecoveryOptions(this.config, lastMainOptions, grown) : undefined;
           if (recovery) {
+            reasoningRecoveries += 1;
+            outputBudget = grown;
             reasoningRecovery = recovery;
-            onEvent({ type: "status", text: `模型推理耗尽本轮输出预算（${consumed}），本次任务临时降低可控推理并恢复输出预算至 ${recovery.maxTokens} token 后重试；已完成操作保留` });
+            onEvent({ type: "status", text: `模型推理耗尽本轮输出预算（${consumed}），本次任务把输出预算提高到 ${grown} token 后重试；已完成操作保留` });
             continue;
           }
         }
         if (!reconnectingStream && (truncationContinues > MAX_TRUNCATION_CONTINUES || starvedByReasoning)) {
           const text = starvedByReasoning
-            ? `模型推理耗尽输出预算（${consumed}），尚未生成正文${reasoningRecovery ? "；调整预算/推理参数后仍被截断" : "；当前参数已无可自动调整空间"}。请检查该模型原生 reasoning_effort/thinking 控制和服务端输出上限；max_tokens 在 luban 中最高为 ${MAX_OUTPUT_TOKENS}。`
+            ? `模型推理耗尽输出预算（${consumed}），尚未生成正文${reasoningRecovery ? `；输出预算已提高到 ${outputBudget} token 仍被截断` : "；当前参数已无可自动调整空间"}。请检查该模型原生 reasoning_effort/thinking 控制和服务端输出上限；max_tokens 在 luban 中最高为 ${ABSOLUTE_MAX_OUTPUT_TOKENS}。`
             : dropped
               ? `模型连接连续 ${truncationContinues} 次在输出中途中断（${consumed}）。请检查网络与模型服务稳定性，或换用更稳定的 provider 后重试。`
               : `模型输出连续 ${truncationContinues} 次被输出上限截断（${consumed}）。请提高 max_tokens，或把任务拆小后继续。`;

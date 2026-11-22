@@ -59,3 +59,6 @@ apps/android-native/.gradle/
 apps/android-native/build/
 apps/android-native/app/build/
 apps/android-native/local.properties
+
+# local agent-bench reports (npm run bench)
+/bench-runs/

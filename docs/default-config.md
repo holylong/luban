@@ -9,8 +9,12 @@ uses exclusive publication and owner-only permissions on Unix.
 ## Portable settings included
 
 - The built-in credential-free OpenCode Zen model and generation settings.
-  `model.max_tokens: 64000` explicitly matches the loader's output-budget default;
-  it is not an authentication token. Provider catalogs remain built in.
+  `model.max_tokens: 128000` is the client's output ceiling, so a first install
+  asks for the largest response it can get instead of a conservative budget that
+  reasoning models burn before writing anything; the loader defaults to the same
+  value, and a provider that rejects it is halved automatically (`usageDetails` /
+  `noteOutputCeiling` in `src/core/openai.ts`). It is not an authentication token.
+  Provider catalogs remain built in.
 - Mesh bind ports, sync exclusions and conflict policy, worker and step limits.
 - Existing sandbox and approval policy: soft sandbox, outside-workspace access
   enabled, and `permission.mode: edits`. This is not a strict isolation template;

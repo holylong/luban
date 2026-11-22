@@ -32,6 +32,7 @@ import { runBot } from "./core/bot-command.js";
 import { runDrive } from "./core/drive-command.js";
 import { runReport } from "./core/report-command.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
+import { reasoningShare } from "./core/run-metrics.js";
 import { App } from "./ui/app.js";
 import { terminalOutput } from "./ui/terminal-output.js";
 import { mascotOutput } from "./ui/mascot-background.js";
@@ -70,6 +71,7 @@ interface CliOptions {
   webPort?: number;
   planning?: string;
   theme?: string;
+  thinking?: string;
   token?: string;
 }
 
@@ -173,6 +175,8 @@ async function runHeadless(config: LubanConfig, prompt: string, mesh?: MeshRunti
     if (result.metrics) {
       const timing = result.metrics;
       process.stderr.write(`[model ${(timing.modelMs / 1000).toFixed(1)}s · tools cumulative ${(timing.toolMs / 1000).toFixed(1)}s · approval ${(timing.approvalMs / 1000).toFixed(1)}s · ${timing.compactions} compactions]\n`);
+      const hot = reasoningShare(timing);
+      if (hot) process.stderr.write(`[思考 ${hot.reasoning} token 占输出 ${Math.round(hot.share * 100)}%；最慢一次第 ${hot.index} 次调用 ${(hot.ms / 1000).toFixed(0)}s，占模型时间 ${Math.round(hot.ms / Math.max(1, timing.modelMs) * 100)}% — 单次太慢时先试 --thinking off]\n`);
     }
     return result.ok ? 0 : 1;
   } catch (error) {
@@ -791,6 +795,8 @@ async function main(): Promise<number> {
     .option("--token <token>", "access token required by the Web backend when it is exposed beyond localhost")
     .option("-y, --yes", "allow write, execute, and network tools without prompts")
     .option("--theme <name>", "terminal color scheme (run /theme in the TUI for the catalog)")
+    .option("--thinking <mode>", "on | off | auto - native thinking control for this run (default: config)")
+    .option("--planning <mode>", "off | auto | always - how much planning the prompt asks for (default: auto)")
     .option("-p, --prompt <text>", "run once without the TUI")
     .addHelpText("after", "\nCommands:\n  luban web [path]    native Web API + browser workspace + phone console (/m)\n  luban daemon        one always-on backend per machine (status/start/stop/logs)\n  luban relay         public relay so a phone can drive a node behind NAT\n  luban login relay   sign in to a relay account and enroll this computer\n  luban login codex   sign in to Codex through the official CLI\n  luban serve [path]  native mesh/worker daemon\n  luban report        export daily/weekly/monthly/yearly work across local sessions\n  luban history       search the SQLite mirror of saved sessions\n  luban memory        show or clear what a project remembers between runs\n  luban projects      list registered workspaces; --prune forgets scratch/missing ones\n  luban update        check for a newer luban, install it, or switch the startup check\n  luban acp [path]    Agent Client Protocol over stdio (editor integration)\n")
     .showHelpAfterError();
@@ -810,6 +816,8 @@ async function main(): Promise<number> {
     meshName: options.meshName,
     meshPort: options.meshPort,
     theme: options.theme,
+    thinking: options.thinking,
+    planning: options.planning,
     seedDefaults: true,
   });
   traceBoot("config");

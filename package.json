@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.8.7",
+  "version": "2.8.20",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "license": "MIT",
   "author": "luban contributors",
@@ -75,7 +75,8 @@
     "dev:web": "vite",
     "build:server": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json",
-    "probe:desktop:update": "node scripts/probe-desktop-update.cjs"
+    "probe:desktop:update": "node scripts/probe-desktop-update.cjs",
+    "bench": "tsx src/evals/bench-cli.ts"
   },
   "dependencies": {
     "ajv": "8.17.1",

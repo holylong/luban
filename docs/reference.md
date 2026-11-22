@@ -132,6 +132,11 @@ Codex CLI 完全相同；token 统计也不直接等于订阅额度扣减比例�
 - 不创建 commit 的 Git 工作树 checkpoint/revert（含未跟踪文件，50 MiB 安全上限）。
 - `bash pty:true` 经 `script(1)` 分配真 PTY（`[ -t 1 ]` 为真，curses/进度条可用；前台限定，与 OS 沙箱后端互斥）。`delegate_task` 支持 `use_worktree` 把写任务隔离到临时 git worktree，`auto_merge` 自动合入（冲突文件存 `.luban/conflicts/` 双副本），`delegate_tasks` 可并行运行 2～4 个只读研究/审查子 Agent；子任务步数计入父任务总预算，父取消会回收。
 - 原生 `web_fetch`（HTML 文本化、超时和 2 MiB 响应上限）。
+- 原生 `render_html`：一次调用用无头 Chrome 渲染本地 HTML 或 URL，返回截图路径、console 错误、未捕获异常、失败请求、canvas/WebGL 状态（含渲染器）。实测同一页面 3.4 秒出结果，而模型自己用 `bash` 拼 Chrome + DevTools 脚本要 244 秒——体素花园那次 893s 里 244s 是这么烧掉的。不需要 playwright 依赖，直接走 CDP；浏览器按 `LUBAN_CHROME` → Chrome/Chromium/Edge/Brave 常见安装路径顺序查找，缺浏览器时报错而不是静默失败。截图落在 `<workspace>/.luban/render/`；结果里还带一份 `pixels` 文字摘要（平均亮度、distinct 颜色数、最大色块占比、是否空白、48×16 的 ASCII 明暗图），因为无视觉的模型拿到 PNG 只能干猜——实测它为此去试 `chafa`/`img2txt`/`ollama`，还把 base64 贴给视觉接口，白烧 82 秒；现在直接读摘要就能判断「空白 / 一片死白 / 中间有深色物体」。摘要里还有调色板（最多 5 个十六进制色 + 占比）、平均饱和度、纯白/纯黑像素占比、边缘密度 `edgeDensity`（屏幕原生分辨率下的邻域对比度，直接反映“画面里到底有多少结构”）、3×3 区域亮度与主色，以及把数字翻译成人话的 `warnings`（`blank` / `washed-out` / `clipped` / `desaturated` / `flat` / `sparse`）——例如「整体 182/255、饱和度 0.2，顶部三分之一 231/255 且主要是 #dfeaf3，说明天空接近纯白、剪影全糊了」。这条告警来自实测：codex 的天空是 `#171022`（亮度 20）、luban 是 `#dfeaf3`（亮度 231）配 `#e4eef5` 的雾，画面对比度差了一倍，而旧版摘要只报「不空白」，模型看不出问题。另有可选 `probe`：在页面里求值一段 JS 并返回 JSON（例如 `window.scene.children.length`、`mesh.count`），让模型核对「真的建了 4800 个方块」而不是相信自己写的注释。
+
+同一个 `deepseek-flash` 直连 API 的实测可以排除「luban 偷偷限了长度」：单次请求 `max_tokens` 写 128000 会被接受，模型自己写到 8866 token（29.7KB）就 `finish=stop`；`--thinking off` 反而更小（14.5KB / 423 行）也更快（67s），因为思考关掉后模型直接交最少量的活。所以自检工具真正的风险不是限长，而是**把「通过检查」变成停止条件**：所以规则 2b 明确写了「检查通过是下限，不是终点」，`sparse` 的阈值也卡在参考画面前面，让「无警告」等于「和好画面一样丰富」。另有一层 `thin`（0.020–0.024）：能看懂但不够细腻，和参考画面（0.021–0.022）还差一口气；告警会提示这种情况多半是构图和体素精度的问题，继续堆同一种道具没用。
+
+`sparse` 是照着实测定的线：同一轮横向对比里，luban 生成的页面边缘密度 0.014–0.015、codex 0.022、dsh 0.021，画面上就是「几块大平面」对「层层叠叠的道具」；函数数 22 对 46/65，缺 koi、鸟居、瓦片、栏杆、竹子。所以阈值取中间的 0.018，告警里直接点名可以补的东西（栏杆、石块、鸟居、石灯、竹子、雕像、飞鸟、小船），并提醒打散大平面。只测亮度/饱和度是不够的——那两项都能被「三块大白板」满足，这也是旧版摘要对着一张贫瘠画面报「无警告」的原因。
 
 ### 代码智能与项目规则
 
@@ -691,6 +696,7 @@ luban update --json     # available / current / no-build / skipped / disabled / 
 | `Ctrl+Y` | 复制上次回答到剪贴板（运行中也可用）；任意输出用终端 `Shift+拖选` 原生复制；输出区链接单击即用默认浏览器打开 |
 | `Ctrl+J` | 在输入框插入换行，多行任务/贴代码用 |
 | `@path` | 文件补全（Tab）+ 提交时自动附带内容，最多 5 个 |
+| 底栏 `缓存` | 输入 token 里被服务端缓存的占比（`cache NN%`）。该数字来自各家 usage 报的缓存字段：DeepSeek 的 `prompt_cache_hit_tokens`、OpenAI 的 `prompt_tokens_details.cached_tokens`、Responses 的 `input_tokens_details.cached_tokens`、Anthropic 的 `cache_read_input_tokens`；服务端没报就不显示，不会把「没统计到」显示成 0% |
 | 底栏 `ctx` | 当前会话 token 占上下文窗口比例，≥85% 变红 |
 | `↑` / `↓` | 召回本次输入历史 · `resume`/切换会话后仍可从用户消息恢复 |
 | `↓`（光标已在最后一行） | 把整段草稿收起：内容写入输入历史并清空输入框，`↑` 可召回继续改；单行草稿同样生效，`/` 命令菜单打开时 `↓` 只移动菜单选项 |
@@ -811,10 +817,20 @@ luban report yearly --date 2026-01-01
 
   ```
   模型推理耗尽输出预算（推理 9032 字 / 正文 0 字），尚未生成正文；调整预算/推理参数后仍被截断。
-  请检查该模型原生 reasoning_effort/thinking 控制和服务端输出上限；max_tokens 在 luban 中最高为 32000。
+  请检查该模型原生 reasoning_effort/thinking 控制和服务端输出上限；max_tokens 在 luban 中最高为该模型的可达预算。
   ```
 
   推理 token 也可能计入 `max_tokens`。增大预算只在当前预算偏低时有用；网关仍可能实施更低上限。
+  每个模型自己能给多少输出各不相同（有的 8K，有的 32K，有的 128K），luban 默认按 128K 硬顶发送：
+  服务端拒绝时会按请求里的 `max_tokens` 报错，luban 把预算减半重试（64K→32K→…→4K，最多 6 次），
+  不必因为配置了一个给自己用的大 `max_tokens` 就让所有 provider 一起失败。已知上限可以直接写在模型上，
+  这样连那次拒绝都不必发生：
+
+  ```json
+  { "providers": { "gateway": { "models": { "small-model": { "capabilities": { "max_output_tokens": 8192 } } } } } }
+  ```
+
+  `model.max_tokens` 的默认值就是客户端上限 128000（老版本是 64000，推理型模型常常在这个预算里烧完推理、正文 0 字而失败）。减半重试后拿到的预算会在本进程内记住（按 `provider/model`），后续轮次直接按它发送，不会每一轮都重新被拒。
   已识别模型会使用各自原生的 `thinking`、`reasoning_effort` 或 `reasoning.effort`；兼容服务可
   配置 `thinking_control` 明确指定协议。未知模型不会仅因恢复逻辑而收到未识别的推理字段。
 
@@ -824,7 +840,7 @@ luban report yearly --date 2026-01-01
 { "model": { "timeout": 300, "thinking_timeout": 600, "max_retries": 5 } }
 ```
 
-单次输出上限 `max_tokens` 会**封顶在 32000**（与 opencode 的 `OUTPUT_TOKEN_MAX` 一致）：上限过大只会让推理模型想得更久、让网关为请求预留更多 KV cache，从而拖慢每一轮；把它设得更大也不会改变实际封顶值。
+单次输出上限 `max_tokens` 默认就是客户端硬顶 128000，并按「配置值、模型声明的 `capabilities.max_output_tokens`、128000」三者取小。早先的 64000/32000 默认值是推理模型「推理烧完预算、正文 0 字」的根源，所以现在装好即是上限；服务端拒绝时按 64K → 32K → 16K → 8K → 4K 逐级减半重试，成功后记住该 `provider/model` 的实际上限，下一轮直接用它发送。
 
 ### 连接中断不再丢掉已生成的内容
 
@@ -895,7 +911,7 @@ OpenAI、Anthropic 和 Responses HTTP 请求会记录实际发送的 JSON body�
 | `always` | 每个非平凡任务都先 `update_plan`（旧行为，多一次往返） |
 | `off` | 完全不规划 |
 
-命令行 `--planning off|auto|always`，环境变量 `LUBAN_PLANNING`。
+命令行 `--planning off|auto|always`，环境变量 `LUBAN_PLANNING`。思考开关同样可以一次性覆盖：`--thinking on|off|auto`（`model.thinking` 的临时版本，不写回配置）。
 
 `model.thinking` 可设为 `true` 或 `false`，覆盖自动思考选择；模型原生协议决定参数是否生效。未设置或设为 `"auto"` 时，luban 在本地按最新用户请求选择，不额外调用模型；明确简单的请求关闭思考，不确定或涉及修复、分析、测试等工作的请求开启思考。连续工具轮次保持这一策略，不因上一条命令执行成功就自动关闭思考；工具失败时也会开启思考。DeepSeek 主任务携带工具时，自动模式始终开启思考。自动选择为非思考时，单次输出上限最多 8192 token；非 Go 网络客户端的超时和无输出等待最多 45 秒，Go 保留配置的超时和重试预算。显式指定 `true` 或 `false` 时使用配置的 token、超时和重试设置；推理耗尽输出预算时仍可能执行一次临时恢复，见上文。Qwen 使用 `chat_template_kwargs.enable_thinking`，DeepSeek 使用 `thinking.type`，Anthropic 与 Responses 使用各自原生控制。
 
@@ -911,6 +927,10 @@ OpenAI 兼容接口返回的 `reasoning_content` 会随完整助手消息保存�
 ```
 
 同一个任务在两个工具里各跑一次，比较 `model calls` 和 `s/call` 就能分清是**往返太多**还是**单次太慢**。
+
+实测的例子（同一台机器、`deepseek/deepseek-flash`、同一句体素花园需求）：44 次调用 454s，模型 392s、工具累计只有 60s，而其中**最早一次调用就花了 145s、输出 24,649 token 里 24,591 是推理**——慢在单次思考，不在工具，也不在截图（整轮 `computer` 只调用 2 次：一次 `status`、一次 `screenshot`）。
+
+单次太慢时优先收思考预算，而不是收工具：`--thinking off` 或配置 `model.thinking: false` 会按模型原生协议关掉推理（DeepSeek 发 `thinking.type=disabled`，实测同一请求 5.9s → 1.1s、推理 token 664 → 0），`--thinking auto`（默认）则按请求复杂度逐轮决定。注意关掉思考会换来更多试错往返：一次体素任务在 `--thinking off` 下把 44 步变成了 70+ 次 bash，总耗时未必更短，所以适合机械改写、批量检查和简单问答，不适合从零生成大文件。
 
 ## 局域网协作
 
@@ -1467,6 +1487,7 @@ luban 的沙箱与权限是**协作防护**，不是系统级隔离容器：不�
 ```bash
 npm test          # 72 文件 / 390 用例（另有 1 个按平台跳过）
 npm run eval      # 脚本化评测集（单文件/跨文件/失败恢复/只读拒绝，无需付费 API）
+npm run bench     # 真实模型评测台：正确性/验证纪律/安全/诚实性/恢复，见 docs/agent-eval.md
 npm run test:android  # Android 原生控制台的结构断言（路由、离线、任务聚合、审批选项）
 npm run typecheck
 npm run build
@@ -1499,7 +1520,7 @@ src/
     mesh/            UDP 发现、TCP 帧协议、远程 job 与工作区同步
   ui/                Ink TUI（转录、执行时间线、滚动条、输入框、计划/验证面板）
   web/               HTTP 后台与 API；client/ 为 React + Vite 浏览器工作台
-  evals/             脚本化评测集
+  evals/             脚本化评测集（suite.ts）与真实模型评测台（bench.ts，npm run bench）
 scripts/             构建脚本与真实 PTY 冒烟测试
 editors/             编辑器集成（VS Code 扩展，走 `luban acp`）
 ```

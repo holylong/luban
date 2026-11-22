@@ -1,10 +1,111 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { OpenAiClient, openAiWireMessages } from "./openai.js";
+import { OpenAiClient, openAiWireMessages, resetOutputCeilings, usageDetails } from "./openai.js";
 import type { LubanConfig } from "./types.js";
 
 let server: Server | undefined;
 afterEach(() => new Promise<void>((resolve) => server ? server.close(() => resolve()) : resolve()));
+
+describe("usageDetails", () => {
+  it("reads prompt caching under every provider dialect", () => {
+    // DeepSeek reports both names; OpenAI and Anthropic each report one.
+    expect(usageDetails({ prompt_tokens: 100, completion_tokens: 5, prompt_cache_hit_tokens: 80 }))
+      .toEqual({ input: 100, output: 5, cached: 80 });
+    expect(usageDetails({ prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 64 } }))
+      .toEqual({ input: 100, output: 5, cached: 64 });
+    expect(usageDetails({ input_tokens: 100, output_tokens: 5, cache_read_input_tokens: 96 }))
+      .toEqual({ input: 100, output: 5, cached: 96 });
+    expect(usageDetails({ input_tokens: 100, output_tokens: 5, input_tokens_details: { cached_tokens: 32 } }))
+      .toEqual({ input: 100, output: 5, cached: 32 });
+    expect(usageDetails({ prompt_tokens: 10, completion_tokens: 20, completion_tokens_details: { reasoning_tokens: 18 } }))
+      .toEqual({ input: 10, output: 20, reasoning: 18 });
+    // A server that reports nothing must not invent a cache hit.
+    expect(usageDetails({ prompt_tokens: 10, completion_tokens: 2 })).toEqual({ input: 10, output: 2 });
+  });
+});
+
+describe("OpenAiClient cached tokens", () => {
+  it("keeps the cache hit count from a streamed usage chunk", async () => {
+    server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n');
+        response.write('data: {"choices":[],"usage":{"prompt_tokens":6036,"completion_tokens":15,"prompt_cache_hit_tokens":5888,"completion_tokens_details":{"reasoning_tokens":13}}}\n\n');
+        response.end("data: [DONE]\n\n");
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no test address");
+    const client = new OpenAiClient({
+      home: "/tmp", workspace: "/tmp", project: "test", maxTokens: 1_000, temperature: 0, timeoutMs: 5_000, maxRetries: 0,
+      model: { id: "test/model", provider: "test", model: "model", name: "model", api: "openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: "", capabilities: { vision: false, thinking: false, tools: true, responses: false } },
+    } as LubanConfig);
+    const result = await client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal);
+    expect(result.usage).toEqual({ input: 6036, output: 15, cached: 5888, reasoning: 13 });
+  });
+});
+
+describe("OpenAiClient output ceiling", () => {
+  /** Stream one answer and record the request bodies the client sent. */
+  async function serve(bodies: Array<Record<string, unknown>>, rejectAbove?: number): Promise<string> {
+    server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        bodies.push(body);
+        if (rejectAbove !== undefined && Number(body.max_tokens) > rejectAbove) {
+          response.writeHead(400, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: `max_tokens is too large: ${String(body.max_tokens)}` } }));
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n');
+        response.write('data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n');
+        response.end("data: [DONE]\n\n");
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no test address");
+    return `http://127.0.0.1:${address.port}/v1`;
+  }
+
+  function settings(baseUrl: string, maxOutputTokens?: number): LubanConfig {
+    return {
+      home: "/tmp", workspace: "/tmp", project: "test", maxTokens: 64_000, temperature: 0.2, timeoutMs: 5_000, maxRetries: 0,
+      model: {
+        id: "test/model", provider: "test", model: "model", name: "model", api: "openai", baseUrl, apiKey: "",
+        capabilities: { vision: false, thinking: false, tools: true, responses: false, ...(maxOutputTokens ? { maxOutputTokens } : {}) },
+      },
+    } as LubanConfig;
+  }
+
+  it("sends the client ceiling, lowered by a provider limit from the config", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const baseUrl = await serve(bodies);
+    const client = new OpenAiClient(settings(baseUrl, 8_000));
+    await client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal);
+    expect(bodies[0]?.max_tokens).toBe(8_000);
+  });
+
+  it("halves the budget when the provider rejects it and remembers nothing larger", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const baseUrl = await serve(bodies, 4_096);
+    const client = new OpenAiClient(settings(baseUrl));
+    const result = await client.complete([{ role: "user", content: "hi" }], [], new AbortController().signal);
+    expect(result.content).toBe("ok");
+    // Each rejected budget is halved until the provider's real limit is reached.
+    expect(bodies.map((body) => body.max_tokens)).toEqual([64_000, 32_000, 16_000, 8_000, 4_096]);
+    // The accepted limit is remembered, so the next turn starts there instead.
+    await client.complete([{ role: "user", content: "again" }], [], new AbortController().signal);
+    expect(bodies.at(-1)?.max_tokens).toBe(4_096);
+    resetOutputCeilings();
+  });
+});
 
 describe("OpenAiClient", () => {
   it("merges late and repeated system records into one leading message", async () => {

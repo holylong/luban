@@ -54,6 +54,8 @@ export interface ModelCapabilities {
   responses: boolean;
   /** Set false for reasoning models that reject an explicit temperature. */
   temperature?: boolean;
+  /** Provider limit for one response; overrides the client's 128K ceiling. */
+  maxOutputTokens?: number;
 }
 
 export interface MeshContact {

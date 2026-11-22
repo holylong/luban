@@ -89,8 +89,8 @@ describe("starter configuration", () => {
     for (const name of ["LUBAN_KEV_MODE", "LUBAN_KEV_URL", "LUBAN_RELAY_PUBLIC_URL"]) vi.stubEnv(name, "");
     const config = loadConfig({ workspace, seedDefaults: true });
     const raw = JSON.parse(await readFile(join(home, "config.json"), "utf8"));
-    expect(raw.model.max_tokens).toBe(64000);
-    expect(config.maxTokens).toBe(64000);
+    expect(raw.model.max_tokens).toBe(128000);
+    expect(config.maxTokens).toBe(128000);
     expect(raw.remote).toEqual({ enabled: false, host: "127.0.0.1", port: 0 });
     // The seeded file stays free of private services; only the resolved value
     // falls back to the shipped tunnel address.

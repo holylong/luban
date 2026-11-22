@@ -60,6 +60,25 @@ it.each(["openai", "anthropic", "responses", "codex"])("keeps %s work alive beyo
   } finally { runner.close(); }
 });
 
+it("raises the output budget when reasoning eats it before any prose", async () => {
+  const { config, messages } = await setup();
+  config.maxSteps = 6;
+  // Room for two doublings: 32K -> 64K -> 128K, the client's hard ceiling.
+  config.contextWindow = 262_144;
+  const budgets: Array<number | undefined> = [];
+  const runner = new AgentRunner(config, { async complete(_messages, _tools, _signal, _onDelta, _onNotice, options) {
+    budgets.push(options?.maxTokens);
+    // The provider capped the reply: all of it went to reasoning, no tools, no text.
+    return { content: "", reasoning: "thinking about the scene", toolCalls: [], usage: { input: 1, output: 1 }, truncated: true };
+  } });
+  try {
+    const result = await runner.run(messages, "auto", new AbortController().signal, () => {}, async () => "once");
+    expect(result.ok).toBe(false);
+    expect(budgets.slice(1)).toEqual([64_000, 128_000]);
+    expect(result.text).toContain("输出预算已提高到 128000 token 仍被截断");
+  } finally { runner.close(); }
+});
+
 it("continues repeated dropped streams beyond both truncation and step limits without executing incomplete calls", async () => {
   const { config, messages } = await setup(); config.maxSteps = 1;
   let calls = 0, effects = 0;
