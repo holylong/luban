@@ -1,0 +1,71 @@
+name: Refresh release notes
+
+# Releases published before scripts/release-notes.mjs carried only the install
+# table: each packaging job wrote its own blurb and the final job overwrote the
+# body with it, so the page never said what changed. This job repairs bodies
+# that are already published by putting this version's CHANGELOG section in
+# front and keeping the original install text byte for byte — old releases name
+# the files they really uploaded, so they are never regenerated. It also keeps a
+# body current when its CHANGELOG section is edited after the fact.
+#
+# Idempotent: a body that already carries 更新内容 is left untouched, so every
+# push that touches CHANGELOG.md only rewrites what actually changed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "X.Y.Z to refresh, or all for every release missing 更新内容"
+        required: false
+        default: all
+  push:
+    branches: [main]
+    paths:
+      - CHANGELOG.md
+      - scripts/release-notes.mjs
+      - .github/workflows/release-notes-refresh.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-notes-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Prepend each release's CHANGELOG section
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ inputs.version || 'all' }}
+        run: |
+          set -euo pipefail
+          changed=0
+          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            version="${tag#v}"
+            if [ "$TARGET" != "all" ] && [ "$TARGET" != "$version" ]; then continue; fi
+            if ! grep -qE "^## ${version}([[:space:]]|$)" CHANGELOG.md; then
+              echo "skip $tag: no CHANGELOG section for $version"
+              continue
+            fi
+            gh release view "$tag" --json body --jq .body > "$RUNNER_TEMP/body.md"
+            if ! out=$(node scripts/release-notes.mjs --version "$version" --base "$RUNNER_TEMP/body.md" --out "$RUNNER_TEMP/notes.md"); then
+              echo "skip $tag: $out"
+              continue
+            fi
+            case "$out" in
+              notes\ written*)
+                gh release edit "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+                echo "updated $tag: $out"
+                changed=$((changed + 1))
+                ;;
+              *) echo "$tag: $out" ;;
+            esac
+          done
+          echo "release notes updated: $changed"

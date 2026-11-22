@@ -90,16 +90,36 @@ export function releaseBody({ version, changelog, platform = "all" }) {
 }
 
 /**
+ * Repair an already-published body: keep whatever install text is in it and put
+ * 更新内容 in front. Old bodies name the files that were really uploaded, so they
+ * are never regenerated from this version's naming scheme.
+ *
+ * Returns "" when the body already carries 更新内容, which makes the repair
+ * idempotent and safe to re-run from a workflow.
+ *
+ * @param {{ version: string, changelog: string, base: string }} options
+ */
+export function mergeWithBase({ version, changelog, base }) {
+  const text = String(base ?? "").replace(/\r\n/gu, "\n");
+  if (/^##\s*更新内容\s*$/mu.test(text)) return "";
+  const changes = changelogNotes(version, changelog);
+  if (!changes) throw new Error(`CHANGELOG.md has no "## ${version} — <date>" section: cannot describe this release`);
+  const rest = text.replace(/^\s+|\s+$/gu, "");
+  if (!rest) return releaseBody({ version, changelog });
+  return `## 更新内容\n\n${changes}\n\n---\n\n${rest}\n`;
+}
+
+/**
  * Parse `--flag value` pairs; an unknown flag is an error rather than silently ignored.
  * @param {string[]} argv
  */
 export function parseArgs(argv) {
-  /** @type {{ version?: string, platform: string, changelog: string, out?: string, help?: boolean }} */
+  /** @type {{ version?: string, platform: string, changelog: string, out?: string, base?: string, help?: boolean }} */
   const options = { platform: "all", changelog: join(root, "CHANGELOG.md") };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") return { ...options, help: true };
-    if (arg !== "--version" && arg !== "--platform" && arg !== "--changelog" && arg !== "--out") {
+    if (arg !== "--version" && arg !== "--platform" && arg !== "--changelog" && arg !== "--out" && arg !== "--base") {
       throw new Error(`unknown option ${arg}`);
     }
     const value = argv[index + 1];
@@ -108,6 +128,7 @@ export function parseArgs(argv) {
     if (arg === "--version") options.version = value;
     else if (arg === "--platform") options.platform = value;
     else if (arg === "--changelog") options.changelog = value;
+    else if (arg === "--base") options.base = value;
     else options.out = value;
   }
   if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}$/u.test(String(options.version ?? ""))) {
@@ -123,11 +144,12 @@ const help = `Usage: node scripts/release-notes.mjs --version X.Y.Z [options]
   --platform   all (default), linux, windows or macos
   --changelog  CHANGELOG.md to read (default: this repository's)
   --out        write the body to a file instead of stdout
+  --base       repair an existing body: keep it verbatim, prepend 更新内容
 `;
 
 /**
  * @param {string[]} argv
- * @param {{ changelog?: string, write?: (path: string, text: string) => Promise<void>, stdout?: (text: string) => void }} [deps]
+ * @param {{ changelog?: string, read?: (path: string) => Promise<string>, write?: (path: string, text: string) => Promise<void>, stdout?: (text: string) => void }} [deps]
  */
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const options = parseArgs(argv);
@@ -136,12 +158,22 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     return 0;
   }
   const changelog = deps.changelog ?? await readFile(options.changelog, "utf8");
-  const body = releaseBody({ version: String(options.version), changelog, platform: options.platform });
+  const version = String(options.version);
+  const say = deps.stdout ?? (text => process.stdout.write(text));
+  let body = releaseBody({ version, changelog, platform: options.platform });
+  if (options.base) {
+    const existing = await (deps.read ?? (path => readFile(path, "utf8")))(options.base);
+    body = mergeWithBase({ version, changelog, base: existing });
+    if (!body) {
+      say(`notes unchanged: ${version} already leads with 更新内容\n`);
+      return 0;
+    }
+  }
   if (options.out) {
     await (deps.write ?? ((path, text) => writeFile(path, text, "utf8")))(options.out, body);
-    (deps.stdout ?? (text => process.stdout.write(text)))(`notes written: ${options.out} (${body.length} chars)\n`);
+    say(`notes written: ${options.out} (${body.length} chars)\n`);
   } else {
-    (deps.stdout ?? (text => process.stdout.write(text)))(body);
+    say(body);
   }
   return 0;
 }

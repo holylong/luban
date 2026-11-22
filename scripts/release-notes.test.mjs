@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { main, parseArgs, releaseBody } from "./release-notes.mjs";
+import { main, mergeWithBase, parseArgs, releaseBody } from "./release-notes.mjs";
 
 const CHANGELOG = [
   "# CHANGELOG",
@@ -99,4 +99,38 @@ test("arguments are validated rather than guessed", () => {
   assert.throws(() => parseArgs(["--version", "2.9.6", "--frobnicate", "1"]), /unknown option --frobnicate/u);
   assert.deepEqual(parseArgs(["--version", "2.9.6"]).platform, "all");
   assert.equal(parseArgs(["--help"]).help, true);
+});
+
+test("an already published body keeps its own install text and gains 更新内容", () => {
+  const base = ["Linux amd64 安装包：", "", "- luban-cli_2.9.6_amd64.deb", "- luban-2.9.6-win-x64.exe（旧的命名，不得被改写）"].join("\n");
+  const merged = mergeWithBase({ version: "2.9.6", changelog: CHANGELOG, base });
+  assert.match(merged, /^## 更新内容\n\n- 编辑器里能预览 Markdown 了。/u);
+  assert.ok(merged.includes("luban-2.9.6-win-x64.exe（旧的命名，不得被改写）"), "original body must survive verbatim");
+  assert.ok(!merged.includes("luban-desktop-2.9.6-win-x64.zip"), "must not invent file names for past releases");
+  assert.ok(merged.indexOf("## 更新内容") < merged.indexOf("Linux amd64 安装包"));
+});
+
+test("repairing an already repaired body is a no-op", () => {
+  const once = mergeWithBase({ version: "2.9.6", changelog: CHANGELOG, base: "Linux 安装包：" });
+  assert.equal(mergeWithBase({ version: "2.9.6", changelog: CHANGELOG, base: once }), "");
+  let wrote = false;
+  const lines = [];
+  return main(["--version", "2.9.6", "--base", "body.md", "--out", "notes.md"], {
+    changelog: CHANGELOG,
+    read: async () => once,
+    write: async () => { wrote = true; },
+    stdout: text => lines.push(text),
+  }).then(code => {
+    assert.equal(code, 0);
+    assert.equal(wrote, false);
+    assert.match(lines[0], /notes unchanged: 2\.9\.6/u);
+  });
+});
+
+test("a body with no CHANGELOG section cannot be repaired", () => {
+  assert.throws(() => mergeWithBase({ version: "3.0.1", changelog: CHANGELOG, base: "Linux 安装包：" }), /no "## 3\.0\.1/u);
+  // An empty body falls back to the full generated body, install table included.
+  const empty = mergeWithBase({ version: "2.9.6", changelog: CHANGELOG, base: "  \n" });
+  assert.ok(empty.includes("## 安装包"));
+  assert.ok(empty.includes("luban-cli_2.9.6_amd64.deb"));
 });

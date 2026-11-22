@@ -57,6 +57,8 @@ Linux 输出 CLI/Desktop `.deb`；macOS 输出 CLI `.zip`、Desktop `.dmg`、造
 
 GitHub Release 的正文由 `scripts/release-notes.mjs` 生成：`## 更新内容` 取 CHANGELOG.md 中该版本一节，`## 安装包` 按平台列文件名与用法。打包 job 发布时带上本平台的正文，最后一个 `notes` job 用 `--platform all` 重写成完整正文，两处读的是同一份 CHANGELOG，所以发布页永远不会只剩一坨安装说明。该版本没有 CHANGELOG 一节时脚本直接失败，与 `publish:release` 一致。本地预览：`npm run notes:release -- --version 2.9.6`。
 
+已经发布的 release 正文可以事后补：`npm run notes:release -- --version 2.9.6 --base body.md` 会把该版本 CHANGELOG 一节放到原正文前面，原有安装说明逐字保留（老版本的文件名不会被新规则改写），已经有 `## 更新内容` 的正文不会被再动。`.github/workflows/release-notes-refresh.yml` 用这条命令修所有历史 release，也被 CHANGELOG 的 push 触发，可手动 `workflow_dispatch` 指定版本或 all。
+
 验证命令：`npm run test:release`。打包完成不代表已人工验证 GUI 和安装器。
 
 ## 发布到升级服务器（`luban update`）
