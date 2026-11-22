@@ -7,6 +7,8 @@ import { documentPreviewKind, mediaKind, type DocumentPreviewKind, type MediaKin
 import { DesktopDocumentView } from "./desktop-document-view";
 import { MarkdownDocument } from "./desktop-markdown-view";
 import { isMarkdownPath, isPreviewShortcut, previewAction } from "./desktop-markdown";
+import { CsvDocument } from "./desktop-csv-view";
+import { csvPreviewAction, isTablePath } from "./desktop-csv";
 import type { DocumentPreview } from "./desktop-preview";
 import type { WorkbenchStore } from "./store";
 
@@ -43,7 +45,10 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
       saving: () => savingRef.current, update: setDocuments, target: window });
   }, [bridge]);
   const markdown = isMarkdownPath(active);
-  const toggle = previewAction(active, previewing);
+  // CSV/TSV share the toggle and the chord with Markdown: same idea (read the
+  // live buffer in a rendered form), different renderer.
+  const tabular = isTablePath(active);
+  const toggle = previewAction(active, previewing) ?? csvPreviewAction(active, previewing);
   useEffect(() => { setPreviewing(false); }, [active]);
   const language = editorLanguage(active);
   const highlight = document ? highlightable(document.content) : false;
@@ -107,7 +112,7 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
       if (event.key.toLowerCase() === "s") { event.preventDefault(); void save(); }
       if (event.key.toLowerCase() === "p") { event.preventDefault(); showQuick(); }
       if (event.key.toLowerCase() === "w" && document) { event.preventDefault(); close(document); }
-      if (isPreviewShortcut(event) && markdown) { event.preventDefault(); setPreviewing(value => !value); }
+      if (isPreviewShortcut(event) && (markdown || tabular)) { event.preventDefault(); setPreviewing(value => !value); }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -136,7 +141,8 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
     }}>重新读取磁盘</button>}</div>}
     {preview ? <DesktopMediaView key={preview.path} path={preview.path} kind={preview.kind} onClose={() => setPreview(null)} />
       : parsed ? <DesktopDocumentView key={parsed.path} path={parsed.path} kind={parsed.kind} model={parsed.model} error={parsed.error} onClose={() => setParsed(null)} />
-        : document && previewing && markdown ? <MarkdownDocument key={`preview ${active}`} path={active} content={document.content} />
+        : document && previewing && tabular ? <CsvDocument key={`table ${active}`} path={active} content={document.content} />
+          : document && previewing && markdown ? <MarkdownDocument key={`preview ${active}`} path={active} content={document.content} />
           : document ? <>
       <div className="desktop-code-editor" key={active}><pre className="desktop-line-numbers" ref={gutter} aria-hidden="true">{document.content.split("\n").map((_, index) => index + 1).join("\n")}</pre><div className="desktop-code-surface">
         {highlight && <pre className="desktop-code-highlight" ref={layer} aria-hidden="true"><HighlightedCode content={document.content} language={language} /></pre>}
@@ -153,7 +159,7 @@ export function DesktopEditor({ store, activeView = true }: { store: WorkbenchSt
           change(input.value); locate();
         }
       }} /></div></div>
-      <div className="desktop-editor-info">{previewing && markdown ? <span>预览 · 未保存的更改也会显示</span> : <span>Ln {position.line}, Col {position.column}</span>}<span>UTF-8 · {active.split(".").at(-1)} · {document.content === document.saved ? "已保存" : "未保存"}</span><button onClick={() => { void store.submit(`请检查文件 ${active} 的代码，先解释问题和建议，不要修改文件。${document.content !== document.saved ? "注意：编辑器中存在尚未保存的更改，请先提醒我保存。" : ""}`); }}>让助手检查文件</button></div>
+      <div className="desktop-editor-info">{previewing && (markdown || tabular) ? <span>预览 · 未保存的更改也会显示</span> : <span>Ln {position.line}, Col {position.column}</span>}<span>UTF-8 · {active.split(".").at(-1)} · {document.content === document.saved ? "已保存" : "未保存"}</span><button onClick={() => { void store.submit(`请检查文件 ${active} 的代码，先解释问题和建议，不要修改文件。${document.content !== document.saved ? "注意：编辑器中存在尚未保存的更改，请先提醒我保存。" : ""}`); }}>让助手检查文件</button></div>
     </> : <div className="desktop-welcome"><span className="desktop-mark">L</span><h1>luban 工作台</h1><p>左侧浏览文件，中间编辑代码，右侧与助手协作。</p><button onClick={showQuick} disabled={!bridge}>打开文件 · ⌘/Ctrl P</button><p>⌘/Ctrl S 保存 · ⌘/Ctrl K 新任务 · ⌘/Ctrl ` 控制台</p>{!bridge && <p>代码编辑和命令执行仅在 Electron 桌面客户端可用。</p>}</div>}
     {quick && <div className="desktop-quick-backdrop" onClick={() => setQuick(false)}><section className="desktop-quick" role="dialog" aria-label="快速打开文件" onClick={event => event.stopPropagation()}><input autoFocus aria-label="搜索项目文件" placeholder="输入文件名或路径…（最多索引 5000 个文件）" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") setQuick(false); if (event.key === "Enter" && matches[0]) { void open(matches[0]); setQuick(false); } }} /><div>{matches.map(path => <button key={path} onClick={() => { void open(path); setQuick(false); }}>{path}</button>)}{!matches.length && <p>没有匹配文件</p>}</div></section></div>}
   </>;

@@ -330,6 +330,19 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-sheet-table th.corner { position: sticky; left: 0; top: 0; z-index: 2; background: var(--panel); }
 .desktop-sheet-table td.num { text-align: right; }
 .desktop-sheet-note { flex: none; margin: 0; font-size: 11px; color: var(--dim); }
+/* CSV/TSV preview: same grid language as the sheet viewer, but the header row
+   and row numbers stay put while a wide export scrolls. */
+.desktop-csv { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.desktop-csv-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.desktop-csv-table { border-collapse: collapse; font: 12px/1.5 var(--mono); white-space: nowrap; }
+.desktop-csv-table th, .desktop-csv-table td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; }
+.desktop-csv-table thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--fg); font-weight: 600; }
+.desktop-csv-table tbody th { position: sticky; left: 0; background: var(--panel); color: var(--dim); font-weight: 500; text-align: right; }
+.desktop-csv-table th.corner { position: sticky; left: 0; top: 0; z-index: 2; background: var(--panel); }
+.desktop-csv-table tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--panel) 45%, transparent); }
+.desktop-csv-table td.num { text-align: right; }
+.desktop-csv-note { flex: none; margin: 0; font-size: 11px; color: var(--dim); }
+.desktop-csv-empty { margin: 18px; color: var(--dim); font-size: 12px; }
 .desktop-word { max-width: 760px; margin: 0 auto; font-size: 13px; line-height: 1.7; color: var(--fg); }
 .desktop-word h1, .desktop-word h2, .desktop-word h3 { margin: 14px 0 6px; line-height: 1.3; }
 .desktop-word h1 { font-size: 20px; }
