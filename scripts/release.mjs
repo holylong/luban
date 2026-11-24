@@ -85,7 +85,8 @@ export function releasePlan(args, host = process.platform, arch = process.arch, 
         continue;
       }
       selected.push({ name: `luban-${item}-${version}-win-${arch}.zip`, fallback: null });
-      if (item === "desktop") selected.push({ name: `luban-desktop-${version}-win-${arch}-setup.exe`, fallback: null });
+      // Every Windows variant ships a per-user setup executable beside its ZIP.
+      selected.push({ name: `luban-${item}-${version}-win-${arch}-setup.exe`, fallback: null });
 
     } else {
       const extension = item === "desktop" || item === "creator" ? "dmg" : "zip";

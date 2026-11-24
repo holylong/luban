@@ -1,3 +1,9 @@
+## 2.9.12 — 2026-11-24
+
+- Windows 的 CLI 和 Creator 也有安装包了：`npm run release` 现在为 cli、desktop、creator 各生成一个 `luban-<变体>-<版本>-win-x64-setup.exe`，与各自的便携 ZIP 并存，不再是只有桌面版能双击安装。
+- 三个安装器共用一份 `packaging/windows/installer.iss`，靠 `/DKind` 区分 AppId、安装目录、启动器和安装包名；因此 CLI、桌面版、造物主可以同时装在一台机器上互不覆盖，同一变体的新版仍按固定 AppId 原地覆盖升级。
+- CLI 安装器会把安装目录写入当前用户 PATH（卸载时移除），装完直接 `luban` 即可；桌面版与造物主不修改 PATH。发布计划、校验和、GitHub Windows 上传资产与发布说明同步为三个安装器。
+
 ## 2.9.11 — 2026-11-24
 
 - Windows Desktop 默认同时生成便携 ZIP 和 `luban-desktop-<版本>-win-x64-setup.exe` 原生安装包。安装到当前用户的固定目录，无需管理员权限；新版双击安装器即可沿用原目录覆盖升级，不必每次解压。提供开始菜单、可选桌面快捷方式及系统卸载项，不删除用户配置和会话。Windows 应用内自动安装尚未实现。

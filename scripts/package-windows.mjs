@@ -298,11 +298,15 @@ async function packageVariant(kind) {
   rmSync(zip, { force: true });
   run(`Zip ${kind} package`, "tar.exe", ["-a", "-c", "-f", zip, "-C", stageRoot, folder]);
   process.stdout.write(`\nPackage: ${zip}\n`);
-  if (kind === "desktop") {
-    const compiler = isccPath();
-    if (!compiler) throw new Error("Inno Setup 6 is required for Desktop setup: run node scripts/ensure-inno.mjs (or set LUBAN_ISCC)");
-    run("Build Desktop installer", compiler, [`/DAppVersion=${version}`, `/DPayload=${payload}`, `/DReleaseDir=${releaseDir}`, join(root, "packaging", "windows", "desktop.iss")]);
-  }
+  const compiler = isccPath();
+  if (!compiler) throw new Error(`Inno Setup 6 is required for the ${kind} setup: run node scripts/ensure-inno.mjs (or set LUBAN_ISCC)`);
+  run(`Build ${kind} installer`, compiler, [
+    `/DAppVersion=${version}`,
+    `/DPayload=${payload}`,
+    `/DReleaseDir=${releaseDir}`,
+    `/DKind=${kind}`,
+    join(root, "packaging", "windows", "installer.iss"),
+  ]);
 }
 
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")]);

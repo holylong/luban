@@ -162,7 +162,7 @@ jobs:
       - name: Prepare Inno Setup compiler
         shell: pwsh
         run: node scripts/ensure-inno.mjs
-      - name: Build Windows ZIPs and Desktop installer
+      - name: Build Windows packages and installers
         run: npm run release -- --platform windows
       - name: Write release notes
         shell: pwsh
@@ -179,8 +179,11 @@ jobs:
           $cli = "release/luban-cli-${version}-win-x64.zip"
           $desktop = "release/luban-desktop-${version}-win-x64.zip"
           $creator = "release/luban-creator-${version}-win-x64.zip"
-          $setup = "release/luban-desktop-${version}-win-x64-setup.exe"
-          foreach ($asset in @($cli, $desktop, $creator, $setup)) {
+          $cliSetup = "release/luban-cli-${version}-win-x64-setup.exe"
+          $desktopSetup = "release/luban-desktop-${version}-win-x64-setup.exe"
+          $creatorSetup = "release/luban-creator-${version}-win-x64-setup.exe"
+          $assets = @($cli, $desktop, $creator, $cliSetup, $desktopSetup, $creatorSetup)
+          foreach ($asset in $assets) {
             if (-not (Test-Path $asset) -or (Get-Item $asset).Length -eq 0) {
               throw "missing or empty asset: $asset"
             }
@@ -192,10 +195,10 @@ jobs:
             $uploaded = $false
             gh release view $env:GITHUB_REF_NAME *> $null
             if ($LASTEXITCODE -eq 0) {
-              gh release upload $env:GITHUB_REF_NAME $cli $desktop $creator $setup --clobber
+              gh release upload $env:GITHUB_REF_NAME @assets --clobber
               $uploaded = ($LASTEXITCODE -eq 0)
             } else {
-              gh release create $env:GITHUB_REF_NAME $cli $desktop $creator $setup --verify-tag --title "luban $version" --notes-file windows-release-notes.md
+              gh release create $env:GITHUB_REF_NAME @assets --verify-tag --title "luban $version" --notes-file windows-release-notes.md
               $uploaded = ($LASTEXITCODE -eq 0)
             }
             if ($uploaded) { break }

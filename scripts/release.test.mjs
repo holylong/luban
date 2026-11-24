@@ -35,7 +35,7 @@ test("native platform and architecture artifact matrix", () => {
     for (const arch of arches) {
       const plan = planned([], host, arch, "2.0.1");
       assert.equal(plan.platform, platform);
-      assert.equal(plan.artifacts.length, platform === "windows" ? 4 : 3);
+      assert.equal(plan.artifacts.length, platform === "windows" ? 6 : 3);
       assert.deepEqual(plan.artifacts, ["cli", "desktop", "creator"].flatMap(kind =>
         planned(["--kind", kind], host, arch, "2.0.1").artifacts));
       assert.equal(plan.script, `package-${platform}.mjs`);
@@ -43,7 +43,7 @@ test("native platform and architecture artifact matrix", () => {
     }
   }
   assert.deepEqual(planned(["--kind", "desktop"], "linux", "x64", "2.0.1").artifacts, ["luban-desktop_2.0.1_amd64.deb"]);
-  assert.deepEqual(planned(["--kind", "cli"], "win32", "x64", "2.0.1").artifacts, ["luban-cli-2.0.1-win-x64.zip"]);
+  assert.deepEqual(planned(["--kind", "cli"], "win32", "x64", "2.0.1").artifacts, ["luban-cli-2.0.1-win-x64.zip", "luban-cli-2.0.1-win-x64-setup.exe"]);
   assert.deepEqual(planned(["--kind", "setup"], "win32", "x64", "2.0.1").artifacts, ["luban-2.0.1-win-x64-setup.exe"]);
   // macOS desktop ships a disk image; every other target keeps a single archive.
   assert.deepEqual(planned(["--platform", "mac", "--dry-run"], "darwin", "arm64", "2.0.1").artifacts, ["luban-cli-2.0.1-mac-arm64.zip", "luban-desktop-2.0.1-mac-arm64.dmg", "luban-creator-2.0.1-mac-arm64.dmg"]);
@@ -52,7 +52,7 @@ test("native platform and architecture artifact matrix", () => {
   assert.deepEqual(planned(["--kind", "creator"], "darwin", "arm64", "2.0.1").artifacts, ["luban-creator-2.0.1-mac-arm64.dmg"]);
   assert.deepEqual(planned(["--kind", "creator"], "linux", "x64", "2.0.1").artifacts, ["luban-creator_2.0.1_amd64.deb"]);
   assert.deepEqual(planned(["--kind", "creator"], "linux", "arm64", "2.0.1").artifacts, ["luban-creator_2.0.1_arm64.deb"]);
-  assert.deepEqual(planned(["--kind", "creator"], "win32", "x64", "2.0.1").artifacts, ["luban-creator-2.0.1-win-x64.zip"]);
+  assert.deepEqual(planned(["--kind", "creator"], "win32", "x64", "2.0.1").artifacts, ["luban-creator-2.0.1-win-x64.zip", "luban-creator-2.0.1-win-x64-setup.exe"]);
 });
 
 test("rejects invalid options and cross compilation before starting builds", () => {
