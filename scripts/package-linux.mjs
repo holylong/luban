@@ -1,4 +1,4 @@
-/** Build separately named, self-contained Linux CLI and Desktop installers. */
+/** Build self-contained Linux CLI, Desktop and Creator installers. */
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +11,7 @@ const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).ver
 const architecture = { x64: "amd64", arm64: "arm64" }[process.arch];
 const selection = process.argv[2] || "all";
 if (process.platform !== "linux" || !architecture) throw new Error("package:linux requires Linux x64 or arm64");
-if (!["all", "cli", "desktop"].includes(selection)) throw new Error("choose all, cli, or desktop");
+if (!["all", "cli", "desktop", "creator"].includes(selection)) throw new Error("choose all, cli, desktop, or creator");
 
 function run(label, command, args, cwd) {
   process.stdout.write(`\n> ${label}\n`);
@@ -24,7 +24,11 @@ const nodeLicense = [resolve(dirname(process.execPath), "..", "LICENSE"), "/usr/
   .find(candidate => existsSync(candidate));
 if (!nodeLicense) throw new Error("Node.js license not found beside node or in /usr/share/doc/nodejs");
 
+/** @param {"cli" | "desktop" | "creator"} kind */
 function packageVariant(kind) {
+  if (kind === "creator" && !existsSync(join(root, "dist", "web-ui", "creator.html"))) {
+    throw new Error("Creator web UI missing; install the dev dependencies and rebuild");
+  }
   const packageName = `luban-${kind}`;
   const stage = mkdtempSync(join(tmpdir(), `${packageName}-deb-`));
   const payload = join(stage, "opt", packageName);
@@ -54,25 +58,31 @@ function packageVariant(kind) {
       }
     } else {
       const electronSource = join(root, "node_modules", "electron", "dist");
-      if (!existsSync(join(electronSource, "electron"))) throw new Error("Electron runtime missing; run npm ci before package:linux:desktop");
+      if (!existsSync(join(electronSource, "electron"))) throw new Error(`Electron runtime missing; run npm run release -- --kind ${kind}`);
       const electron = join(payload, "electron");
       cpSync(electronSource, electron, { recursive: true });
       chmodSync(join(electron, "chrome-sandbox"), 0o4755);
-      cpSync(join(root, "apps", "desktop"), join(payload, "desktop"), { recursive: true });
-      for (const name of ["luband", "luban-desktop"]) {
+      cpSync(join(root, "apps", kind), join(payload, kind), { recursive: true });
+      for (const name of kind === "desktop" ? ["luband", packageName] : [packageName]) {
         const launcher = join(bin, name);
-        copyFileSync(join(root, "packaging", "linux", "luban-desktop"), launcher);
+        copyFileSync(join(root, "packaging", "linux", packageName), launcher);
         chmodSync(launcher, 0o755);
       }
       const applications = join(stage, "usr", "share", "applications");
-      const icons = join(stage, "usr", "share", "icons", "hicolor");
+      const icons = join(stage, "usr", "share", "icons");
       mkdirSync(applications, { recursive: true });
-      mkdirSync(icons, { recursive: true });
-      copyFileSync(join(root, "packaging", "linux", "luban.desktop"), join(applications, "luban-desktop.desktop"));
-      for (const size of [16, 24, 32, 48, 64, 128, 192, 256, 512]) {
-        const directory = join(icons, `${size}x${size}`, "apps");
+      const desktopFile = kind === "creator" ? "luban-creator.desktop" : "luban.desktop";
+      copyFileSync(join(root, "packaging", "linux", desktopFile), join(applications, `${packageName}.desktop`));
+      if (kind === "creator") {
+        const directory = join(stage, "usr", "share", "pixmaps");
         mkdirSync(directory, { recursive: true });
-        copyFileSync(join(root, "assets", `luban-${size}.png`), join(directory, "luban.png"));
+        copyFileSync(join(root, "assets", "creator-app-1024.png"), join(directory, "luban-creator.png"));
+      } else {
+        for (const size of [16, 24, 32, 48, 64, 128, 192, 256, 512]) {
+          const directory = join(icons, "hicolor", `${size}x${size}`, "apps");
+          mkdirSync(directory, { recursive: true });
+          copyFileSync(join(root, "assets", `luban-${size}.png`), join(directory, "luban.png"));
+        }
       }
     }
 
@@ -82,10 +92,10 @@ function packageVariant(kind) {
     writeFileSync(join(metadata, "control"), [
       `Package: ${packageName}`, `Version: ${version}`, `Architecture: ${architecture}`,
       "Maintainer: luban <noreply@github.com>", "Section: devel", "Priority: optional",
-      "Conflicts: luban", "Replaces: luban",
-      `Depends: libc6 (>= 2.28), libstdc++6${kind === "desktop" ? desktopDependencies : ""}`,
-      `Description: luban ${kind === "desktop" ? "graphical coding workspace" : "command-line coding agent"}`,
-      kind === "desktop" ? " Browse project files and code in a desktop window." : " Run the luban Agent in a terminal or script.", "",
+      ...(kind === "creator" ? [] : ["Conflicts: luban", "Replaces: luban"]),
+      `Depends: libc6 (>= 2.28), libstdc++6${kind === "cli" ? "" : desktopDependencies}`,
+      `Description: luban ${{ cli: "command-line coding agent", desktop: "graphical coding workspace", creator: "Creator task queue" }[kind]}`,
+      { cli: " Run the luban Agent in a terminal or script.", desktop: " Browse project files and code in a desktop window.", creator: " Schedule and manage tasks in the Creator desktop app." }[kind], "",
     ].join("\n"));
     const output = join(root, "release");
     mkdirSync(output, { recursive: true });
@@ -100,3 +110,4 @@ function packageVariant(kind) {
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")], root);
 if (selection === "all" || selection === "cli") packageVariant("cli");
 if (selection === "all" || selection === "desktop") packageVariant("desktop");
+if (selection === "all" || selection === "creator") packageVariant("creator");

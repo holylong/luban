@@ -35,8 +35,9 @@ test("native platform and architecture artifact matrix", () => {
     for (const arch of arches) {
       const plan = planned([], host, arch, "2.0.1");
       assert.equal(plan.platform, platform);
-      // macOS ships a third program (造物主) beside the CLI and the desktop app.
-      assert.equal(plan.artifacts.length, platform === "macos" ? 3 : 2);
+      assert.equal(plan.artifacts.length, 3);
+      assert.deepEqual(plan.artifacts, ["cli", "desktop", "creator"].map(kind =>
+        planned(["--kind", kind], host, arch, "2.0.1").artifacts[0]));
       assert.equal(plan.script, `package-${platform}.mjs`);
       assert.ok(plan.artifacts.every(name => name.includes("2.0.1")));
     }
@@ -48,9 +49,10 @@ test("native platform and architecture artifact matrix", () => {
   assert.deepEqual(planned(["--platform", "mac", "--dry-run"], "darwin", "arm64", "2.0.1").artifacts, ["luban-cli-2.0.1-mac-arm64.zip", "luban-desktop-2.0.1-mac-arm64.dmg", "luban-creator-2.0.1-mac-arm64.dmg"]);
   assert.deepEqual(planned(["--platform", "mac"], "darwin", "x64", "2.0.1").fallbacks, [null, "luban-desktop-2.0.1-mac-x64.zip", "luban-creator-2.0.1-mac-x64.zip"]);
   assert.deepEqual(planned(["--kind", "desktop"], "linux", "x64", "2.0.1").fallbacks, [null]);
-  // 造物主 has a macOS packager only; other platforms ask for cli/desktop instead.
   assert.deepEqual(planned(["--kind", "creator"], "darwin", "arm64", "2.0.1").artifacts, ["luban-creator-2.0.1-mac-arm64.dmg"]);
-  assert.throws(() => planned(["--kind", "creator"], "linux", "x64", "2.0.1"), /macOS-only/u);
+  assert.deepEqual(planned(["--kind", "creator"], "linux", "x64", "2.0.1").artifacts, ["luban-creator_2.0.1_amd64.deb"]);
+  assert.deepEqual(planned(["--kind", "creator"], "linux", "arm64", "2.0.1").artifacts, ["luban-creator_2.0.1_arm64.deb"]);
+  assert.deepEqual(planned(["--kind", "creator"], "win32", "x64", "2.0.1").artifacts, ["luban-creator-2.0.1-win-x64.zip"]);
 });
 
 test("rejects invalid options and cross compilation before starting builds", () => {

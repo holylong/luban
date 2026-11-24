@@ -1,3 +1,8 @@
+## 2.9.9 — 2026-11-24
+
+- Linux 和 Windows 新增独立的 Creator（造物主）安装包，无需先安装 CLI 或桌面版。Linux 安装 `.deb` 后从应用菜单打开 luban Creator；Windows 解压便携 ZIP 后运行 `luban-creator.cmd`。
+- 三端的 `npm run release` 默认生成 CLI、Desktop 和 Creator，仍可用 `--kind creator` 单独打包。GitHub 发版现在也会上传三端的 Creator 包，包括此前只在本地打包的 macOS 版本。
+
 ## 2.9.8 — 2026-11-23
 
 - 桌面版能看 CSV/TSV 了：打开 `.csv` / `.tsv` / `.tab`，标题栏出现「表格预览」，`⌘/Ctrl+Shift+V` 与 Markdown 预览同一个键位切换。首行是文字表头时固定显示列名（无表头则用 A / B / C），行号固定在左侧，数字整列右对齐，宽表横向滚动时表头与行号不跟着跑。

@@ -14,7 +14,7 @@ const selection = process.argv[2] || "all";
 if (process.platform !== "win32" || process.arch !== "x64") {
   throw new Error("package:windows requires Windows x64");
 }
-if (!["all", "cli", "desktop", "exe", "setup"].includes(selection)) throw new Error("choose all, cli, desktop, exe, or setup");
+if (!["all", "cli", "desktop", "creator", "exe", "setup"].includes(selection)) throw new Error("choose all, cli, desktop, creator, exe, or setup");
 if (["exe", "setup"].includes(selection) && Number(process.versions.node.split(".")[0]) < 25) {
   throw new Error("Experimental EXE builds require Node.js >=25. Use npm run release for ZIP packages instead.");
 }
@@ -247,7 +247,11 @@ function copyRuntime(payload, kind) {
   run(`Smoke test ${kind} runtime`, join(payload, "node.exe"), [join(app, "dist", "cli.js"), "--version"], payload, true);
 }
 
+/** @param {"cli" | "desktop" | "creator"} kind */
 async function packageVariant(kind) {
+  if (kind === "creator" && !existsSync(join(root, "dist", "web-ui", "creator.html"))) {
+    throw new Error("Creator web UI missing; install the dev dependencies and rebuild");
+  }
   const folder = `luban-${kind}-${version}-win-x64`;
   const payload = join(stageRoot, folder);
   rmSync(payload, { recursive: true, force: true });
@@ -258,28 +262,32 @@ async function packageVariant(kind) {
     copyFileSync(join(root, "packaging", "windows", name), join(payload, name));
   }
   copyFileSync(join(root, "packaging", "windows", "luban.cmd"), join(payload, "luban.cmd"));
-  if (kind === "desktop") {
+  if (kind !== "cli") {
     const electronSource = join(root, "node_modules", "electron", "dist");
     if (!existsSync(join(electronSource, "electron.exe"))) {
-      throw new Error("Electron runtime missing; run npm ci before package:windows:desktop");
+      throw new Error(`Electron runtime missing before package:windows:${kind}`);
     }
     cpSync(electronSource, join(payload, "electron"), { recursive: true });
     await rcedit(join(payload, "electron", "electron.exe"), {
       icon: join(payload, "luban.ico"),
-      "version-string": { ProductName: "luban", FileDescription: "luban desktop workspace" },
+      "version-string": kind === "creator"
+        ? { ProductName: "Creator", FileDescription: "luban Creator task queue" }
+        : { ProductName: "luban", FileDescription: "luban desktop workspace" },
       "product-version": version,
     });
-    cpSync(join(root, "apps", "desktop"), join(payload, "desktop"), { recursive: true });
-    for (const name of ["luband.cmd", "luban-desktop.cmd"]) {
-      copyFileSync(join(root, "packaging", "windows", "luban-desktop.cmd"), join(payload, name));
+    cpSync(join(root, "apps", kind), join(payload, kind), { recursive: true });
+    for (const name of kind === "desktop" ? ["luband.cmd", "luban-desktop.cmd"] : ["luban-creator.cmd"]) {
+      copyFileSync(join(root, "packaging", "windows", `luban-${kind}.cmd`), join(payload, name));
     }
   }
   writeFileSync(join(payload, "README.txt"), [
     `luban ${version} Windows x64 ${kind}`,
     "",
-    kind === "cli"
-      ? "Run luban.cmd from this folder, or add this folder to PATH."
-      : "Run luband.cmd to open the graphical workspace (luban-desktop.cmd is also supported). luban.cmd is the CLI. Add this folder to PATH to use luban and luband anywhere.",
+    {
+      cli: "Run luban.cmd from this folder, or add this folder to PATH.",
+      desktop: "Run luband.cmd to open the graphical workspace (luban-desktop.cmd is also supported). luban.cmd is the CLI. Add this folder to PATH to use luban and luband anywhere.",
+      creator: "Run luban-creator.cmd to open Creator. It stays in the notification area when closed. luban.cmd is the CLI.",
+    }[kind],
     "Run create-shortcuts.cmd to create desktop shortcuts with the luban icon.",
     "Node.js is bundled. Configuration is read from %USERPROFILE%\\.luban\\config.json.",
     "",
@@ -292,8 +300,9 @@ async function packageVariant(kind) {
 }
 
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")]);
-if (selection === "all" || selection === "desktop") await ensureElectron(root);
+if (["all", "desktop", "creator"].includes(selection)) await ensureElectron(root);
 if (selection === "all" || selection === "cli") await packageVariant("cli");
 if (selection === "all" || selection === "desktop") await packageVariant("desktop");
+if (selection === "all" || selection === "creator") await packageVariant("creator");
 if (selection === "exe") await packageSingleExe();
 if (selection === "setup") await packageSetup();

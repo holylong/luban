@@ -12,10 +12,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const aliases = { linux: "linux", windows: "windows", win32: "windows", macos: "macos", mac: "macos", darwin: "macos" };
 const help = `Usage: npm run release -- [--platform auto|linux|windows|macos] [--kind all|cli|desktop|creator|exe|setup] [--dry-run]
 
-Defaults: current OS, CLI + Desktop (+ 造物主 on macOS). Outputs go to release/ with SHA-256 checksums.
+Defaults: current OS, CLI + Desktop + 造物主. Outputs go to release/ with SHA-256 checksums.
 Windows defaults to portable ZIPs. Experimental EXE/setup builds require explicit --kind exe/setup.
 macOS Desktop and 造物主 prefer a .dmg image and fall back to a .zip when hdiutil fails.
-造物主 is macOS-only for now; other platforms build cli and desktop only.
 Build on the target OS using its native Node architecture; cross-compilation is not supported.
 Install dependencies with npm ci first. No git changes, tags, or uploads are performed.
 `;
@@ -72,9 +71,7 @@ export function releasePlan(args, host = process.platform, arch = process.arch, 
   }
   // The installer wraps the Windows single-file build, so it has no peer elsewhere.
   if (["exe", "setup"].includes(kind) && platform !== "windows") throw new Error("--kind exe/setup is Windows-only; use cli or desktop elsewhere");
-  // 造物主 is packaged by scripts/package-macos.mjs only; other platforms have no packager yet.
-  if (kind === "creator" && platform !== "macos") throw new Error("--kind creator is macOS-only for now; use cli or desktop on this platform");
-  const kinds = kind === "all" ? (platform === "macos" ? ["cli", "desktop", "creator"] : ["cli", "desktop"]) : [kind];
+  const kinds = kind === "all" ? ["cli", "desktop", "creator"] : [kind];
   /** @typedef {{name: string, fallback: string | null}} Artifact */
   /** @type {Artifact[]} */
   const selected = [];

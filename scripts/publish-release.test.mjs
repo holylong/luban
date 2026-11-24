@@ -77,6 +77,12 @@ test("names map to the triple the catalog stores", () => {
   );
   assert.equal(describeArtifact(`luban-desktop-${VERSION}-windows-x64.exe`).platform, "win32");
   assert.equal(describeArtifact(`luban-creator-${VERSION}-mac-arm64.dmg`).arch, "arm64");
+  for (const [file, platform, extension] of [
+    [`luban-creator_${VERSION}_amd64.deb`, "linux", "deb"],
+    [`luban-creator-${VERSION}-win-x64.zip`, "win32", "zip"],
+  ]) {
+    assert.deepEqual(describeArtifact(file), { file, kind: "creator", version: VERSION, platform, arch: "x64", extension });
+  }
   assert.equal(describeArtifact("SHA256SUMS-2.7.12.txt"), undefined);
   assert.equal(describeArtifact("luban-cli-2.7.12-mac-x64.zip.sig"), undefined);
 });

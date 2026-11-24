@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=luban Creator
+Comment=Schedule and manage luban tasks
+Exec=/usr/bin/luban-creator
+TryExec=/usr/bin/luban-creator
+Icon=luban-creator
+Terminal=false
+Categories=Utility;

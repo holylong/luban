@@ -74,7 +74,7 @@ jobs:
       # never runs during `npm ci`. Fetch the runtime explicitly before packaging.
       - name: Ensure Electron runtime
         run: node node_modules/electron/install.js
-      - name: Build CLI and Desktop packages
+      - name: Build CLI, Desktop and Creator packages
         run: npm run release -- --platform linux
       - name: Publish GitHub Release
         env:
@@ -83,8 +83,10 @@ jobs:
           version=$(node -p 'require("./package.json").version')
           cli="release/luban-cli_${version}_amd64.deb"
           desktop="release/luban-desktop_${version}_amd64.deb"
+          creator="release/luban-creator_${version}_amd64.deb"
           test -s "$cli"
           test -s "$desktop"
+          test -s "$creator"
           # The body is this version's CHANGELOG section plus the packages
           # below: a release page that only lists file names answers none of
           # the reader's questions.
@@ -97,9 +99,9 @@ jobs:
           for attempt in 1 2 3 4 5; do
             uploaded=0
             if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-              gh release upload "$GITHUB_REF_NAME" "$cli" "$desktop" --clobber && uploaded=1
+              gh release upload "$GITHUB_REF_NAME" "$cli" "$desktop" "$creator" --clobber && uploaded=1
             else
-              gh release create "$GITHUB_REF_NAME" "$cli" "$desktop" --verify-tag --title "luban ${version}" --notes-file release-notes.md && uploaded=1
+              gh release create "$GITHUB_REF_NAME" "$cli" "$desktop" "$creator" --verify-tag --title "luban ${version}" --notes-file release-notes.md && uploaded=1
             fi
             [ "$uploaded" = "1" ] && break
             echo "release not published yet (attempt ${attempt}/5); retrying"
@@ -107,7 +109,7 @@ jobs:
           done
           set -e
           test "$uploaded" = "1"
-          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -ge 2
+          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -ge 3
       - name: Record publication for SSH verification
         run: |
           git config user.name "github-actions[bot]"
@@ -117,7 +119,7 @@ jobs:
           # as non-fast-forward whenever the other job records first. Re-fetch the
           # remote notes tip and rebuild our note on top of it, so the push is a
           # fast-forward; retry to cover the fetch/push race itself.
-          note="GitHub Release ${GITHUB_REF_NAME} published with CLI and Desktop packages"
+          note="GitHub Release ${GITHUB_REF_NAME} published with CLI, Desktop and Creator packages"
           set +e
           pushed=0
           for attempt in 1 2 3 4 5; do
@@ -173,7 +175,8 @@ jobs:
           $version = node -p "require('./package.json').version"
           $cli = "release/luban-cli-${version}-win-x64.zip"
           $desktop = "release/luban-desktop-${version}-win-x64.zip"
-          foreach ($asset in @($cli, $desktop)) {
+          $creator = "release/luban-creator-${version}-win-x64.zip"
+          foreach ($asset in @($cli, $desktop, $creator)) {
             if (-not (Test-Path $asset) -or (Get-Item $asset).Length -eq 0) {
               throw "missing or empty asset: $asset"
             }
@@ -185,10 +188,10 @@ jobs:
             $uploaded = $false
             gh release view $env:GITHUB_REF_NAME *> $null
             if ($LASTEXITCODE -eq 0) {
-              gh release upload $env:GITHUB_REF_NAME $cli $desktop --clobber
+              gh release upload $env:GITHUB_REF_NAME $cli $desktop $creator --clobber
               $uploaded = ($LASTEXITCODE -eq 0)
             } else {
-              gh release create $env:GITHUB_REF_NAME $cli $desktop --verify-tag --title "luban $version" --notes-file windows-release-notes.md
+              gh release create $env:GITHUB_REF_NAME $cli $desktop $creator --verify-tag --title "luban $version" --notes-file windows-release-notes.md
               $uploaded = ($LASTEXITCODE -eq 0)
             }
             if ($uploaded) { break }
@@ -197,7 +200,7 @@ jobs:
           }
           if (-not $uploaded) { throw "release publish did not succeed after 5 attempts" }
           $count = gh release view $env:GITHUB_REF_NAME --json assets --jq '.assets | length'
-          if ([int]$count -lt 2) { throw "expected at least 2 assets, found $count" }
+          if ([int]$count -lt 3) { throw "expected at least 3 assets, found $count" }
 
   macos:
     needs: verify
@@ -233,7 +236,7 @@ jobs:
       # never runs during `npm ci`. Fetch the runtime explicitly before packaging.
       - name: Ensure Electron runtime
         run: node node_modules/electron/install.js
-      - name: Build macOS CLI and Desktop packages
+      - name: Build macOS CLI, Desktop and Creator packages
         run: npm run release -- --platform macos
       - name: Write release notes
         run: |
@@ -249,16 +252,20 @@ jobs:
             echo "missing or empty asset: $cli"
             exit 1
           fi
-          # Desktop is a dmg unless hdiutil failed and the zip fallback was written.
-          desktop=""
-          for candidate in "release/luban-desktop-${version}-mac-${{ matrix.arch }}.dmg" "release/luban-desktop-${version}-mac-${{ matrix.arch }}.zip"; do
-            if [ -s "$candidate" ]; then desktop="$candidate"; break; fi
+          # Each graphical app falls back to ZIP if its DMG could not be created.
+          assets=("$cli")
+          for kind in desktop creator; do
+            base="release/luban-${kind}-${version}-mac-${{ matrix.arch }}"
+            if [ -s "$base.dmg" ]; then
+              assets+=("$base.dmg")
+            elif [ -s "$base.zip" ]; then
+              assets+=("$base.zip")
+            else
+              echo "missing or empty $kind package (dmg or zip) for ${{ matrix.arch }}"
+              exit 1
+            fi
           done
-          if [ -z "$desktop" ]; then
-            echo "missing or empty desktop package (dmg or zip) for ${{ matrix.arch }}"
-            exit 1
-          fi
-          echo "publishing $cli and $desktop"
+          printf 'publishing %s\n' "${assets[@]}"
           # Every matrix leg and platform job publishes to the same release
           # concurrently, so a lost create race is retryable instead of fatal.
           set +e
@@ -266,9 +273,9 @@ jobs:
           for attempt in 1 2 3 4 5; do
             uploaded=0
             if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-              gh release upload "$GITHUB_REF_NAME" "$cli" "$desktop" --clobber && uploaded=1
+              gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber && uploaded=1
             else
-              gh release create "$GITHUB_REF_NAME" "$cli" "$desktop" --verify-tag --title "luban ${version}" --notes-file macos-release-notes.md && uploaded=1
+              gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --title "luban ${version}" --notes-file macos-release-notes.md && uploaded=1
             fi
             [ "$uploaded" = "1" ] && break
             echo "release not published yet (attempt ${attempt}/5); retrying"
@@ -276,7 +283,7 @@ jobs:
           done
           set -e
           test "$uploaded" = "1"
-          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -ge 2
+          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -ge 3
 
   notes:
     # Every packaging job creates the release with its own notes, so the body

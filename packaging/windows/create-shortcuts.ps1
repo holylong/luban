@@ -5,6 +5,9 @@ $launchers = @{ "luban CLI" = "luban.cmd" }
 if (Test-Path (Join-Path $PSScriptRoot "luban-desktop.cmd")) {
     $launchers["luban"] = "luban-desktop.cmd"
 }
+if (Test-Path (Join-Path $PSScriptRoot "luban-creator.cmd")) {
+    $launchers["luban Creator"] = "luban-creator.cmd"
+}
 foreach ($name in $launchers.Keys) {
     $shortcut = $shell.CreateShortcut((Join-Path $desktop "$name.lnk"))
     $shortcut.TargetPath = Join-Path $PSScriptRoot $launchers[$name]

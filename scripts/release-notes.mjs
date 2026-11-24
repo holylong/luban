@@ -33,6 +33,7 @@ function platformSection(platform, version) {
       "",
       `- \`luban-cli_${version}_amd64.deb\`：终端版，安装后运行 \`luban\` 或 \`luban-cli\`。`,
       `- \`luban-desktop_${version}_amd64.deb\`：图形桌面版，安装后运行 \`luban-desktop\`。`,
+      `- \`luban-creator_${version}_amd64.deb\`：造物主，安装后从应用菜单打开 luban Creator，或运行 \`luban-creator\`。`,
       "",
       "配置目录：`~/.luban/config.json`。",
     ].join("\n");
@@ -43,6 +44,7 @@ function platformSection(platform, version) {
       "",
       `- \`luban-cli-${version}-win-x64.zip\`：终端版，解压后运行 \`luban.cmd\`。`,
       `- \`luban-desktop-${version}-win-x64.zip\`：图形桌面版，解压后运行 \`luban-desktop.cmd\`（含 \`luban.cmd\`）。`,
+      `- \`luban-creator-${version}-win-x64.zip\`：造物主，解压后运行 \`luban-creator.cmd\`。`,
       "",
       "配置目录：`%USERPROFILE%\\.luban\\config.json`。",
     ].join("\n");
@@ -51,7 +53,9 @@ function platformSection(platform, version) {
     "**macOS**（无需安装，已内置 Node.js；x64 与 arm64 各一份）",
     "",
     `- \`luban-cli-${version}-mac-x64.zip\` / \`luban-cli-${version}-mac-arm64.zip\`：终端版，解压后运行 \`./luban\`。`,
-    `- \`luban-desktop-${version}-mac-x64.dmg\` / \`luban-desktop-${version}-mac-arm64.dmg\`：把卷内 \`luban Desktop.app\` 拖入「应用程序」。构建机无法生成镜像时改为发布同名 \`.zip\`。`,
+    `- \`luban-desktop-${version}-mac-x64.dmg\` / \`luban-desktop-${version}-mac-arm64.dmg\`：把卷内 \`luban Desktop.app\` 拖入「应用程序」。`,
+    `- \`luban-creator-${version}-mac-x64.dmg\` / \`luban-creator-${version}-mac-arm64.dmg\`：把卷内 \`Creator.app\` 拖入「应用程序」。`,
+    "  桌面版和造物主无法生成镜像时，改为发布同名 `.zip`。",
     "",
     "macOS 包为 ad-hoc 签名，首次打开若被 Gatekeeper 拦截，执行 `xattr -dr com.apple.quarantine .`。",
     "",

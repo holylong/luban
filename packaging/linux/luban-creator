@@ -1,0 +1,4 @@
+#!/bin/sh
+export LUBAN_NODE_BIN=/opt/luban-creator/node
+export LUBAN_CLI=/opt/luban-creator/app/dist/cli.js
+exec /opt/luban-creator/electron/electron /opt/luban-creator/creator "$@"

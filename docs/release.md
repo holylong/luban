@@ -20,13 +20,13 @@
 
 先运行 `npm ci --include=dev`（即使 NODE_ENV=production 也安装构建工具），然后运行：
 
-- `npm run release`：当前平台 CLI + Desktop（macOS 另加造物主）；Windows 输出两个便携 ZIP 和 SHA256SUMS。
-- `npm run release -- --kind cli`：仅 CLI ZIP，不下载 Electron。
-- `npm run release -- --kind desktop`：仅 Desktop ZIP/DMG。
-- `npm run release -- --kind creator`：仅造物主 `Creator.app`（`.dmg`，失败回退 `.zip`）。目前只有 macOS 打包脚本支持它，其他平台会明确报错。
-- `npm run release -- --dry-run`：查看计划。
+- `npm run release`：在当前系统打包 CLI、Desktop 和 Creator（造物主），并生成 SHA256SUMS。
+- `npm run release -- --kind cli`：仅打包 CLI，不下载 Electron。
+- `npm run release -- --kind desktop`：仅打包 Desktop。
+- `npm run release -- --kind creator`：仅打包造物主。
+- `npm run release -- --dry-run`：查看计划，不执行构建。
 
-Windows 解压后运行 `luban.cmd` 或 `luban-desktop.cmd`。包内自带 Node.js，桌面包另带 Electron，使用者不需要安装 npm。
+Windows 解压后运行对应的 `luban.cmd`、`luban-desktop.cmd` 或 `luban-creator.cmd`。Linux 安装造物主 `.deb` 后可从应用菜单打开 **luban Creator**，也可运行 `luban-creator`。包内自带 Node.js，Desktop 和 Creator 另带 Electron，不需要安装 npm。
 
 ## 网络受限环境
 
@@ -50,10 +50,10 @@ Electron 安装器优先复用已安装的同版本运行时/下载缓存；下�
 
 ## 其他平台与校验
 
-Linux 输出 CLI/Desktop `.deb`；macOS 输出 CLI `.zip`、Desktop `.dmg`、造物主 `.dmg`（两个 app 失败都回退 `.zip`）。
+Linux 输出三个 `.deb`，Windows 输出三个便携 `.zip`；macOS 输出 CLI `.zip`、Desktop `.dmg`、造物主 `.dmg`（两个 app 生成 DMG 失败时各自回退到 `.zip`）。
 不支持跨平台/架构构建。每次构建检查 package.json 与 package-lock.json 版本一致，自动构建服务端与 Web UI。
 `release/SHA256SUMS-<版本>-<平台>-<架构>-<kind>.txt` 只记录本次新生成的产物。
-脚本不会提交、打标签或上传。GitHub 标签发布工作流在目标系统打包，Windows 上传两个 ZIP。
+本地打包不会提交、打标签或上传。GitHub 标签发布工作流在目标系统构建并上传三个版本：Linux x64、Windows x64，以及 macOS x64 和 arm64 各一组。
 
 GitHub Release 的正文由 `scripts/release-notes.mjs` 生成：`## 更新内容` 取 CHANGELOG.md 中该版本一节，`## 安装包` 按平台列文件名与用法。打包 job 发布时带上本平台的正文，最后一个 `notes` job 用 `--platform all` 重写成完整正文，两处读的是同一份 CHANGELOG，所以发布页永远不会只剩一坨安装说明。该版本没有 CHANGELOG 一节时脚本直接失败，与 `publish:release` 一致。本地预览：`npm run notes:release -- --version 2.9.6`。
 

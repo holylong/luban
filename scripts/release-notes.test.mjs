@@ -36,6 +36,10 @@ test("the body leads with this version's changes, then the packages", () => {
     "luban-desktop-2.9.6-win-x64.zip",
     "luban-cli-2.9.6-mac-x64.zip",
     "luban-desktop-2.9.6-mac-arm64.dmg",
+    "luban-creator_2.9.6_amd64.deb",
+    "luban-creator-2.9.6-win-x64.zip",
+    "luban-creator-2.9.6-mac-x64.dmg",
+    "luban-creator-2.9.6-mac-arm64.dmg",
   ]) {
     assert.ok(body.includes(name), `missing ${name}`);
   }
