@@ -159,7 +159,10 @@ jobs:
         run: npm ci --no-audit --no-fund
       # electron@44 publishes no scripts field, so its binary-download postinstall
       # never runs during `npm ci`. Fetch the runtime explicitly before packaging.
-      - name: Build Windows portable ZIPs
+      - name: Prepare Inno Setup compiler
+        shell: pwsh
+        run: node scripts/ensure-inno.mjs
+      - name: Build Windows ZIPs and Desktop installer
         run: npm run release -- --platform windows
       - name: Write release notes
         shell: pwsh
@@ -176,7 +179,8 @@ jobs:
           $cli = "release/luban-cli-${version}-win-x64.zip"
           $desktop = "release/luban-desktop-${version}-win-x64.zip"
           $creator = "release/luban-creator-${version}-win-x64.zip"
-          foreach ($asset in @($cli, $desktop, $creator)) {
+          $setup = "release/luban-desktop-${version}-win-x64-setup.exe"
+          foreach ($asset in @($cli, $desktop, $creator, $setup)) {
             if (-not (Test-Path $asset) -or (Get-Item $asset).Length -eq 0) {
               throw "missing or empty asset: $asset"
             }
@@ -188,10 +192,10 @@ jobs:
             $uploaded = $false
             gh release view $env:GITHUB_REF_NAME *> $null
             if ($LASTEXITCODE -eq 0) {
-              gh release upload $env:GITHUB_REF_NAME $cli $desktop $creator --clobber
+              gh release upload $env:GITHUB_REF_NAME $cli $desktop $creator $setup --clobber
               $uploaded = ($LASTEXITCODE -eq 0)
             } else {
-              gh release create $env:GITHUB_REF_NAME $cli $desktop $creator --verify-tag --title "luban $version" --notes-file windows-release-notes.md
+              gh release create $env:GITHUB_REF_NAME $cli $desktop $creator $setup --verify-tag --title "luban $version" --notes-file windows-release-notes.md
               $uploaded = ($LASTEXITCODE -eq 0)
             }
             if ($uploaded) { break }

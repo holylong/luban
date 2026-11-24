@@ -252,7 +252,7 @@ body.desktop-dragging-pane .desktop-splitter:hover { background: var(--blue); }
 .desktop-console-output { flex: 1; min-height: 0; overflow: auto; padding: 6px 10px; font: 12px/1.6 var(--mono); }
 .desktop-console-output pre { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .desktop-console-output small { color: var(--dim); }
-.desktop-console-format { flex: none; display: flex; gap: 4px; padding: 2px 8px; line-height: 1; } border-bottom: 1px solid var(--line); }
+.desktop-console-format { flex: none; display: flex; gap: 4px; padding: 2px 8px; line-height: 1; border-bottom: 1px solid var(--line); }
 .desktop-console-format button[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); }
 .desktop-console-markdown { min-width: 0; overflow-x: auto; padding: 6px 0; }
 .desktop-console-markdown .md table { width: max-content; min-width: 100%; }

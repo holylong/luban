@@ -2,6 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, ipcMain, proto
 const { preparePetTask } = require("./pet-task.cjs");
 const { chooseNewWorkspace } = require("./new-workspace.cjs");
 const { hideForTray } = require("./window-close.cjs");
+const { HEALTH_PROBE, createRendererWatch } = require("./renderer-health.cjs");
 const { snapshot: botSnapshot } = require("./bot-host.cjs");
 let pet;
 let petJob;
@@ -413,8 +414,11 @@ if (noGpuFlag && existsSync(noGpuFlag)) {
   }
 }
 
-const cli = process.env.LUBAN_CLI || resolve(__dirname, "../../dist/cli.js");
-const node = process.env.LUBAN_NODE_BIN || "node";
+// Installed shortcuts launch Electron directly (no environment-setting cmd).
+const bundledRoot = resolve(__dirname, "..");
+const cli = process.env.LUBAN_CLI || (existsSync(join(bundledRoot, "app", "dist", "cli.js"))
+  ? join(bundledRoot, "app", "dist", "cli.js") : resolve(__dirname, "../../dist/cli.js"));
+const node = process.env.LUBAN_NODE_BIN || (existsSync(join(bundledRoot, "node.exe")) ? join(bundledRoot, "node.exe") : "node");
 /* Everything compiled sits beside the CLI, and inside a bundle that is the only
  * copy: Resources/luban/dist, nowhere near __dirname. Deriving the directory
  * from LUBAN_CLI is what keeps the menu's update import from throwing
@@ -801,6 +805,7 @@ function installWindowGuards(session) {
     if (session.webContentsId) sessions.delete(session.webContentsId);
     session.webContentsId = undefined;
     session.window = undefined;
+    session.livenessWatch?.stop();
     if (session.livenessTimer) { clearInterval(session.livenessTimer); session.livenessTimer = undefined; }
     session.dirty = false;
     // A crash rebuild destroys the window on purpose: the backend and the
@@ -846,26 +851,27 @@ function installWindowGuards(session) {
  * A renderer that stops answering looks the same as a dead one from the
  * outside: frozen window, no repaint. Chromium's own `unresponsive` event only
  * fires for a window it considers interactive, so the main process pings its own
- * renderer instead — a `1` every 10s, and a rebuild when one ping goes unanswered
- * for 15s. The backend holds the conversation, so a rebuild loses nothing.
+ * renderer instead, checking workbench DOM as well as JS responsiveness.
+ * React can unmount the UI while JS still answers. Backend state survives a
+ * rebuild; unsaved renderer-only edits may not.
  */
 function startLivenessWatch(session) {
   if (session.livenessTimer) clearInterval(session.livenessTimer);
-  let pendingSince = 0;
+  session.livenessWatch?.stop();
+  const watchedWindow = session.window;
+  const watch = createRendererWatch({
+    probe: () => watchedWindow.webContents.executeJavaScript(HEALTH_PROBE, true),
+    recover: detail => {
+      if (session.window === watchedWindow && !quitting && !session.opening && !session.rebuilding) {
+        reportCrash(session, "unresponsive", detail);
+      }
+    },
+  });
+  session.livenessWatch = watch;
   const timer = setInterval(() => {
     const win = session.window;
-    if (quitting || session.rebuilding || !win || win.isDestroyed()) return;
-    if (pendingSince) {
-      if (Date.now() - pendingSince < 15000) return;
-      pendingSince = 0;
-      reportCrash(session, "unresponsive", "a ping went unanswered for 15s");
-      return;
-    }
-    pendingSince = Date.now();
-    // Settling either way means the renderer is alive enough to answer; only
-    // silence counts as a wedge, so a rejected call must not look like one.
-    win.webContents.executeJavaScript("1", true)
-      .then(() => { pendingSince = 0; }, () => { pendingSince = 0; });
+    if (quitting || session.rebuilding || session.opening || !win || win.isDestroyed() || win.webContents.isLoadingMainFrame()) return;
+    watch.tick();
   }, 10000);
   timer.unref?.();
   session.livenessTimer = timer;

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { artifactSignature, releasePlan, resolveArtifacts, versionProblem, writeChecksums } from "./release.mjs";
 import { cachedElectronArchive, electronArchiveName, electronCacheRoot, findVerifiedArchive, releaseEnvironment } from "./lib/release-network.mjs";
 
@@ -35,9 +35,9 @@ test("native platform and architecture artifact matrix", () => {
     for (const arch of arches) {
       const plan = planned([], host, arch, "2.0.1");
       assert.equal(plan.platform, platform);
-      assert.equal(plan.artifacts.length, 3);
-      assert.deepEqual(plan.artifacts, ["cli", "desktop", "creator"].map(kind =>
-        planned(["--kind", kind], host, arch, "2.0.1").artifacts[0]));
+      assert.equal(plan.artifacts.length, platform === "windows" ? 4 : 3);
+      assert.deepEqual(plan.artifacts, ["cli", "desktop", "creator"].flatMap(kind =>
+        planned(["--kind", kind], host, arch, "2.0.1").artifacts));
       assert.equal(plan.script, `package-${platform}.mjs`);
       assert.ok(plan.artifacts.every(name => name.includes("2.0.1")));
     }
@@ -121,7 +121,7 @@ test("a verified Electron archive is reused whatever mirror downloaded it", asyn
     assert.equal(findVerifiedArchive(dir, name), join(dir, "github-key", name));
     assert.equal(findVerifiedArchive(join(dir, "absent"), name), null);
     assert.equal(electronCacheRoot({ ELECTRON_CACHE: dir }), dir);
-    assert.ok(electronCacheRoot({}).startsWith("/"));
+    assert.ok(isAbsolute(electronCacheRoot({})));
     // Nothing cached for this host means no archive, not an exception.
     assert.equal(cachedElectronArchive(join(dir, "no-node-modules")), null);
   } finally { await rm(dir, { recursive: true, force: true }); }

@@ -1,6 +1,6 @@
 # 发布版本打包
 
-版本：2.0.13 起 Windows 默认恢复 ZIP，不再强制构建 SEA EXE 或依赖 7-Zip。
+Windows 默认生成便携 ZIP，Desktop 同时生成 Inno Setup 安装器；不依赖实验性 SEA 或 7-Zip。
 
 ## 版本号规则
 
@@ -41,7 +41,15 @@ Electron 安装器优先复用已安装的同版本运行时/下载缓存；下�
 如果只有 Electron 无法下载，运行 `npm run release -- --kind cli`，先获得独立可运行的 CLI ZIP。
 缓存不完整且没有可访问的镜像时，需要先联网安装依赖，不能凭空生成运行时。
 
-## 实验性 EXE（不属于默认发布）
+## Windows Desktop 安装器
+
+`npm run release -- --kind desktop` 同时生成便携 ZIP 和 `luban-desktop-<版本>-win-x64-setup.exe`。编译器可用 `node scripts/ensure-inno.mjs` 安装到 `release/.tools/inno`，或安装 Inno Setup 6 / 设置 `LUBAN_ISCC`。GitHub Windows job 会自动准备编译器并上传安装器；缺少编译器会明确失败，不会悄悄只发 ZIP。
+
+安装器默认安装到 `%LOCALAPPDATA%\Programs\luban`，无需管理员权限，创建开始菜单及可选桌面快捷方式，并注册系统卸载项。固定 AppId 会让新版沿用原安装位置覆盖升级；安装前请退出 luban（包括托盘）及相关 CLI。配置和会话不在安装目录，卸载不会删除 `~/.luban`。已有便携版可首次运行安装器迁移到固定目录，不会自动删除原解压目录。
+
+当前安装器升级方式是下载新版 setup 后双击覆盖安装；Windows 应用内自动安装仍未实现，升级目录中的 ZIP 保持兼容。
+
+## 实验性 CLI EXE（不属于默认发布）
 
 `npm run release -- --kind exe` 显式尝试 Node SEA 单文件 CLI；`--kind setup` 显式尝试 7-Zip SFX。
 这两个选项要求 Windows x64、Node >=25；setup 还需要 7-Zip。仍属实验功能，不保证目标机器可用。
@@ -50,7 +58,7 @@ Electron 安装器优先复用已安装的同版本运行时/下载缓存；下�
 
 ## 其他平台与校验
 
-Linux 输出三个 `.deb`，Windows 输出三个便携 `.zip`；macOS 输出 CLI `.zip`、Desktop `.dmg`、造物主 `.dmg`（两个 app 生成 DMG 失败时各自回退到 `.zip`）。
+Linux 输出三个 `.deb`，Windows 输出三个便携 `.zip` 及 Desktop `-setup.exe` 安装包；macOS 输出 CLI `.zip`、Desktop `.dmg`、造物主 `.dmg`（两个 app 生成 DMG 失败时各自回退到 `.zip`）。
 不支持跨平台/架构构建。每次构建检查 package.json 与 package-lock.json 版本一致，自动构建服务端与 Web UI。
 `release/SHA256SUMS-<版本>-<平台>-<架构>-<kind>.txt` 只记录本次新生成的产物。
 本地打包不会提交、打标签或上传。GitHub 标签发布工作流在目标系统构建并上传三个版本：Linux x64、Windows x64，以及 macOS x64 和 arm64 各一组。

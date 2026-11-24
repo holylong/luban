@@ -185,7 +185,27 @@ async function findPage(timeoutMs) {
     if (!thawed) fail(`${thawMs}s 内卡死的窗口没有恢复`);
     console.log(`after wedge: ${thawMs}s newTarget=${recovered.page.id !== thawed.page.id} files=${thawed.alive}`);
 
-    // Phase 3: the crash-loop fallback. The second GPU crash writes this flag;
+    // Phase 3: JS is alive but React's entire workbench has disappeared.
+    const blank = connect(thawed.page);
+    await blank.ready;
+    await blank.evaluate(`document.getElementById('root').replaceChildren(); window.__blankProbe = true`);
+    blank.ws.close();
+    const blankAt = Date.now();
+    let restoredBlank = false;
+    while (Date.now() - blankAt < 45000) {
+      const target = await findPage(1500);
+      if (!target || target.id === thawed.page.id) { await wait(500); continue; }
+      const restored = connect(target);
+      await restored.ready;
+      try {
+        restoredBlank = await restored.evaluate(`!!document.querySelector('.desktop-status') && document.querySelectorAll('.desktop-file').length > 0 && !window.__blankProbe`);
+      } finally { restored.ws.close(); }
+      if (restoredBlank) break;
+    }
+    if (!restoredBlank) fail('JS 仍存活但界面被清空后，窗口没有自动恢复');
+    console.log(`after blank DOM: ${((Date.now() - blankAt) / 1000).toFixed(1)}s workbench restored`);
+
+    // Phase 4: the crash-loop fallback. The second GPU crash writes this flag;
     // the next start must come up with the software compositor and say so, or
     // the machine keeps producing black boards and nobody can tell why.
     await stopChild(child);

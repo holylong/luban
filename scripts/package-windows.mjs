@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { patchInk } from "./patch-ink.mjs";
 import { ensureElectron, installRuntime } from "./lib/release-network.mjs";
+import { isccPath } from "./ensure-inno.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
@@ -297,6 +298,11 @@ async function packageVariant(kind) {
   rmSync(zip, { force: true });
   run(`Zip ${kind} package`, "tar.exe", ["-a", "-c", "-f", zip, "-C", stageRoot, folder]);
   process.stdout.write(`\nPackage: ${zip}\n`);
+  if (kind === "desktop") {
+    const compiler = isccPath();
+    if (!compiler) throw new Error("Inno Setup 6 is required for Desktop setup: run node scripts/ensure-inno.mjs (or set LUBAN_ISCC)");
+    run("Build Desktop installer", compiler, [`/DAppVersion=${version}`, `/DPayload=${payload}`, `/DReleaseDir=${releaseDir}`, join(root, "packaging", "windows", "desktop.iss")]);
+  }
 }
 
 run("Build luban", process.execPath, [join(root, "scripts", "build.mjs")]);

@@ -1,6 +1,6 @@
 {
   "name": "luban",
-  "version": "2.9.9",
+  "version": "2.9.11",
   "description": "Standalone Node.js agent with Free-style TUI, native LAN mesh, jobs, sync, and Web workspace",
   "license": "MIT",
   "author": "luban contributors",
@@ -55,7 +55,7 @@
     "smoke:creator:drive": "node scripts/smoke-creator-drive.mjs",
     "release": "node scripts/release.mjs",
     "publish:release": "node scripts/publish-release.mjs",
-    "test:release": "node --test scripts/release.test.mjs scripts/release-notes.test.mjs",
+    "test:release": "node --test scripts/release.test.mjs scripts/release-notes.test.mjs scripts/windows-installer.test.mjs",
     "test:publish": "node --test scripts/publish-release.test.mjs",
     "notes:release": "node scripts/release-notes.mjs",
     "test:android": "node --test scripts/android-navigation.test.mjs",

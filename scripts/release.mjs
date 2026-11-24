@@ -13,7 +13,8 @@ const aliases = { linux: "linux", windows: "windows", win32: "windows", macos: "
 const help = `Usage: npm run release -- [--platform auto|linux|windows|macos] [--kind all|cli|desktop|creator|exe|setup] [--dry-run]
 
 Defaults: current OS, CLI + Desktop + 造物主. Outputs go to release/ with SHA-256 checksums.
-Windows defaults to portable ZIPs. Experimental EXE/setup builds require explicit --kind exe/setup.
+Windows builds portable ZIPs plus an Inno Setup Desktop installer (Inno Setup 6 required).
+Experimental CLI EXE/setup builds still require explicit --kind exe/setup.
 macOS Desktop and 造物主 prefer a .dmg image and fall back to a .zip when hdiutil fails.
 Build on the target OS using its native Node architecture; cross-compilation is not supported.
 Install dependencies with npm ci first. No git changes, tags, or uploads are performed.
@@ -84,6 +85,7 @@ export function releasePlan(args, host = process.platform, arch = process.arch, 
         continue;
       }
       selected.push({ name: `luban-${item}-${version}-win-${arch}.zip`, fallback: null });
+      if (item === "desktop") selected.push({ name: `luban-desktop-${version}-win-${arch}-setup.exe`, fallback: null });
 
     } else {
       const extension = item === "desktop" || item === "creator" ? "dmg" : "zip";

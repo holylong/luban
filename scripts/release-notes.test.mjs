@@ -64,6 +64,8 @@ test("a platform note only lists its own packages", () => {
 
   const windows = releaseBody({ version: "2.9.6", changelog: CHANGELOG, platform: "windows" });
   assert.ok(windows.includes("luban-desktop-2.9.6-win-x64.zip"));
+  assert.ok(windows.includes("luban-desktop-2.9.6-win-x64-setup.exe"));
+  assert.ok(windows.includes("覆盖升级"));
   assert.ok(!windows.includes("amd64.deb"));
 
   const macos = releaseBody({ version: "2.9.6", changelog: CHANGELOG, platform: "macos" });

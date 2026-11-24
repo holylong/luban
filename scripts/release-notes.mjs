@@ -40,7 +40,9 @@ function platformSection(platform, version) {
   }
   if (platform === "windows") {
     return [
-      "**Windows x64**（便携 ZIP，解压即用，已内置 Node.js）",
+      "**Windows x64**（桌面安装器 + 便携 ZIP，已内置 Node.js）",
+      "",
+      `- \`luban-desktop-${version}-win-x64-setup.exe\`：推荐的桌面安装包；双击安装，新版本运行安装器即可覆盖升级，无需反复解压。支持快捷方式和系统卸载，保留用户配置与会话。`,
       "",
       `- \`luban-cli-${version}-win-x64.zip\`：终端版，解压后运行 \`luban.cmd\`。`,
       `- \`luban-desktop-${version}-win-x64.zip\`：图形桌面版，解压后运行 \`luban-desktop.cmd\`（含 \`luban.cmd\`）。`,
