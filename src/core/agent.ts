@@ -255,6 +255,26 @@ const MAX_TRUNCATION_CONTINUES = 5;
  * repeats of one call inside it count as stuck. */
 const LOOP_WINDOW = 8;
 const LOOP_LIMIT = 5;
+/**
+ * Tools whose whole purpose is polling: the same arguments legitimately return
+ * the same answer while the work carries on elsewhere. Five identical
+ * `get_background_task` answers during a long build is waiting, not looping, so
+ * these are measured by their own streak instead of the loop window.
+ */
+const POLL_TOOLS = new Set(["get_background_task", "mesh_poll_job"]);
+/** Poll statuses that mean the polled work is still in flight. */
+const POLL_ACTIVE_STATES = new Set(["running", "stopping", "queued", "pending", "working", "starting", "in_progress", "in-progress"]);
+/** Unchanged polls of in-flight work tolerated before the model is reminded that
+ * waiting is not progress, and before the run stops waiting on its own. */
+const POLL_NUDGE_AFTER = 8;
+const POLL_STOP_AFTER = 30;
+/** True when a poll result still reports unfinished work. */
+function pollReportsActive(output: string): boolean {
+  try {
+    const parsed = JSON.parse(output) as { status?: unknown };
+    return typeof parsed?.status === "string" && POLL_ACTIVE_STATES.has(parsed.status.toLowerCase());
+  } catch { return false; }
+}
 /** Marks the nudge that asks for the rest of an answer cut short mid-stream. */
 const TRUNCATION_MARKER = "output-limit";
 
@@ -722,6 +742,10 @@ export class AgentRunner {
     let repeatCount = 0;
     /** Recent rounds for loop detection that survives call rotation and noisy results. */
     const recentRounds: Array<{ signature: string; result: string }> = [];
+    /** Consecutive polls of in-flight work that returned an unchanged answer. */
+    let pollStreak = 0;
+    let lastPollSignature = "";
+    let lastPollResult = "";
     // Text kept from responses the provider cut off, and where in the transcript
     // those pieces live, so the continuation can replace them with one answer.
     let truncatedText = "";
@@ -946,10 +970,15 @@ export class AgentRunner {
       if (thought.trim()) onEvent({ type: "thought", text: thought.trim() });
 
       const signature = toolCalls.map((call) => `${call.function.name}:${call.function.arguments}`).join("|");
+      const polling = toolCalls.every((call) => POLL_TOOLS.has(call.function.name));
+      // A poll whose previous answer still said "running" is waiting, not
+      // looping. A poll of a task that already finished is a real loop, so that
+      // one keeps the normal guard.
+      const waitingOnActivePoll = polling && signature === lastPollSignature && pollReportsActive(lastPollResult);
       // Check the requested call, so a warning does not block a new strategy.
       const repeatedRounds = recentRounds.filter((round) => round.signature === signature);
       const repeatedResults = new Set(repeatedRounds.map((round) => round.result));
-      if (repeatedRounds.length >= LOOP_LIMIT && repeatedResults.size <= Math.floor(repeatedRounds.length / 2)) {
+      if (!waitingOnActivePoll && repeatedRounds.length >= LOOP_LIMIT && repeatedResults.size <= Math.floor(repeatedRounds.length / 2)) {
         // Say what looped. A bare "repeated tool-call loop" left the user unable
         // to tell a stuck model from a guard misfiring on a legitimate poll.
         const detail = toolCalls.map((call) => `${call.function.name} ${clipContextText(call.function.arguments, 200)}`).join("; ");
@@ -1163,19 +1192,46 @@ export class AgentRunner {
       // it in made every result look fresh and the loop never registered.
       const resultSignature = messages.slice(-toolCalls.length)
         .map((message) => String(message.content ?? "")).join("|");
-      recentRounds.push({ signature, result: resultSignature });
-      if (recentRounds.length > LOOP_WINDOW) recentRounds.shift();
-      const sameCall = recentRounds.filter((round) => round.signature === signature);
-      const results = new Set(sameCall.map((round) => round.result));
-      const stuck = sameCall.length >= LOOP_LIMIT
-        && (results.size === 1 || results.size <= Math.floor(sameCall.length / 2));
-      repeatCount = stuck ? sameCall.length : 0;
+      // A poll that still reports unfinished work is waiting, not looping: by
+      // contract it answers with the same text until the background job moves,
+      // so it must stay out of the loop window — five identical
+      // `get_background_task` answers used to kill a healthy run in the middle
+      // of a long build. Polls get their own streak, and only a poll whose
+      // answer stopped changing *and* whose work no longer runs is a real loop.
+      const polledActive = polling
+        && messages.slice(-toolCalls.length).every((message) => pollReportsActive(String(message.content ?? "")));
+      if (polledActive) {
+        pollStreak = signature === lastPollSignature && resultSignature === lastPollResult ? pollStreak + 1 : 1;
+        lastPollSignature = signature;
+        lastPollResult = resultSignature;
+        repeatCount = 0;
+        if (pollStreak >= POLL_NUDGE_AFTER && pollStreak % POLL_NUDGE_AFTER === 0) {
+          const lastResult = messages.at(-1)!;
+          lastResult.content = `${lastResult.content ?? ""}\n[luban runtime] Still running, unchanged across ${pollStreak} polls. Waiting is fine, but do not spend every step on it: report progress, do other work, or check back after a longer interval.`;
+        }
+        if (pollStreak >= POLL_STOP_AFTER) {
+          const detail = toolCalls.map((call) => `${call.function.name} ${clipContextText(call.function.arguments, 200)}`).join("; ");
+          onEvent({ type: "error", text: `Stopped after ${pollStreak} unchanged polls: ${detail} is still running. It keeps running in the background; send 继续 to check on it.` });
+          return { ok: false, text: `${lastText}\n\n后台任务仍在运行，已停止继续轮询（连续 ${pollStreak} 次结果无变化）。任务没有中断，发送“继续”可再查看进度。`.trim(), steps: totalSteps, messages, stopReason: "loop", modelCalls, elapsedMs: Date.now() - runStartedAt };
+        }
+      } else {
+        pollStreak = 0;
+        // A poll of settled work is judged like any other repeated call.
+        if (polling) { lastPollSignature = ""; lastPollResult = ""; }
+        recentRounds.push({ signature, result: resultSignature });
+        if (recentRounds.length > LOOP_WINDOW) recentRounds.shift();
+        const sameCall = recentRounds.filter((round) => round.signature === signature);
+        const results = new Set(sameCall.map((round) => round.result));
+        const stuck = sameCall.length >= LOOP_LIMIT
+          && (results.size === 1 || results.size <= Math.floor(sameCall.length / 2));
+        repeatCount = stuck ? sameCall.length : 0;
+        if (repeatCount >= 3) {
+          const lastResult = messages.at(-1)!;
+          lastResult.content = `${lastResult.content ?? ""}\n[luban runtime] You repeated the identical tool call. Change strategy or give the final answer now.`;
+        }
+      }
       lastToolSignature = signature;
       lastResultSignature = resultSignature;
-      if (repeatCount >= 3) {
-        const lastResult = messages.at(-1)!;
-        lastResult.content = `${lastResult.content ?? ""}\n[luban runtime] You repeated the identical tool call. Change strategy or give the final answer now.`;
-      }
       if (await promote()) { step = -1; lastText = ""; lastToolSignature = ""; repeatCount = 0; recentRounds.length = 0; }
       // A phase label, not an event: the run is still working, and this fires
       // once per step, so recording it once per step is pure noise.
