@@ -9,7 +9,7 @@ import { hasConversation, SessionStore } from "../core/session-store.js";
 import { liveSessions } from "../core/live-session.js";
 import { SessionHistory, sharedHistory } from "../core/session-history.js";
 import type { LubanConfig, SyncMode } from "../core/types.js";
-import { refreshCodexModels, savePreferredModel, saveProject, saveTheme, saveUpdateSettings } from "../core/config.js";
+import { refreshCodexModels, saveConciseMode, savePreferredModel, saveProject, saveTheme, saveUpdateSettings } from "../core/config.js";
 import { isTransientWorkspace, visibleProjects } from "../core/project-registry.js";
 import { THEMES, findTheme, resolveTheme } from "../ui/theme.js";
 import { consumeCodexReset, formatCodexResetOutcome, readCodexRateLimits } from "../core/codex-account.js";
@@ -406,6 +406,9 @@ export class LubanWebServer {
         reasoning_effort: this.config.model.reasoningEffort ?? null,
         models: this.config.models.map(model => ({ id: model.id, name: model.name, provider: model.provider,
           reasoning_effort: model.reasoningEffort ?? null, reasoning_efforts: supportedReasoningEfforts(model) })),
+        // 极简模式 is a display preference, but the browser cannot read
+        // config.json, so the node reports it next to the model and version.
+        concise: this.config.concise === true,
         version: VERSION,
         runtime: "nodejs",
         interactive: Boolean(this.approvals),
@@ -689,6 +692,19 @@ export class LubanWebServer {
       await saveTheme(this.config.home, theme.id);
       this.config.theme = theme.id;
       return json(res, { active: resolveTheme(theme.id, this.config.themeColors) });
+    }
+    /**
+     * 极简模式 on/off, shared by the desktop button, the browser and the phone.
+     *
+     * Display only: the running job keeps every event, so switching back mid-run
+     * restores the full transcript. Saved to `config.json` so the terminal's
+     * `/concise` and this button agree after a restart.
+     */
+    if (url.pathname === "/api/concise") {
+      if (typeof body.enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
+      await saveConciseMode(this.config.home, body.enabled);
+      this.config.concise = body.enabled;
+      return json(res, { ok: true, concise: body.enabled });
     }
     if (url.pathname === "/api/update/settings") {
       if (body.check !== undefined && typeof body.check !== "boolean") throw new HttpError(400, "check must be a boolean");

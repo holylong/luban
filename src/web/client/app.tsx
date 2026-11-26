@@ -4,7 +4,7 @@ import { Inspector } from "./inspector";
 import { Sidebar } from "./sidebar";
 import { buildTimeline, Transcript } from "./transcript";
 import { liveProgress, STATUS_LABELS } from "./timeline";
-import { useWorkbench, type TaskMode } from "./store";
+import { useWorkbench, type TaskMode, type WorkbenchStore } from "./store";
 
 const MODE_LABELS: Record<TaskMode, string> = { edits: "Edits · 自动改文件", agent: "Agent · 每次写入确认", read: "Ask · 只读" };
 
@@ -119,6 +119,30 @@ export function Composer({ store }: { store: ReturnType<typeof useWorkbench> }):
   );
 }
 
+/**
+ * 极简模式 switch. It writes the same `config.json` flag the terminal's
+ * `/concise` writes, so both surfaces agree after a restart.
+ */
+export function toggleConcise(store: Pick<WorkbenchStore, "concise" | "setConcise">): Promise<void> {
+  return store.setConcise(!store.concise);
+}
+
+export function ConciseToggle({ store }: { store: ReturnType<typeof useWorkbench> }): React.ReactElement {
+  const [pending, setPending] = useState(false);
+  return (
+    <button
+      className={`pill toggle concise-toggle ${store.concise ? "on" : ""}`}
+      disabled={pending}
+      title={store.concise
+        ? "极简模式已开启：工具调用与过程说明只在状态行闪过，对话只留你的问题和最终结论。点击关闭（等同 /concise off）"
+        : "极简模式：隐藏工具调用与过程说明，只保留你的问题和最终结论（等同终端的 /concise）"}
+      onClick={() => { setPending(true); void toggleConcise(store).finally(() => setPending(false)); }}
+    >
+      {store.concise ? "极简 · 开" : "极简 · 关"}
+    </button>
+  );
+}
+
 export function TopBar({ store }: { store: ReturnType<typeof useWorkbench> }): React.ReactElement {
   const status = store.job?.status;
   const tone = status === "failed" || status === "cancelled" ? "bad" : status === "done" ? "ok" : status === "paused" ? "warn" : "";
@@ -126,6 +150,7 @@ export function TopBar({ store }: { store: ReturnType<typeof useWorkbench> }): R
     <header className="top">
       <span className="title">{store.job ? (store.job.title || store.job.id) : "New agent task"}</span>
       <div className="pills">
+        <ConciseToggle store={store} />
         <ComputerToggle notify={store.notify} />
         {status && <span className={`pill ${tone}`}>{STATUS_LABELS[status] ?? status}</span>}
         {store.job?.interactive && <span className="pill warn" title="工具审批会在此页面等待你的决定">交互审批</span>}
@@ -167,7 +192,7 @@ export function App(): React.ReactElement {
       <Sidebar store={store} />
       <main className="workspace">
         <TopBar store={store} />
-        <Transcript job={store.job} events={timeline} onCancel={() => void store.cancel()} onResume={() => void store.resume()} />
+        <Transcript job={store.job} concise={store.concise} events={timeline} onCancel={() => void store.cancel()} onResume={() => void store.resume()} />
         <Composer store={store} />
       </main>
       <Inspector store={store} />

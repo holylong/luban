@@ -147,6 +147,13 @@ export interface LubanConfig {
    * plan, "auto" only asks when the work spans several steps.
    */
   planning?: "off" | "auto" | "always";
+  /**
+   * 极简模式: the transcript keeps the question and the final answer only.
+   * Tool calls, edits, status notes and reasoning still stream past in the live
+   * one-line status, so a long run stays legible without filling the screen.
+   * Display only — the session, the model prompt and exports stay complete.
+   */
+  concise: boolean;
   permissions: PermissionSettings;
   mesh: MeshSettings;
   /** Optional per-TUI phone bridge, configured in config.json. */

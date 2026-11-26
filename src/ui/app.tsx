@@ -16,7 +16,7 @@ import { AgentRunner, initialMessages, type Approval } from "../core/agent.js";
 import { isFreeTierError, isModelTimeoutError, isUpstreamUnavailableError } from "../core/model-errors.js";
 import { isZenFreeModel } from "../core/opencode-zen.js";
 import { estimateMessagesTokens } from "../core/context.js";
-import { loadConfig, refreshCodexModels, savePermissionMode, savePreferredModel, saveTheme, saveUpdateSettings } from "../core/config.js";
+import { loadConfig, refreshCodexModels, saveConciseMode, savePermissionMode, savePreferredModel, saveTheme, saveUpdateSettings } from "../core/config.js";
 import { checkForUpdate, currentKind, downloadUpdate, installUpdate, startupCheckAllowed } from "../core/update.js";
 import { shortNotes } from "../core/update-command.js";
 import { ProviderAuthDialog } from "./provider-auth-dialog.js";
@@ -147,6 +147,7 @@ const COMMANDS = [
   ["/theme", "terminal color scheme"],
   ["/skin", "皮肤与加载宠物 · ollobot / midnight / …"],
   ["/details", "expand / collapse execution details"],
+  ["/concise", "极简输出 on / off：中间过程只闪在实时行"],
   ["/diff", "review code changes"],
   ["/mesh", "switch local conversation / mesh activity"],
   ["/computer", "computer control · on / off / status"],
@@ -160,7 +161,7 @@ const RUN_IMMEDIATE_COMMANDS = new Set([
   "/status", "/usage", "/ping", "/peers", "/jobs", "/inbox", "/cancel-job", "/add-contact",
   "/models", "/mode", "/settings", "/permissions",
   "/token",
-  "/plan", "/theme", "/skin", "/details", "/mesh", "/help", "/diff", "/verify",
+  "/plan", "/theme", "/skin", "/details", "/concise", "/mesh", "/help", "/diff", "/verify",
   // /computer only touches the session flag; it never needs the model.
   "/computer",
   // /pending is the withdraw list: a wrongly queued task is noticed mid-run.
@@ -181,6 +182,7 @@ const COMMAND_USAGE: Record<string, string> = {
   "/pending": "/pending — 待处理消息列表：↑↓ 选择，Enter 撤回，Esc 关闭",
   "/computer": "/computer [on|off|status] — 允许/收回电脑操控（截屏、鼠标、键盘）；不带参数在开/关之间切换，运行中 Ctrl+C 也会收回",
   "/mcp": "/mcp — MCP 服务列表：↑↓ 选择，Enter 试连，e 启停，t 信任，x 删除（再按一次确认），Esc 关闭",
+  "/concise": "/concise [on|off] — 极简输出：工具调用、编辑记录和过程说明都只在实时行闪过，对话里只留你的问题和最终结论；不带参数在开/关之间切换",
   "/export": "/export [文件名|路径] — markdown transcript (默认 luban-export-<项目>-<sessionId>.md)",
   "/ping": "/ping <peer>",
   "/jobs": "/jobs [<job-id>] — 列出最近的 mesh 任务，给出 id 时在主流程里展开它的完整执行过程",
@@ -569,6 +571,7 @@ function Header({ config, mode, sessionTitle, mesh, computerOn }: { config: Luba
         <Text color={theme.primary} bold> · {directory}</Text>
         {computerOn ? <Text color={theme.red} bold> · ⌁ 电脑操控</Text> : null}
         <Text color={theme.dim}> · v{VERSION}</Text>
+        {config.concise ? <Text color={theme.accent} bold> · 极简</Text> : null}
       </Box>
       <Box marginLeft={2} flexShrink={1} overflow="hidden">
         {mesh ? <Text color={online ? theme.green : theme.dim}>mesh {online} online  ·  </Text> : null}
@@ -589,6 +592,7 @@ function HelpPanel() {
       <Text color={theme.muted}>Ctrl+Y 复制上次回答 · 输出区拖选即复制（Shift+拖选走终端原生）· 点击链接用浏览器打开 · /copy 复制回答与工具记录</Text>
       <Text color={theme.muted}>Ctrl+C 运行中中断任务 / 空闲复制回答 · Ctrl+D 保存并退出 · /exit 退出</Text>
       <Text color={theme.muted}>/computer on|off 允许电脑操控（截屏、鼠标、键盘）；终端里没有燃弧，Ctrl+C 运行中会一并收回</Text>
+      <Text color={theme.muted}>/concise on|off 极简输出：中间过程只在实时行闪过，对话里只留问题与最终结论，设置会保存</Text>
       <Text color={theme.muted}>运行中可继续输入补充指令，/queue 排队下一任务</Text>
       <Text color={theme.muted}>运行中只读命令即时执行：/status /usage /peers /jobs /models /mode /settings /permissions /plan /mesh /help</Text>
       <Text color={theme.muted}>直接输入任务，!command 执行 shell，/ 命令补全（含参数用法）</Text>
@@ -630,6 +634,7 @@ export function argumentMatches(input: string): string[] {
   const command = match[1]!.toLowerCase();
   const options = command === "/report" ? ["daily", "weekly", "monthly", "yearly"] : command === "/mode" ? MODES
     : command === "/permissions" ? ["ask", "edits", "allow"]
+      : command === "/concise" ? ["on", "off"]
       : command === "/relay" ? ["login"]
       : command === "/theme" || command === "/skin" ? THEMES.map((item) => item.id)
         : command === "/sync" ? ["push", "pull"] : [];
@@ -791,6 +796,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
   const [showPlan, setShowPlan] = useState(true);
   // Reads/searches start collapsed; edits always retain their inline diffs.
   const [showDetails, setShowDetails] = useState(false);
+  // 极简模式 (`/concise`): the transcript keeps the question and the final
+  // answer, while tool calls and notes still flash past in the live status line.
+  const [concise, setConcise] = useState(initialConfig.concise);
   const [showMesh, setShowMesh] = useState(false);
   const [activeMode, setActiveMode] = useState<AgentMode>("auto");
   const [showHelp, setShowHelp] = useState(false);
@@ -2124,6 +2132,24 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       return;
     }
     if (command === "/details") { setScrollOffset(0); setShowDetails((current) => !current); return; }
+    if (command === "/concise") {
+      const wanted = argument.trim().toLowerCase();
+      if (wanted && !["on", "off", "true", "false", "1", "0"].includes(wanted)) {
+        setNotice("用法：/concise [on|off] · 不带参数在开/关之间切换");
+        return;
+      }
+      const next = wanted ? ["on", "true", "1"].includes(wanted) : !concise;
+      setConcise(next);
+      setConfig((current) => ({ ...current, concise: next }));
+      setScrollOffset(0);
+      setNotice(next
+        ? "极简模式已开启 · 工具调用与过程说明只在实时行闪过，对话里只留问题与最终结论 · /concise off 恢复"
+        : "极简模式已关闭 · 恢复完整的工具与过程记录");
+      void saveConciseMode(config.home, next).catch((error) => {
+        setNotice(`极简模式已生效，但没能写入配置：${error instanceof Error ? error.message : String(error)}`);
+      });
+      return;
+    }
     if (command === "/diff") { setDiff(null); setDialog({ type: "diff", index: 0 }); void workspaceDiff(config.workspace).then(setDiff); return; }
     if (command === "/help") { setShowHelp(true); return; }
     if (command === "/exit") { await save(); await computerControl({ home: config.home, workspace: config.workspace }).clearActivity(); runnerRef.current.close(); exit(); return; }
@@ -2156,7 +2182,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
       return;
     }
     if (command === "/settings") {
-      setNotice(`${mode.toUpperCase()} · ${config.model.id}${config.model.reasoningEffort ? ` · ${config.model.reasoningEffort}` : ""} · permissions ${config.permissionMode} · theme ${activeThemeId()}${themeHasOverrides() ? "(自定义色)" : ""} · ${config.workspace}${mesh ? ` · mesh ${config.mesh.nodeName}:${config.mesh.port}` : " · mesh off"}${config.backendUrl ? ` · backend ${config.backendUrl}` : ""}`);
+      setNotice(`${mode.toUpperCase()} · ${config.model.id}${config.model.reasoningEffort ? ` · ${config.model.reasoningEffort}` : ""} · permissions ${config.permissionMode} · 极简 ${concise ? "on" : "off"} · theme ${activeThemeId()}${themeHasOverrides() ? "(自定义色)" : ""} · ${config.workspace}${mesh ? ` · mesh ${config.mesh.nodeName}:${config.mesh.port}` : " · mesh off"}${config.backendUrl ? ` · backend ${config.backendUrl}` : ""}`);
       return;
     }
     if (command === "/status" && !argument) {
@@ -3082,8 +3108,9 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
     width: streamTextWidth,
     edits: sessionRef.current.edits,
     executions: executionLog,
+    concise,
     notes: activity.map(({ id, text, tone, at, after }) => ({ id, text, tone, at, after })),
-  }), [messages, executionLog, showDetails, streamTextWidth, activity]);
+  }), [messages, executionLog, showDetails, streamTextWidth, activity, concise]);
   const historyBlocks = useMemo(() => showMesh ? [...meshChatBlocks, ...remoteBlocks] : localHistoryBlocks,
     [showMesh, meshChatBlocks, remoteBlocks, localHistoryBlocks]);
   const tailBlocks = useMemo(() => {
@@ -3278,7 +3305,7 @@ export function App({ config: initialConfig, mesh, resume, initialPrompt, mobile
         ) : null}
       </Box>
       {!dialog ? <ScrollBar window={streamView} height={scrollTrackHeight} measureRef={(node) => { barNodeRef.current = node as LayoutNode | null; }} /> : null}
-      {showPlan && !dialog && (panelPlan || (showMesh ? focusedActive : running)) ? (
+      {showPlan && !concise && !dialog && (panelPlan || (showMesh ? focusedActive : running)) ? (
         <Box flexDirection="column" width={narrow ? 25 : 34} marginLeft={1} paddingX={1} borderStyle="single" borderColor={theme.border} flexShrink={0} overflow="hidden">
           <Text color={theme.accent} bold>{remotePlanOwner ? `Task plan · ${remotePlanOwner}` : "Task plan"}</Text>
           {/* A remote job's plan is rebuilt from its update_plan call, so a task

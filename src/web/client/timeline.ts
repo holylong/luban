@@ -245,3 +245,27 @@ export const STATUS_LABELS: Record<string, string> = {
   queued: "排队中", pending: "等待中", working: "执行中", paused: "已暂停",
   done: "已完成", failed: "失败", cancelled: "已取消",
 };
+
+/**
+ * 极简模式: keep only the question and the conclusion.
+ *
+ * Everything that is process — tool cards, thinking, status labels — is dropped
+ * from the transcript, and so is a reply that a later step superseded (narration
+ * before a tool call is not the answer). The events are untouched, so turning
+ * the switch back on restores the full record of the same run.
+ */
+export function conciseTimeline(items: TimelineItem[]): TimelineItem[] {
+  const kept: TimelineItem[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!;
+    if (item.kind === "tool" || item.kind === "thinking" || item.kind === "status") continue;
+    if (item.kind === "assistant") {
+      // The run continues past this bubble, so it was only narration between steps.
+      const later = items.slice(index + 1).some(other =>
+        other.kind === "tool" || other.kind === "assistant" || other.kind === "thinking");
+      if (later) continue;
+    }
+    kept.push(item);
+  }
+  return kept;
+}

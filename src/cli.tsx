@@ -33,6 +33,7 @@ import { runDrive } from "./core/drive-command.js";
 import { runReport } from "./core/report-command.js";
 import type { AgentEvent, ChatMessage, LubanConfig, ToolDefinition } from "./core/types.js";
 import { reasoningShare } from "./core/run-metrics.js";
+import { extractFinalAnswer } from "./core/reasoning.js";
 import { App } from "./ui/app.js";
 import { terminalOutput } from "./ui/terminal-output.js";
 import { mascotOutput } from "./ui/mascot-background.js";
@@ -124,7 +125,10 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8").trim();
 }
 
-function headlessEvent(event: AgentEvent): void {
+function headlessEvent(event: AgentEvent, concise = false): void {
+  // 极简模式 (`/concise on`, `concise: true`): the tool log on stderr is the
+  // process the user asked to skip; a failed run still has to say so.
+  if (concise && event.type !== "error") return;
   if (event.type === "tool-start") process.stderr.write(`◇ ${event.name}\n`);
   if (event.type === "tool-end") process.stderr.write(`${event.ok ? "✓" : "✗"} ${event.name} ${(event.elapsedMs / 1000).toFixed(2)}s\n`);
   if (event.type === "error") process.stderr.write(`error: ${event.text}\n`);
@@ -162,14 +166,15 @@ async function runHeadless(config: LubanConfig, prompt: string, mesh?: MeshRunti
       messages,
       "agent",
       controller.signal,
-      headlessEvent,
+      (event) => headlessEvent(event, config.concise),
       async () => config.permissionMode === "allow" ? "always" : "deny",
       () => store.save(session),
     );
     session.messages = result.messages;
     session.performance = result.metrics;
     await store.save(session);
-    process.stdout.write(`${result.text.trim()}\n`);
+    // 极简模式 prints the conclusion, not the narration before it.
+    process.stdout.write(`${config.concise ? extractFinalAnswer(result.text) || result.text.trim() : result.text.trim()}\n`);
     // Same accounting the TUI shows, so headless runs are measurable too.
     process.stderr.write(`[${result.steps} steps · ${result.modelCalls} model calls · ${(result.elapsedMs / 1000).toFixed(1)}s · ${(result.elapsedMs / Math.max(1, result.modelCalls) / 1000).toFixed(1)}s/call]\n`);
     if (result.metrics) {

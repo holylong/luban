@@ -174,6 +174,10 @@ a { color: var(--blue); }
 .pill.ok { color: var(--green); border-color: #2a4d43; }
 .pill.warn { color: var(--yellow); border-color: #4d4326; }
 .pill.bad { color: var(--red); border-color: #4d2a33; }
+.pill.toggle { cursor: pointer; background: none; font: inherit; font-size: 11px; }
+.pill.toggle:hover { color: var(--fg); border-color: var(--dim); }
+.pill.toggle.on { color: var(--accent-ink, #9adfd0); border-color: var(--accent, #2f8f7a); background: var(--accent-soft, rgba(47, 143, 122, .14)); }
+.pill.toggle:disabled { opacity: .6; cursor: progress; }
 
 /* Computer control: the desk-side switch. A breathing blue dot means the agent
    holds the pointer and keyboard right now; the desktop draws the screen rim
@@ -229,6 +233,7 @@ a { color: var(--blue); }
 .note.error { color: var(--red); }
 
 .runbar { display: flex; align-items: center; gap: 9px; margin: 0 0 16px; color: var(--muted); font-size: 12px; }
+.runbar .hint { color: var(--faint); font-size: 11px; }
 .spin { width: 12px; height: 12px; border: 2px solid var(--blue-soft); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

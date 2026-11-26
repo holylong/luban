@@ -39,10 +39,11 @@ describe("agent column layout", () => {
     expect(desktop).toContain(".desktop-agent .banner { padding: 6px 0; }");
   });
 
-  it("keeps the computer-control switch visible while compacting the status pills", () => {
+  it("keeps the computer-control and 极简 switches visible while compacting the status pills", () => {
     // The desktop agent column is narrow, so it hides status labels but must not
-    // hide the only UI that can authorize computer control for this backend.
-    expect(desktop).toMatch(/\.desktop-agent \.top \.pills > :not\(\.computer-toggle\)\s*\{\s*display:\s*none;\s*\}/u);
+    // hide the only UI that can authorize computer control for this backend, nor
+    // the 极简模式 switch the user reaches for mid-run.
+    expect(desktop).toMatch(/\.desktop-agent \.top \.pills > :not\(\.computer-toggle\):not\(\.concise-toggle\)\s*\{\s*display:\s*none;\s*\}/u);
     expect(desktop).not.toMatch(/\.desktop-agent \.top \.pills\s*\{\s*display:\s*none;/u);
   });
 

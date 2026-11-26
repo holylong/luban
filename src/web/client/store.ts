@@ -72,6 +72,9 @@ export interface WorkbenchStore {
   setProject: (project: string) => void;
   /** Switches the active model for subsequent tasks; the server persists it. */
   setModel: (id: string, effort?: import("./types").ReasoningEffort | null) => Promise<void>;
+  /** 极简模式: hide tool calls and narration, keep the question and the conclusion. */
+  concise: boolean;
+  setConcise: (enabled: boolean) => Promise<void>;
   setMode: (mode: TaskMode) => void;
   setSideTab: (tab: SideTab) => void;
   setPreviewTab: (tab: PreviewTab) => void;
@@ -116,6 +119,8 @@ export function useWorkbench(): WorkbenchStore {
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [queued, setQueued] = useState<string[]>([]);
+  // 极简模式: mirrors `config.json` via /api/node; the top-bar button writes it back.
+  const [concise, setConciseState] = useState(false);
   const toastId = useRef(0);
   const selectedRef = useRef<string | undefined>(undefined);
   selectedRef.current = selectedId;
@@ -202,6 +207,24 @@ export function useWorkbench(): WorkbenchStore {
       notify(`模型设置已保存（下一轮生效）`);
     } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
   }, [notify, refreshOverview]);
+
+  /**
+   * Toggle 极简模式. Optimistic: the transcript filters on local state at once,
+   * then the write to config.json confirms it. A failed write flips the button
+   * back instead of leaving the UI promising a setting the node never saved.
+   */
+  const setConcise = useCallback(async (enabled: boolean) => {
+    setConciseState(enabled);
+    setNode(current => current ? { ...current, concise: enabled } : current);
+    try {
+      await api.setConcise(enabled);
+      notify(enabled ? "极简模式已开启 · 中间过程只在状态行闪过，只留最终结论" : "极简模式已关闭 · 恢复完整的工具与过程记录");
+    } catch (error) {
+      setConciseState(!enabled);
+      setNode(current => current ? { ...current, concise: !enabled } : current);
+      notify(error instanceof Error ? error.message : String(error), true);
+    }
+  }, [notify]);
 
   const refreshSessions = useCallback(async () => {
     if (!project) return;
@@ -378,6 +401,9 @@ export function useWorkbench(): WorkbenchStore {
 
   // Initial load.
   useEffect(() => { void refreshOverview(); }, [refreshOverview]);
+  // The node is the source of truth (`/concise` in the terminal writes the same
+  // file), so a poll that reports a different value wins over local state.
+  useEffect(() => { if (node) setConciseState(node.concise === true); }, [node?.concise]);
   useEffect(() => { if (project) void browse(""); }, [project, browse]);
   useEffect(() => { if (project && sideTab === "sessions") void refreshSessions(); }, [project, sideTab, refreshSessions]);
 
@@ -520,15 +546,16 @@ export function useWorkbench(): WorkbenchStore {
 
   return useMemo<WorkbenchStore>(() => ({
     node, connected, connectionError, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
-    project, mode, sideTab, previewTab, tree, treePath, file, fileRequest, fileError, diff, session, busy, queued,
+    project, mode, sideTab, previewTab, tree, treePath, file, fileRequest, fileError, diff, session, busy, queued, concise,
     notify, dismiss, selectJob, startNew, submit, clearQueue, cancel, resume, decide, answerQuestion,
     setProject, setModel, setMode, setSideTab, setPreviewTab, browse, openFile, openSession, leaveSession,
+    setConcise,
     refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   }), [
     node, connected, connectionError, live, jobs, peers, inbox, sessions, selectedId, activeSessionId, job, events, approvals, questions, toasts,
-    project, mode, sideTab, previewTab, tree, treePath, file, fileRequest, fileError, diff, session, busy, queued,
+    project, mode, sideTab, previewTab, tree, treePath, file, fileRequest, fileError, diff, session, busy, queued, concise,
     notify, dismiss, selectJob, startNew, submit, clearQueue, cancel, resume, decide, answerQuestion,
-    setProject, setModel, browse, openFile, openSession, leaveSession, refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
+    setProject, setModel, setConcise, browse, openFile, openSession, leaveSession, refreshDiff, refreshSessions, syncPeer, messagePeer, addContact,
   ]);
 }
 

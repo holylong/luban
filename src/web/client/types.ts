@@ -119,6 +119,8 @@ export interface NodeInfo {
   provider: string;
   reasoning_effort?: ReasoningEffort | null;
   models: Array<{ id: string; name: string; provider: string; reasoning_effort?: ReasoningEffort | null; reasoning_efforts?: ReasoningEffort[] }>;
+  /** 极简模式: hide the process, keep the question and the final answer. */
+  concise?: boolean;
   version: string;
   runtime: string;
   interactive: boolean;

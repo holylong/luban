@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { ToolCard } from "./tool-card";
 import { followTranscript } from "./transcript-scroll";
-import { deriveTimeline, formatClock, sameTimelineItem, withOutcome } from "./timeline";
+import { conciseTimeline, deriveTimeline, formatClock, sameTimelineItem, withOutcome } from "./timeline";
 import type { MeshJob, TimelineItem } from "./types";
 
 function Avatar({ kind }: { kind: "user" | "agent" | "err" }): React.ReactElement {
@@ -73,9 +73,11 @@ const ItemView = React.memo(function ItemView({ item }: { item: TimelineItem }):
   }
 }, (previous, next) => sameTimelineItem(previous.item, next.item));
 
-export function Transcript({ job, events, onCancel, onResume, history, compactEdits }: {
+export function Transcript({ job, events, onCancel, onResume, history, compactEdits, concise }: {
   history?: React.ReactNode;
   compactEdits?: boolean;
+  /** 极简模式: tool cards, thinking and narration stay out of the transcript. */
+  concise?: boolean;
   job?: MeshJob;
   events: TimelineItem[];
   onCancel: () => void;
@@ -97,6 +99,9 @@ export function Transcript({ job, events, onCancel, onResume, history, compactEd
   useEffect(() => { scroll.current?.follow(); }, [events, job?.status, history]);
 
   const active = job ? ["queued", "pending", "working"].includes(job.status) : false;
+  // 极简模式 only changes what is rendered: the job keeps every event, so the
+  // switch can be turned off mid-run and the full record comes back.
+  const shown = useMemo(() => concise ? conciseTimeline(events) : events, [concise, events]);
 
   return (
     <section className="thread" ref={setScroller}>
@@ -110,14 +115,15 @@ export function Transcript({ job, events, onCancel, onResume, history, compactEd
             <p style={{ marginTop: 10 }}><kbd>Enter</kbd> 执行 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>Ctrl</kbd>+<kbd>K</kbd> 新任务</p>
           </div>
         )}
-        {job && events.map(item => compactEdits && item.kind === "tool" && item.run.editPreview
+        {job && shown.map(item => compactEdits && item.kind === "tool" && item.run.editPreview
           ? <div className="note" key={item.id}>{item.run.summary || item.run.name} · 修改详情见中间代码区</div>
           : <ItemView key={item.id} item={item} />)}
         {active && (
           <div className="runbar">
             <span className="spin" />
-            <span>Agent 正在执行</span>
+            <span>{concise ? "极简模式 · 正在执行" : "Agent 正在执行"}</span>
             {job?.progress ? <span>· {job.progress}%</span> : null}
+            {concise && <span className="hint">过程不写入对话，只保留最终结论</span>}
             <button className="stop" onClick={onCancel}>停止</button>
           </div>
         )}

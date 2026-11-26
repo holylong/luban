@@ -69,6 +69,8 @@ export const api = {
   setModel: (model: string, effort?: import("./types").ReasoningEffort | null) =>
     post<{ ok: boolean }>("/api/model", { model, reasoning_effort: effort }),
   node: () => request<NodeInfo>("/api/node"),
+  /** 极简模式: display only, saved to config.json for the terminal too. */
+  setConcise: (enabled: boolean) => post<{ ok: boolean; concise: boolean }>("/api/concise", { enabled }),
   computer: () => request<import("./types").ComputerStatus>("/api/computer"),
   setComputer: (input: { enabled?: boolean; stop?: boolean }) =>
     post<{ ok: boolean; enabled: boolean; stopped?: boolean }>("/api/computer", input),

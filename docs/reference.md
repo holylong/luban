@@ -716,6 +716,7 @@ luban update --json     # available / current / no-build / skipped / disabled / 
 | `/plan` | 显示或隐藏任务计划面板（含验证状态） |
 | `/verify` | 打开验证记录面板（测试命令、通过/失败、输出摘要与门禁状态） |
 | `/details` | 展开或收起执行详情 |
+| `/concise [on\|off]` | 极简输出：工具调用、过程说明与编辑记录只在实时行一闪而过，对话里只留你的问题和最终结论；不带参数在开/关之间切换。开关写入 `config.json`（`concise`，也可用 `LUBAN_CONCISE=1` 强制开启），桌面版顶栏的「极简」按钮与手机页面共享同一个设置 |
 | `/diff` | 查看工作区 Git 变更（文件列表 + unified diff） |
 | `/branch [n]` | 分叉当前会话，保留前 n 条非系统消息（工具断点自动修复） |
 | `/theme [名称]` | 切换配色；不带参数打开选择器：`↑`/`↓` 逐行预览（整个界面即时换色，含色块与 `当前` 标记），列表超过一屏时随光标滚动并提示还有多少个配色，`Enter` 确认并写入 `~/.luban/node-preferences.json`，`Esc` 放弃预览恢复原配色。名称支持别名如 `light` / `dark` / `solarized` / `樱花粉` / `酒红` / `梅子紫` |

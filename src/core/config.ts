@@ -805,6 +805,19 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
   const meshConfig = record(raw.mesh);
   const syncConfig = record(raw.sync);
   const permissionConfig = record(raw.permission);
+  const outputConfig = record(raw.output);
+  // 极简模式 (`/concise` in the TUI, the 极简 button in the desktop app): the
+  // transcript keeps the question and the final answer, the process streams
+  // past in the live one-line status. `true` also accepts the older wording
+  // (`output.concise`, `verbosity: "concise"`) so a hand-written config works.
+  const conciseSetting = raw.concise ?? raw.minimal_transcript ?? raw.minimalTranscript
+    ?? outputConfig.concise ?? outputConfig.minimal;
+  const conciseEnv = process.env.LUBAN_CONCISE?.trim();
+  const concise = conciseEnv
+    ? /^(1|on|true|yes)$/iu.test(conciseEnv)
+    : typeof conciseSetting === "boolean"
+      ? conciseSetting
+      : ["concise", "minimal", "brief"].includes(text(raw.verbosity).toLowerCase());
   const nodePort = options.meshPort ?? integer(process.env.LUBAN_PORT, integer(nodeConfig.port, 7891));
   const tokenEnv = text(meshConfig.token_env, meshConfig.tokenEnv, "LUBAN_MESH_TOKEN");
   const syncMode = text(syncConfig.mode, "auto") as SyncMode;
@@ -881,6 +894,7 @@ export function loadConfig(options: LoadConfigOptions = {}): LubanConfig {
     planning: (["off", "auto", "always"].includes(text(options.planning, raw.planning, process.env.LUBAN_PLANNING))
       ? text(options.planning, raw.planning, process.env.LUBAN_PLANNING)
       : "auto") as "off" | "auto" | "always",
+    concise,
     permissions: {
       allow: stringList(permissionConfig.allow),
       deny: stringList(permissionConfig.deny),
@@ -1006,6 +1020,21 @@ export async function savePreferredModel(home: string, model: string, effort?: M
 /** Persists the palette chosen with `/theme`, applied on the next start. */
 export async function saveTheme(home: string, theme: string): Promise<void> {
   await savePreferences(home, { theme });
+}
+
+/**
+ * Persist 极简模式: `/concise` in the terminal, the 极简 button in the desktop
+ * app. It only changes how a transcript is drawn, so the running session, the
+ * prompt and the saved history keep every step.
+ */
+export async function saveConciseMode(home: string, enabled: boolean): Promise<void> {
+  await mkdir(home, { recursive: true });
+  const path = join(home, "config.json");
+  const config = readJson(path);
+  const temporary = `${path}.${process.pid}.tmp`;
+  // Temp file plus rename: a concurrent reader must never see half a config.
+  await writeFile(temporary, `${JSON.stringify({ ...config, concise: enabled }, null, 2)}\n`, "utf8");
+  await rename(temporary, path);
 }
 
 /**

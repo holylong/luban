@@ -397,8 +397,8 @@ export function AgentPanel({ store, timeline }: { store: WorkbenchStore; timelin
     {store.session && <div className="desktop-agent-tabs"><span>{store.session.title}</span><button onClick={store.startNew}>＋ 新会话</button></div>}
     {store.approvals.length > 0 && <div className="desktop-approvals"><Approvals store={store} /></div>}
     <DesktopQuestions store={store} />
-    {plan.length > 0 && <details className="desktop-task-plan" open><summary>本轮计划</summary><ol>{plan.map((item, index) => <li key={index} className={item.status}><span>{item.status === "completed" ? "✓" : item.status === "in_progress" ? "◉" : "○"}</span>{item.step}</li>)}</ol></details>}
-    <Transcript job={store.job} events={timeline}
+    {plan.length > 0 && !store.concise && <details className="desktop-task-plan" open><summary>本轮计划</summary><ol>{plan.map((item, index) => <li key={index} className={item.status}><span>{item.status === "completed" ? "✓" : item.status === "in_progress" ? "◉" : "○"}</span>{item.step}</li>)}</ol></details>}
+    <Transcript job={store.job} concise={store.concise} events={timeline}
       history={history && <DesktopSessionHistory session={history} />}
       onCancel={() => void store.cancel()} onResume={() => void store.resume()} />
     <Composer store={store} />

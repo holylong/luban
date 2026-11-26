@@ -1,5 +1,6 @@
 import type { ChatMessage, SessionRecord } from "../core/types.js";
 import { summarizeToolArgs } from "../core/tools.js";
+import { extractFinalAnswer } from "../core/reasoning.js";
 import { executionRows, type ExecutionEntry, type ExecutionRow } from "./execution-view.js";
 
 /**
@@ -45,6 +46,15 @@ export interface TranscriptOptions {
   notes?: TranscriptNote[];
   edits?: SessionRecord["edits"];
   executions?: Array<ExecutionEntry & { id: string }>;
+  /**
+   * 极简模式: keep the question and the final answer, drop the process.
+   *
+   * Tool rows, edit records, compaction notes and any assistant turn that also
+   * called tools are the middle of a run, not its conclusion; the live status
+   * line already streams them past while it happens. Red notes (a retry, an idle
+   * timeout) stay: a run that went wrong is an outcome, not process.
+   */
+  concise?: boolean;
 }
 
 export function estimateLines(text: string, width: number): number {
@@ -106,6 +116,7 @@ function applyResult(entry: ExecutionEntry, message: ChatMessage): ExecutionEntr
  */
 export function buildTranscript(messages: ChatMessage[], options: TranscriptOptions): TranscriptBlock[] {
   const { expanded, width } = options;
+  const concise = options.concise === true;
   const executions = new Map((options.executions ?? []).map(entry => [entry.id, entry]));
   const results = new Map<string, ChatMessage>();
   for (const message of messages) {
@@ -126,6 +137,7 @@ export function buildTranscript(messages: ChatMessage[], options: TranscriptOpti
   const flushNotes = (index: number): void => {
     while (notes.length && notes[0]!.at <= index) {
       const entry = notes.shift()!;
+      if (concise && (entry.tone ?? "muted") !== "red") continue;
       blocks.push(note(`activity-${entry.id}`, entry.text, entry.tone ?? "muted"));
     }
   };
@@ -135,7 +147,7 @@ export function buildTranscript(messages: ChatMessage[], options: TranscriptOpti
   for (const message of messages) {
     for (const call of message.tool_calls ?? []) if (call.id) known.add(call.id);
   }
-  for (const edit of options.edits ?? []) {
+  for (const edit of concise ? [] : options.edits ?? []) {
     if (known.has(edit.id)) continue;
     blocks.push(toolBlock(`saved-edit-${edit.id}`, {
       name: edit.name, detail: "", status: "done", editPreview: edit.preview,
@@ -147,19 +159,26 @@ export function buildTranscript(messages: ChatMessage[], options: TranscriptOpti
     const content = String(message.content ?? "");
 
     if (message.role === "system") {
-      if (content.startsWith("[luban context summary]")) blocks.push(note(`summary-${index}`, "较早对话已压缩为摘要"));
+      if (!concise && content.startsWith("[luban context summary]")) blocks.push(note(`summary-${index}`, "较早对话已压缩为摘要"));
       return;
     }
 
     if (message.role === "user") {
-      if (content.startsWith("(summarized")) { blocks.push(note(`summary-user-${index}`, "较早对话已压缩为摘要")); return; }
+      if (content.startsWith("(summarized")) {
+        if (!concise) blocks.push(note(`summary-user-${index}`, "较早对话已压缩为摘要"));
+        return;
+      }
       blocks.push({ id: `user-${index}`, kind: "user", text: content, lines: estimateLines(content, width - 6) + 3 });
       return;
     }
 
     if (message.role === "assistant") {
       const text = content.trim();
-      if (text) blocks.push({ id: `assistant-${index}`, kind: "assistant", text, lines: estimateLines(text, width - 4) + 1 });
+      // A turn that also calls tools is narration between steps; in 极简模式 it
+      // drops out together with the tool rows, leaving the closing answer alone.
+      const shown = concise ? (message.tool_calls?.length ? "" : extractFinalAnswer(text)) : text;
+      if (shown) blocks.push({ id: `assistant-${index}`, kind: "assistant", text: shown, lines: estimateLines(shown, width - 4) + 1 });
+      if (concise) return;
       for (const call of message.tool_calls ?? []) {
         const name = call.function.name || "tool";
         const entry = entryFromCall(name, parseArgs(call.function.arguments));
@@ -174,6 +193,7 @@ export function buildTranscript(messages: ChatMessage[], options: TranscriptOpti
     }
 
     if (message.role === "tool") {
+      if (concise) return;
       const id = message.tool_call_id || `tool-${index}`;
       if (rendered.has(id)) return;
       if (message.editPreview || content.startsWith("Edited ")) {
